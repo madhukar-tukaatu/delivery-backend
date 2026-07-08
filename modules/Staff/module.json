@@ -1,0 +1,6 @@
+{
+  "name": "Staff",
+  "alias": "staff",
+  "description": "Staff module for Courier Delivery Gateway",
+  "active": true
+}

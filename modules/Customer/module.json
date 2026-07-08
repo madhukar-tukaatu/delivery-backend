@@ -1,0 +1,6 @@
+{
+  "name": "Customer",
+  "alias": "customer",
+  "description": "Customer module for Courier Delivery Gateway",
+  "active": true
+}

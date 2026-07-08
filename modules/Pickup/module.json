@@ -1,0 +1,6 @@
+{
+  "name": "Pickup",
+  "alias": "pickup",
+  "description": "Pickup module for Courier Delivery Gateway",
+  "active": true
+}

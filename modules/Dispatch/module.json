@@ -1,0 +1,6 @@
+{
+  "name": "Dispatch",
+  "alias": "dispatch",
+  "description": "Dispatch module for Courier Delivery Gateway",
+  "active": true
+}

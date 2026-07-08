@@ -1,0 +1,6 @@
+{
+  "name": "Notification",
+  "alias": "notification",
+  "description": "Notification module for Courier Delivery Gateway",
+  "active": true
+}

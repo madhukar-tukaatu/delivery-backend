@@ -1,0 +1,6 @@
+{
+  "name": "Merchant",
+  "alias": "merchant",
+  "description": "Merchant module for Courier Delivery Gateway",
+  "active": true
+}

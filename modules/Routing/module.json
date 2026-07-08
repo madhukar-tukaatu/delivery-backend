@@ -1,0 +1,6 @@
+{
+  "name": "Routing",
+  "alias": "routing",
+  "description": "Map coordinate routing, nearest branch assignment, route steps and tariff calculation",
+  "active": true
+}

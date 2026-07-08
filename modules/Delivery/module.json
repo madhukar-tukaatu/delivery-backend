@@ -1,0 +1,6 @@
+{
+  "name": "Delivery",
+  "alias": "delivery",
+  "description": "Delivery module for Courier Delivery Gateway",
+  "active": true
+}

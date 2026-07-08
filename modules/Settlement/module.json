@@ -1,0 +1,6 @@
+{
+  "name": "Settlement",
+  "alias": "settlement",
+  "description": "Settlement module for Courier Delivery Gateway",
+  "active": true
+}

@@ -1,0 +1,6 @@
+{
+  "name": "Branch",
+  "alias": "branch",
+  "description": "Branch module for Courier Delivery Gateway",
+  "active": true
+}

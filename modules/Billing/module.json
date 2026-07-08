@@ -1,0 +1,6 @@
+{
+  "name": "Billing",
+  "alias": "billing",
+  "description": "Billing module for Courier Delivery Gateway",
+  "active": true
+}

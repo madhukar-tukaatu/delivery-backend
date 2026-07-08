@@ -1,0 +1,6 @@
+{
+  "name": "Tracking",
+  "alias": "tracking",
+  "description": "Tracking module for Courier Delivery Gateway",
+  "active": true
+}

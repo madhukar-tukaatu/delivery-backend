@@ -1,0 +1,6 @@
+{
+  "name": "Shipment",
+  "alias": "shipment",
+  "description": "Shipment module for Courier Delivery Gateway",
+  "active": true
+}

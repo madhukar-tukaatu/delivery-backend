@@ -1,0 +1,6 @@
+{
+  "name": "Auth",
+  "alias": "auth",
+  "description": "Auth module for Courier Delivery Gateway",
+  "active": true
+}

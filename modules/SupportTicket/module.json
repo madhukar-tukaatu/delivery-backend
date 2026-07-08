@@ -1,0 +1,6 @@
+{
+  "name": "SupportTicket",
+  "alias": "supportticket",
+  "description": "SupportTicket module for Courier Delivery Gateway",
+  "active": true
+}

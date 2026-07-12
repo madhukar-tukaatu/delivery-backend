@@ -2,6 +2,9 @@
 
 use Illuminate\Support\Facades\Route;
 use Modules\Access\Http\Controllers\MenuController;
+use Modules\Rate\Http\Controllers\Api\PublicPricingQuoteController;
+use Modules\Shipment\Http\Controllers\Api\PublicShipmentController;
+
 require base_path('routes/realtime-routes.php');
 require base_path('routes/delivery-lifecycle.php');
 
@@ -61,3 +64,10 @@ require base_path('routes/dynamic-menu-routes.php');
 foreach (glob(base_path('modules/*/routes/api.php')) as $routeFile) {
     require $routeFile;
 }
+
+
+
+Route::prefix('v1/public')->group(function () {
+    Route::post('/pricing/quote', [PublicPricingQuoteController::class, 'store']);
+    Route::post('/shipments', [PublicShipmentController::class, 'store']);
+});

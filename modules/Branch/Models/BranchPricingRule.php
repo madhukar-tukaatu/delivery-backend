@@ -8,6 +8,7 @@ class BranchPricingRule extends Model
 {
     protected $fillable = [
         'branch_id',
+        'service_type_id',
         'base_radius_km',
         'base_pickup_fee',
         'base_delivery_fee',

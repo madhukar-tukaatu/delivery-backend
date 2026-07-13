@@ -1,6 +1,8 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\Shipment\Http\Controllers\Api\AdminNotificationController;
+use Modules\Shipment\Http\Controllers\Api\AdminShipmentTaskController;
 use Modules\Shipment\Http\Controllers\GatewayShipmentController;
 use Modules\Shipment\Http\Controllers\MerchantShipmentController;
 use Modules\Shipment\Http\Controllers\ShipmentController;
@@ -47,6 +49,13 @@ Route::prefix('v1/admin')
 
             Route::post('shipments/{shipment}/cancel', [ShipmentController::class, 'cancel'])
                 ->name('shipments.cancel');
+
+            Route::get('/shipment-tasks', [AdminShipmentTaskController::class, 'index']);
+            Route::post('/shipment-tasks/{id}/assign', [AdminShipmentTaskController::class, 'assign']);
+            Route::post('/shipment-tasks/{id}/status', [AdminShipmentTaskController::class, 'updateStatus']);
+            Route::get('/notifications', [AdminNotificationController::class, 'index']);
+            Route::post('/notifications/{id}/read', [AdminNotificationController::class, 'markRead']);
+            Route::post('/notifications/read-all', [AdminNotificationController::class, 'markAllRead']);
         });
     });
 

@@ -9,6 +9,7 @@ class BranchTransferLane extends Model
     protected $fillable = [
         'from_branch_id',
         'to_branch_id',
+        'service_type_id',
         'base_transfer_fee',
         'per_kg_fee',
         'estimated_hours',

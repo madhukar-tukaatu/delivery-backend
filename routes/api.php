@@ -44,6 +44,7 @@ require base_path('routes/merchant-shipment-create-view.php');
 
 // Option A: If dynamic-menu-routes.php already has /v1/me/menus, keep this:
 require base_path('routes/dynamic-menu-routes.php');
+require base_path('routes/api_fallback.php');
 
 // Option B: If you want to define it directly here instead, remove the require above
 // and uncomment this block:

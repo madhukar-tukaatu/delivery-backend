@@ -2,7 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use Modules\Shipment\Http\Controllers\AccountsPaymentOperationsController;
-use Modules\Shipment\Http\Controllers\AdminShipmentOperationsController;
+use Modules\Shipment\Http\Controllers\AdminShipmentLifecycleController ;
 use Modules\Shipment\Http\Controllers\BranchParcelOperationsController;
 use Modules\Shipment\Http\Controllers\MerchantShipmentOperationsController;
 use Modules\Shipment\Http\Controllers\StaffDeliveryOperationsController;
@@ -64,16 +64,16 @@ Route::prefix('v1/admin')
     ->name('admin.operations.')
     ->middleware(['auth:sanctum'])
     ->group(function () {
-        Route::post('shipments/quote', [AdminShipmentOperationsController::class, 'quote'])
+        Route::post('shipments/quote', [AdminShipmentLifecycleController ::class, 'quote'])
             ->name('shipments.quote');
 
-        Route::post('shipments', [AdminShipmentOperationsController::class, 'store'])
+        Route::post('shipments', [AdminShipmentLifecycleController ::class, 'store'])
             ->name('shipments.store');
 
-        Route::get('shipments/{shipment}', [AdminShipmentOperationsController::class, 'show'])
+        Route::get('shipments/{shipment}', [AdminShipmentLifecycleController ::class, 'show'])
             ->name('shipments.show');
 
-        Route::post('shipments/{shipment}/assign-pickup', [AdminShipmentOperationsController::class, 'assignPickup'])
+        Route::post('shipments/{shipment}/assign-pickup', [AdminShipmentLifecycleController ::class, 'assignPickup'])
             ->name('shipments.assign-pickup');
 
         Route::post('shipments/{shipment}/receive-origin', [BranchParcelOperationsController::class, 'receiveOrigin'])
@@ -88,7 +88,7 @@ Route::prefix('v1/admin')
         Route::post('transfers/{batch}/receive', [BranchParcelOperationsController::class, 'receiveTransfer'])
             ->name('transfers.receive');
 
-        Route::post('shipments/{shipment}/assign-delivery', [AdminShipmentOperationsController::class, 'assignDelivery'])
+        Route::post('shipments/{shipment}/assign-delivery', [AdminShipmentLifecycleController ::class, 'assignDelivery'])
             ->name('shipments.assign-delivery');
 
         Route::get('accounts/cod-pending', [AccountsPaymentOperationsController::class, 'codPending'])

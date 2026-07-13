@@ -8,7 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Modules\Shipment\Services\PaymentWorkflowService;
 
-class AccountsPaymentOperationsController extends Controller
+class AccountsPaymentLifecycleController extends Controller
 {
     public function codPending(): JsonResponse
     {

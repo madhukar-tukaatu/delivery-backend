@@ -12,7 +12,7 @@ use Modules\Shipment\Services\DeliveryWorkflowService;
 use Modules\Shipment\Services\PickupWorkflowService;
 use Modules\Shipment\Services\ShipmentOperationsService;
 
-class AdminShipmentOperationsController extends Controller
+class AdminShipmentLifecycleController  extends Controller
 {
     public function quote(ShipmentOperationsCreateRequest $request, ShipmentOperationsService $service): JsonResponse
     {

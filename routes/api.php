@@ -66,8 +66,6 @@ foreach (glob(base_path('modules/*/routes/api.php')) as $routeFile) {
     require $routeFile;
 }
 
-
-
 Route::prefix('v1/public')->group(function () {
     Route::post('/pricing/quote', [PublicPricingQuoteController::class, 'store']);
     Route::post('/shipments', [PublicShipmentController::class, 'store']);

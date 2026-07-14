@@ -13,6 +13,10 @@ use Modules\Merchant\Models\MerchantApiKey;
 use Modules\Rate\Models\MerchantRateCard;
 use Modules\Rate\Models\RateCard;
 use Modules\Routing\Services\BranchLocatorService;
+use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
+
 
 class MerchantOnboardingService
 {
@@ -135,6 +139,50 @@ class MerchantOnboardingService
         return $merchant->fresh(['documents']);
     }
 
+    // public function approve(Merchant $merchant, User $admin, array $data): Merchant
+    // {
+    //     return DB::transaction(function () use ($merchant, $admin, $data) {
+    //         $branchId = $data['branch_id'] ?? $merchant->suggested_branch_id;
+    //         $subBranchId = $data['sub_branch_id'] ?? $merchant->suggested_sub_branch_id;
+
+    //         if (!$branchId) {
+    //             throw \Illuminate\Validation\ValidationException::withMessages([
+    //                 'branch_id' => 'Branch is required before approval.',
+    //             ]);
+    //         }
+
+    //         $merchant->update([
+    //             'default_branch_id' => $branchId,
+    //             'default_sub_branch_id' => $subBranchId,
+    //             'status' => 'active',
+    //             'verification_status' => 'approved',
+    //             'verified_by' => $admin->id,
+    //             'verified_at' => now(),
+    //             'rejected_reason' => null,
+    //             'more_info_message' => null,
+    //         ]);
+
+    //         $merchant->documents()->where('status', 'pending')->update([
+    //             'status' => 'approved',
+    //             'verified_by' => $admin->id,
+    //             'verified_at' => now(),
+    //         ]);
+
+    //         $merchant->pickupLocations()->where('is_default', true)->update([
+    //             'branch_id' => $branchId,
+    //             'sub_branch_id' => $subBranchId,
+    //             'status' => 'active',
+    //         ]);
+
+    //         User::where('merchant_id', $merchant->id)->update(['is_active' => true]);
+
+    //         $this->ensureDefaultRateCard($merchant);
+    //         $this->ensureApiKey($merchant);
+
+    //         return $merchant->fresh(['documents', 'pickupLocations']);
+    //     });
+    // }
+
     public function approve(Merchant $merchant, User $admin, array $data): Merchant
     {
         return DB::transaction(function () use ($merchant, $admin, $data) {
@@ -170,12 +218,14 @@ class MerchantOnboardingService
                 'status' => 'active',
             ]);
 
-            User::where('merchant_id', $merchant->id)->update(['is_active' => true]);
+            User::where('merchant_id', $merchant->id)->update([
+                'is_active' => true,
+            ]);
 
             $this->ensureDefaultRateCard($merchant);
             $this->ensureApiKey($merchant);
 
-            return $merchant->fresh(['documents', 'pickupLocations']);
+            return $merchant->fresh(['documents', 'pickupLocations', 'apiKeys']);
         });
     }
 
@@ -218,20 +268,62 @@ class MerchantOnboardingService
         ]);
     }
 
-    private function ensureApiKey(Merchant $merchant): void
-    {
-        if (MerchantApiKey::where('merchant_id', $merchant->id)->exists()) {
-            return;
-        }
+    // private function ensureApiKey(Merchant $merchant): void
+    // {
+    //     if (MerchantApiKey::where('merchant_id', $merchant->id)->exists()) {
+    //         return;
+    //     }
 
-        MerchantApiKey::create([
-            'merchant_id' => $merchant->id,
-            'name' => 'Default Live Key',
-            'api_key' => 'mk_' . bin2hex(random_bytes(16)),
-            'api_secret_hash' => \Illuminate\Support\Facades\Hash::make(bin2hex(random_bytes(24))),
-            'environment' => 'live',
-            'permissions' => ['shipments:create', 'shipments:read', 'rates:calculate'],
-            'status' => 'active',
-        ]);
+    //     MerchantApiKey::create([
+    //         'merchant_id' => $merchant->id,
+    //         'name' => 'Default Live Key',
+    //         'api_key' => 'mk_' . bin2hex(random_bytes(16)),
+    //         'api_secret_hash' => \Illuminate\Support\Facades\Hash::make(bin2hex(random_bytes(24))),
+    //         'environment' => 'live',
+    //         'permissions' => ['shipments:create', 'shipments:read', 'rates:calculate'],
+    //         'status' => 'active',
+    //     ]);
+    // }
+
+
+    private function ensureApiKey(Merchant $merchant): void
+{
+    $existingActiveLiveKey = MerchantApiKey::query()
+        ->where('merchant_id', $merchant->id)
+        ->where('environment', 'live')
+        ->where(function ($query) {
+            $query->where('status', 'active')
+                ->orWhere('is_active', true);
+        })
+        ->first();
+
+    if ($existingActiveLiveKey) {
+        return;
     }
+
+    $plainApiKey = 'tk_live_' . Str::random(40);
+    $plainApiSecret = 'ts_live_' . Str::random(60);
+
+    MerchantApiKey::create([
+        'merchant_id' => $merchant->id,
+        'name' => 'Default Live API Key',
+
+        'api_key' => $plainApiKey,
+        'api_key_hash' => hash('sha256', $plainApiKey),
+
+        'api_secret_hash' => Hash::make($plainApiSecret),
+        'api_secret_encrypted' => Crypt::encryptString($plainApiSecret),
+
+        'environment' => 'live',
+        'permissions' => [
+            'pricing.quote',
+            'shipments.create',
+            'shipments.track',
+        ],
+
+        'status' => 'active',
+        'is_active' => true,
+        'expires_at' => null,
+    ]);
+}
 }

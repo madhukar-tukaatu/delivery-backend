@@ -12,47 +12,18 @@ class MenuController extends Controller
     /**
      * Dynamic sidebar/menu endpoint for logged-in user.
      *
-     * Important:
-     * - Super admin sees all active menus in the requested section.
-     * - Other users only see menus where user can(menu.permission).
-     * - Empty permission means visible to all authenticated users in that section.
+     * For now:
+     * - Menus are controlled by section + permission only.
+     * - No merchant status check here.
+     * - Merchant/staff/admin section is auto-detected if section is not passed.
      */
-    // public function my(Request $request)
-    // {
-    //     $user = $request->user();
-    //     $section = $request->get('section') ?: $this->detectSection($user);
-
-    //     $menus = MenuItem::query()
-    //         ->where('section', $section)
-    //         ->where('is_active', true)
-    //         ->whereNull('parent_id')
-    //         ->with(['children' => function ($query) {
-    //             $query->where('is_active', true)->orderBy('sort_order');
-    //         }])
-    //         ->orderBy('sort_order')
-    //         ->get()
-    //         ->filter(fn ($menu) => $this->canSeeMenu($user, $menu))
-    //         ->map(function ($menu) use ($user) {
-    //             $menu->children = $menu->children
-    //                 ->filter(fn ($child) => $this->canSeeMenu($user, $child))
-    //                 ->values();
-
-    //             return $menu;
-    //         })
-    //         ->values();
-
-    //     return response()->json([
-    //         'data' => $menus,
-    //     ]);
-    // }
-
     public function my(Request $request)
     {
         $user = $request->user();
 
-        $section = $request->get('section', 'admin');
+        $section = $request->get('section') ?: $this->detectSection($user);
 
-        $menus = \Modules\Access\Models\MenuItem::query()
+        $menus = MenuItem::query()
             ->where('section', $section)
             ->where('is_active', true)
             ->whereNull('parent_id')
@@ -62,40 +33,31 @@ class MenuController extends Controller
             }])
             ->orderBy('sort_order')
             ->get()
-            ->filter(function ($menu) use ($user) {
-                if (method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) {
-                    return true;
-                }
-
-                if (empty($menu->permission)) {
-                    return true;
-                }
-
-                return $user->can($menu->permission);
-            })
             ->map(function ($menu) use ($user) {
-                $menu->children = $menu->children
-                    ->filter(function ($child) use ($user) {
-                        if (method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) {
-                            return true;
-                        }
-
-                        if (empty($child->permission)) {
-                            return true;
-                        }
-
-                        return $user->can($child->permission);
-                    })
+                $children = $menu->children
+                    ->filter(fn ($child) => $this->canSeeMenu($user, $child))
+                    ->map(fn ($child) => $this->presentMenu($child))
                     ->values();
 
-                return $menu;
+                $canSeeParent = $this->canSeeMenu($user, $menu);
+
+                if (!$canSeeParent && $children->isEmpty()) {
+                    return null;
+                }
+
+                $presented = $this->presentMenu($menu);
+                $presented['children'] = $children->all();
+
+                return $presented;
             })
+            ->filter()
             ->values();
 
         return response()->json([
             'data' => $menus,
         ]);
     }
+
     /**
      * Admin menu CRUD list.
      */
@@ -112,6 +74,7 @@ class MenuController extends Controller
 
         if ($request->filled('search')) {
             $search = $request->string('search');
+
             $query->where(function ($q) use ($search) {
                 $q->where('label', 'like', "%{$search}%")
                     ->orWhere('path', 'like', "%{$search}%")
@@ -173,11 +136,26 @@ class MenuController extends Controller
 
     private function detectSection($user): string
     {
-        if (method_exists($user, 'hasRole') && $user->hasRole('merchant')) {
+        if (
+            !empty($user->merchant_id)
+            || (method_exists($user, 'hasRole') && $user->hasRole('merchant'))
+        ) {
             return 'merchant';
         }
 
-        if (method_exists($user, 'hasRole') && ($user->hasRole('pickup_staff') || $user->hasRole('delivery_rider'))) {
+        if (
+            method_exists($user, 'hasRole')
+            && (
+                $user->hasRole('rider')
+                || $user->hasRole('pickup_staff')
+                || $user->hasRole('dispatch_staff')
+                || $user->hasRole('delivery_rider')
+            )
+        ) {
+            return 'staff';
+        }
+
+        if (in_array($user->role, ['rider', 'pickup_staff', 'dispatch_staff', 'delivery_rider'], true)) {
             return 'staff';
         }
 
@@ -195,5 +173,23 @@ class MenuController extends Controller
         }
 
         return $user->can($menu->permission);
+    }
+
+    private function presentMenu(MenuItem $menu): array
+    {
+        return [
+            'id' => $menu->id,
+            'key' => $menu->permission ?: $menu->id,
+            'label' => $menu->label,
+            'title' => $menu->label,
+            'path' => $menu->path,
+            'href' => $menu->path,
+            'route' => $menu->path,
+            'icon' => $menu->icon,
+            'permission' => $menu->permission,
+            'section' => $menu->section,
+            'sort_order' => $menu->sort_order,
+            'is_active' => (bool) $menu->is_active,
+        ];
     }
 }

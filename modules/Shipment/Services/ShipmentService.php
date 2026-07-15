@@ -99,6 +99,9 @@ class ShipmentService
                 'remarks' => $data['remarks'] ?? null,
             ]);
 
+            $this->persistShipmentExtras($shipment, $data);
+            $this->persistShipmentItems($shipment, $data);
+
             if ($useAutoRouting) {
                 $shipment = $this->shipmentRoutingService->applyToShipment($shipment, [
                     'pickup_lat' => $data['pickup_lat'],
@@ -163,7 +166,7 @@ class ShipmentService
         if (!empty($data['pickup_location_id'])) {
             $location = MerchantPickupLocation::query()
                 ->where('id', $data['pickup_location_id'])
-                ->when($merchant, fn ($q) => $q->where('merchant_id', $merchant->id))
+                ->when($merchant, fn($q) => $q->where('merchant_id', $merchant->id))
                 ->firstOrFail();
 
             return array_merge($data, [

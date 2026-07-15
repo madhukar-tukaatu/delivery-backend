@@ -86,6 +86,9 @@ Route::prefix('v1/merchant')
             Route::post('shipments', [MerchantShipmentController::class, 'store'])
                 ->name('shipments.store');
 
+            Route::post('shipments/quote', [MerchantShipmentController::class, 'quote'])
+                ->name('shipments.quote');
+
             Route::get('shipments/{trackingNumber}', [MerchantShipmentController::class, 'show'])
                 ->name('shipments.show');
 

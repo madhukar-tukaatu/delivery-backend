@@ -15,6 +15,7 @@ use Modules\Rate\Models\RateCard;
 use Modules\Routing\Services\BranchLocatorService;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 
@@ -195,16 +196,24 @@ class MerchantOnboardingService
                 ]);
             }
 
-            $merchant->update([
+            $merchantUpdate = [
                 'default_branch_id' => $branchId,
                 'default_sub_branch_id' => $subBranchId,
                 'status' => 'active',
                 'verification_status' => 'approved',
-                'verified_by' => $admin->id,
-                'verified_at' => now(),
                 'rejected_reason' => null,
                 'more_info_message' => null,
-            ]);
+            ];
+
+            if (Schema::hasColumn('merchants', 'verified_by')) {
+                $merchantUpdate['verified_by'] = $admin->id;
+            }
+
+            if (Schema::hasColumn('merchants', 'verified_at')) {
+                $merchantUpdate['verified_at'] = now();
+            }
+
+            $merchant->forceFill($merchantUpdate)->save();
 
             $merchant->documents()->where('status', 'pending')->update([
                 'status' => 'approved',
@@ -223,12 +232,16 @@ class MerchantOnboardingService
             ]);
 
             $this->ensureDefaultRateCard($merchant);
-            $this->ensureApiKey($merchant);
 
-            return $merchant->fresh(['documents', 'pickupLocations', 'apiKeys']);
+            $this->ensureSingleApiKey($merchant);
+
+            return $merchant->fresh([
+                'documents',
+                'pickupLocations',
+                'apiKeys',
+            ]);
         });
     }
-
     public function reject(Merchant $merchant, User $admin, string $reason): Merchant
     {
         $merchant->update([
@@ -286,44 +299,101 @@ class MerchantOnboardingService
     // }
 
 
-    private function ensureApiKey(Merchant $merchant): void
-{
-    $existingActiveLiveKey = MerchantApiKey::query()
-        ->where('merchant_id', $merchant->id)
-        ->where('environment', 'live')
-        ->where(function ($query) {
-            $query->where('status', 'active')
-                ->orWhere('is_active', true);
-        })
-        ->first();
+    // private function ensureApiKey(Merchant $merchant): void
+    // {
+    //     $existingActiveLiveKey = MerchantApiKey::query()
+    //         ->where('merchant_id', $merchant->id)
+    //         ->where('environment', 'live')
+    //         ->where(function ($query) {
+    //             $query->where('status', 'active')
+    //                 ->orWhere('is_active', true);
+    //         })
+    //         ->first();
 
-    if ($existingActiveLiveKey) {
-        return;
+    //     if ($existingActiveLiveKey) {
+    //         return;
+    //     }
+
+    //     $plainApiKey = 'tk_live_' . Str::random(40);
+    //     $plainApiSecret = 'ts_live_' . Str::random(60);
+
+    //     MerchantApiKey::create([
+    //         'merchant_id' => $merchant->id,
+    //         'name' => 'Default Live API Key',
+
+    //         'api_key' => $plainApiKey,
+    //         'api_key_hash' => hash('sha256', $plainApiKey),
+
+    //         'api_secret_hash' => Hash::make($plainApiSecret),
+    //         'api_secret_encrypted' => Crypt::encryptString($plainApiSecret),
+
+    //         'environment' => 'live',
+    //         'permissions' => [
+    //             'pricing.quote',
+    //             'shipments.create',
+    //             'shipments.track',
+    //         ],
+
+    //         'status' => 'active',
+    //         'is_active' => true,
+    //         'expires_at' => null,
+    //     ]);
+    // }
+
+    private function ensureSingleApiKey(Merchant $merchant): MerchantApiKey
+    {
+        $existingKey = MerchantApiKey::query()
+            ->where('merchant_id', $merchant->id)
+            ->first();
+
+        if ($existingKey) {
+            $update = [
+                'status' => 'active',
+                'environment' => $existingKey->environment ?: 'live',
+            ];
+
+            if (Schema::hasColumn('merchant_api_keys', 'is_active')) {
+                $update['is_active'] = true;
+            }
+
+            $existingKey->forceFill($update)->save();
+
+            return $existingKey->fresh();
+        }
+
+        $plainApiKey = 'tk_live_' . Str::random(40);
+        $plainApiSecret = 'ts_live_' . Str::random(60);
+
+        $payload = [
+            'merchant_id' => $merchant->id,
+            'name' => 'Default Live API Key',
+            'api_key' => $plainApiKey,
+            'api_secret_hash' => Hash::make($plainApiSecret),
+            'environment' => 'live',
+            'permissions' => [
+                'pricing.quote',
+                'shipments.create',
+                'shipments.track',
+            ],
+            'status' => 'active',
+        ];
+
+        if (Schema::hasColumn('merchant_api_keys', 'api_key_hash')) {
+            $payload['api_key_hash'] = hash('sha256', $plainApiKey);
+        }
+
+        if (Schema::hasColumn('merchant_api_keys', 'api_secret_encrypted')) {
+            $payload['api_secret_encrypted'] = Crypt::encryptString($plainApiSecret);
+        }
+
+        if (Schema::hasColumn('merchant_api_keys', 'is_active')) {
+            $payload['is_active'] = true;
+        }
+
+        if (Schema::hasColumn('merchant_api_keys', 'expires_at')) {
+            $payload['expires_at'] = null;
+        }
+
+        return MerchantApiKey::create($payload);
     }
-
-    $plainApiKey = 'tk_live_' . Str::random(40);
-    $plainApiSecret = 'ts_live_' . Str::random(60);
-
-    MerchantApiKey::create([
-        'merchant_id' => $merchant->id,
-        'name' => 'Default Live API Key',
-
-        'api_key' => $plainApiKey,
-        'api_key_hash' => hash('sha256', $plainApiKey),
-
-        'api_secret_hash' => Hash::make($plainApiSecret),
-        'api_secret_encrypted' => Crypt::encryptString($plainApiSecret),
-
-        'environment' => 'live',
-        'permissions' => [
-            'pricing.quote',
-            'shipments.create',
-            'shipments.track',
-        ],
-
-        'status' => 'active',
-        'is_active' => true,
-        'expires_at' => null,
-    ]);
-}
 }

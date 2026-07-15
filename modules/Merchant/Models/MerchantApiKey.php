@@ -3,11 +3,10 @@
 namespace Modules\Merchant\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class MerchantApiKey extends Model
 {
-    protected $guarded = [];
-
     protected $fillable = [
         'merchant_id',
         'name',
@@ -32,22 +31,12 @@ class MerchantApiKey extends Model
         'is_active' => 'boolean',
     ];
 
-    //  protected $fillable = [
-    //     'merchant_id',
-    //     'name',
-    //     'api_key_hash',
-    //     'is_active',
-    //     'last_used_at',
-    // ];
+    protected $hidden = [
+        'api_secret_hash',
+        'api_secret_encrypted',
+    ];
 
-    // protected $casts = [
-    //     'is_active' => 'boolean',
-    //     'permissions' => 'array',
-    //     'last_used_at' => 'datetime',
-    //     'expires_at' => 'datetime',
-    // ];
-
-    public function merchant()
+    public function merchant(): BelongsTo
     {
         return $this->belongsTo(Merchant::class);
     }

@@ -117,7 +117,7 @@ Route::prefix('v1/gateway')
 
 
 
-Route::prefix('v1/public')->group(function () {
+Route::prefix('v1/public-merchant')->group(function () {
     Route::post('/pricing/quote', [PublicPricingQuoteController::class, 'store']);
 });
 Route::prefix('v1/admin')->middleware(['auth:sanctum'])->group(function () {

@@ -14,8 +14,8 @@ class PublicPricingQuoteController extends Controller
 {
     public function store(Request $request, MerchantApiKeyGuard $guard, PricingEngineService $pricingEngine)
     {
-        // dd('here');
         $merchantKey = $guard->resolve($request);
+        dd('here');
         $validated = $request->validate([
             'pickup_address'=>['nullable','string','max:255'],
             'pickup_latitude'=>['required','numeric'],

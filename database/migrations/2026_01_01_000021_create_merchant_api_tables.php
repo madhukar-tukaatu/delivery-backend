@@ -14,7 +14,7 @@ return new class extends Migration
             $table->string('name');
             $table->string('api_key')->unique();
             $table->string('api_secret_hash');
-            $table->string('environment')->default('sandbox')->index();
+            $table->string('environment')->default('live')->index();
             $table->json('permissions')->nullable();
             $table->timestamp('last_used_at')->nullable();
             $table->timestamp('expires_at')->nullable();

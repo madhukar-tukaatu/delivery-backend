@@ -21,18 +21,14 @@ return new class extends Migration
                     'checkout_quote_id'
                 )->nullable();
 
-                $table->string(
-                    'quote_number',
-                    100
-                )->unique();
+                $table->string('quote_number', 100)
+                    ->unique();
 
-                $table->unsignedBigInteger(
-                    'merchant_id'
-                )->nullable();
+                $table->unsignedBigInteger('merchant_id')
+                    ->nullable();
 
-                $table->unsignedBigInteger(
-                    'store_id'
-                )->nullable();
+                $table->unsignedBigInteger('store_id')
+                    ->nullable();
 
                 $table->unsignedBigInteger(
                     'pickup_branch_id'
@@ -42,10 +38,7 @@ return new class extends Migration
                     'delivery_branch_id'
                 );
 
-                $table->string(
-                    'pickup_address',
-                    500
-                );
+                $table->string('pickup_address', 500);
 
                 $table->decimal(
                     'pickup_latitude',
@@ -88,15 +81,10 @@ return new class extends Migration
                     2
                 )->default(0);
 
-                $table->string(
-                    'parcel_type',
-                    30
-                );
+                $table->string('parcel_type', 30)
+                    ->default('non_fragile');
 
-                $table->string(
-                    'payment_type',
-                    30
-                );
+                $table->string('payment_type', 30);
 
                 $table->decimal(
                     'pod_amount',
@@ -104,10 +92,7 @@ return new class extends Migration
                     2
                 )->default(0);
 
-                $table->string(
-                    'service_type',
-                    50
-                );
+                $table->string('service_type', 50);
 
                 $table->unsignedBigInteger(
                     'service_type_id'
@@ -119,41 +104,76 @@ return new class extends Migration
                     2
                 );
 
-                $table->string(
-                    'currency',
-                    10
-                )->default('NPR');
+                $table->string('currency', 10)
+                    ->default('NPR');
 
                 $table->unsignedInteger(
                     'estimated_hours'
                 )->nullable();
 
-                $table->timestamp(
-                    'sla_due_at'
-                )->nullable();
+                $table->timestamp('sla_due_at')
+                    ->nullable();
 
-                $table->timestamp(
-                    'expires_at'
-                );
+                $table->timestamp('expires_at');
 
-                $table->json(
-                    'snapshot_json'
-                );
+                $table->json('snapshot_json');
 
-                $table->string(
-                    'status',
-                    30
-                )->default('pending');
+                $table->string('status', 30)
+                    ->default('pending');
 
-                $table->timestamp(
-                    'used_at'
-                )->nullable();
+                $table->timestamp('used_at')
+                    ->nullable();
 
                 $table->timestamps();
 
-                $table->index('checkout_quote_id');
-                $table->index('store_id');
-                $table->index('merchant_id');
+                $table->index(
+                    'checkout_quote_id',
+                    'pq_checkout_idx'
+                );
+
+                $table->index(
+                    'merchant_id',
+                    'pq_merchant_idx'
+                );
+
+                $table->index(
+                    'store_id',
+                    'pq_store_idx'
+                );
+
+                $table->index(
+                    'pickup_branch_id',
+                    'pq_pickup_branch_idx'
+                );
+
+                $table->index(
+                    'delivery_branch_id',
+                    'pq_delivery_branch_idx'
+                );
+
+                $table->index(
+                    'service_type_id',
+                    'pq_service_idx'
+                );
+
+                $table->index(
+                    'status',
+                    'pq_status_idx'
+                );
+
+                $table->index(
+                    'expires_at',
+                    'pq_expiry_idx'
+                );
+
+                $table->index(
+                    [
+                        'merchant_id',
+                        'status',
+                        'expires_at',
+                    ],
+                    'pq_lookup_idx'
+                );
             }
         );
     }

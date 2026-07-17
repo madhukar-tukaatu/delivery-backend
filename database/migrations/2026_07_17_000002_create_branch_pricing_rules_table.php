@@ -45,12 +45,15 @@ return new class extends Migration
             $table->boolean('is_active')->default(true);
             $table->timestamps();
 
-            $table->index([
-                'branch_id',
-                'service_type_id',
-                'merchant_id',
-                'charge_type',
-            ]);
+            $table->index(
+                [
+                    'branch_id',
+                    'service_type_id',
+                    'merchant_id',
+                    'charge_type',
+                ],
+                'bpr_lookup_idx'
+            );
         });
     }
 

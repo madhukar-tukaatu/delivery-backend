@@ -36,10 +36,32 @@ return new class extends Migration
                         'from_branch_id',
                         'to_branch_id',
                     ],
-                    'inter_branch_transfer_pair_unique'
+                    'ibtc_branch_pair_uq'
                 );
 
-                $table->index('transfer_count');
+                $table->index(
+                    'from_branch_id',
+                    'ibtc_from_idx'
+                );
+
+                $table->index(
+                    'to_branch_id',
+                    'ibtc_to_idx'
+                );
+
+                $table->index(
+                    'transfer_count',
+                    'ibtc_count_idx'
+                );
+
+                $table->index(
+                    [
+                        'from_branch_id',
+                        'to_branch_id',
+                        'is_active',
+                    ],
+                    'ibtc_lookup_idx'
+                );
             }
         );
     }

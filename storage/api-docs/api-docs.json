@@ -1,0 +1,225 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "Tukaatu Express API",
+        "description": "API documentation for the Tukaatu Express courier delivery platform",
+        "version": "1.0.0"
+    },
+    "servers": [
+        {
+            "url": "http://localhost:8000",
+            "description": "Local development server"
+        },
+        {
+            "url": "https://api.tukaatuexpress.com",
+            "description": "Production server"
+        }
+    ],
+    "paths": {
+        "/api/v1/public-merchant/pricing/quote": {
+            "post": {
+                "tags": [
+                    "Public Merchant Pricing"
+                ],
+                "summary": "Calculate a delivery price quote",
+                "description": "Calculates the available delivery price quote for a public merchant request using address coordinates.",
+                "operationId": "publicMerchantPricingQuote",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "required": [
+                                    "pickup_latitude",
+                                    "pickup_longitude",
+                                    "delivery_latitude",
+                                    "delivery_longitude",
+                                    "parcel_weight",
+                                    "payment_type",
+                                    "service_type"
+                                ],
+                                "properties": {
+                                    "pickup_address": {
+                                        "type": "string",
+                                        "example": "123 Main Street, Kathmandu",
+                                        "nullable": true,
+                                        "maxLength": 255
+                                    },
+                                    "pickup_latitude": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "example": 27.7172
+                                    },
+                                    "pickup_longitude": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "example": 85.324
+                                    },
+                                    "delivery_address": {
+                                        "type": "string",
+                                        "example": "456 Park Avenue, Lalitpur",
+                                        "nullable": true,
+                                        "maxLength": 255
+                                    },
+                                    "delivery_latitude": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "example": 27.6722
+                                    },
+                                    "delivery_longitude": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "example": 85.324
+                                    },
+                                    "parcel_weight": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "example": 2.5,
+                                        "minimum": 0.01
+                                    },
+                                    "parcel_value": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "example": 1500,
+                                        "nullable": true,
+                                        "minimum": 0
+                                    },
+                                    "payment_type": {
+                                        "type": "string",
+                                        "example": "cod",
+                                        "enum": [
+                                            "cod",
+                                            "prepaid"
+                                        ]
+                                    },
+                                    "cod_amount": {
+                                        "type": "number",
+                                        "format": "float",
+                                        "example": 1250,
+                                        "nullable": true,
+                                        "minimum": 0
+                                    },
+                                    "service_type": {
+                                        "type": "string",
+                                        "example": "express",
+                                        "enum": [
+                                            "standard",
+                                            "express",
+                                            "same_day"
+                                        ]
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Pricing quote generated successfully",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "quote_id": {
+                                            "type": "string",
+                                            "example": "QT-20250717 095312-ABC12"
+                                        },
+                                        "pricing_quote_id": {
+                                            "type": "integer",
+                                            "example": 456
+                                        },
+                                        "currency": {
+                                            "type": "string",
+                                            "example": "NPR"
+                                        },
+                                        "service_type": {
+                                            "properties": {
+                                                "id": {
+                                                    "type": "integer",
+                                                    "example": 1
+                                                },
+                                                "code": {
+                                                    "type": "string",
+                                                    "example": "express"
+                                                },
+                                                "name": {
+                                                    "type": "string",
+                                                    "example": "Express Delivery"
+                                                }
+                                            },
+                                            "type": "object"
+                                        },
+                                        "final_delivery_fee": {
+                                            "type": "number",
+                                            "format": "float",
+                                            "example": 245.5
+                                        },
+                                        "sla_due_at": {
+                                            "type": "string",
+                                            "format": "date-time",
+                                            "example": "2025-07-18T14:30:00+05:45"
+                                        },
+                                        "valid_until": {
+                                            "type": "string",
+                                            "format": "date-time",
+                                            "example": "2025-07-17T12:00:00+05:45"
+                                        },
+                                        "pickup_branch": {
+                                            "type": "object"
+                                        },
+                                        "delivery_branch": {
+                                            "type": "object"
+                                        },
+                                        "estimated_hours": {
+                                            "type": "integer",
+                                            "example": 12
+                                        },
+                                        "breakdown": {
+                                            "type": "object",
+                                            "additionalProperties": true
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "401": {
+                        "description": "Invalid or inactive API key"
+                    },
+                    "403": {
+                        "description": "API key does not have pricing permission"
+                    },
+                    "422": {
+                        "description": "Validation error"
+                    }
+                },
+                "security": [
+                    {
+                        "TukaatuApiKey": []
+                    }
+                ]
+            }
+        }
+    },
+    "components": {
+        "securitySchemes": {
+            "TukaatuApiKey": {
+                "type": "apiKey",
+                "name": "X-Tukaatu-Api-Key",
+                "in": "header"
+            }
+        }
+    },
+    "tags": [
+        {
+            "name": "Public Merchant Pricing",
+            "description": "Public Merchant Pricing"
+        }
+    ]
+}

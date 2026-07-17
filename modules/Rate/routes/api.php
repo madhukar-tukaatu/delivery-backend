@@ -1,131 +1,132 @@
 <?php
 
+declare(strict_types=1);
+
 use Illuminate\Support\Facades\Route;
 use Modules\Rate\Http\Controllers\Api\AdminPricingTestController;
 use Modules\Rate\Http\Controllers\Api\AdminSetupCrudController;
 use Modules\Rate\Http\Controllers\Api\PublicPricingQuoteController;
-use Modules\Rate\Http\Controllers\RateController;
 
 /*
 |--------------------------------------------------------------------------
-| Admin Rate Routes
+| Admin Pricing Configuration
 |--------------------------------------------------------------------------
 */
 
 Route::prefix('v1/admin')
     ->name('admin.')
-    ->middleware(['auth:sanctum'])
-    ->group(function () {
+    ->middleware([
+        'auth:sanctum',
+        'route.permission',
+    ])
+    ->group(function (): void {
+        Route::post(
+            'pricing/test',
+            [AdminPricingTestController::class, 'test']
+        )->name('pricing.test');
 
-        Route::middleware(['route.permission'])->group(function () {
+        Route::get(
+            'service-types',
+            [AdminSetupCrudController::class, 'serviceTypes']
+        )->name('service-types.index');
 
-            /*
-            |--------------------------------------------------------------------------
-            | Rate Cards
-            |--------------------------------------------------------------------------
-            | rates.view | rates.manage
-            */
+        Route::post(
+            'service-types',
+            [AdminSetupCrudController::class, 'saveServiceType']
+        )->name('service-types.store');
 
-            Route::get('rate-cards', [RateController::class, 'cards'])
-                ->name('rate-cards.index');
+        Route::get(
+            'branch-pricing-rules',
+            [AdminSetupCrudController::class, 'branchPricing']
+        )->name('branch-pricing-rules.index');
 
-            Route::post('rate-cards', [RateController::class, 'storeCard'])
-                ->name('rate-cards.store');
+        Route::post(
+            'branch-pricing-rules',
+            [AdminSetupCrudController::class, 'saveBranchPricing']
+        )->name('branch-pricing-rules.store');
 
-            Route::put('rate-cards/{card}', [RateController::class, 'updateCard'])
-                ->name('rate-cards.update');
+        Route::get(
+            'inter-branch-transfer-counts',
+            [AdminSetupCrudController::class, 'transferCounts']
+        )->name('inter-branch-transfer-counts.index');
 
-            Route::delete('rate-cards/{card}', [RateController::class, 'deleteCard'])
-                ->name('rate-cards.destroy');
+        Route::post(
+            'inter-branch-transfer-counts',
+            [AdminSetupCrudController::class, 'saveTransferCount']
+        )->name('inter-branch-transfer-counts.store');
 
-            /*
-            |--------------------------------------------------------------------------
-            | Rate Rules
-            |--------------------------------------------------------------------------
-            | rates.view | rates.manage
-            */
+        Route::get(
+            'transfer-count-rates',
+            [AdminSetupCrudController::class, 'transferCountRates']
+        )->name('transfer-count-rates.index');
 
-            Route::get('rate-rules', [RateController::class, 'rules'])
-                ->name('rate-rules.index');
+        Route::post(
+            'transfer-count-rates',
+            [AdminSetupCrudController::class, 'saveTransferCountRate']
+        )->name('transfer-count-rates.store');
 
-            Route::post('rate-rules', [RateController::class, 'storeRule'])
-                ->name('rate-rules.store');
+        Route::get(
+            'weight-rate-rules',
+            [AdminSetupCrudController::class, 'weightRates']
+        )->name('weight-rate-rules.index');
 
-            Route::put('rate-rules/{rule}', [RateController::class, 'updateRule'])
-                ->name('rate-rules.update');
+        Route::post(
+            'weight-rate-rules',
+            [AdminSetupCrudController::class, 'saveWeightRate']
+        )->name('weight-rate-rules.store');
 
-            Route::delete('rate-rules/{rule}', [RateController::class, 'deleteRule'])
-                ->name('rate-rules.destroy');
+        Route::get(
+            'parcel-handling-rates',
+            [AdminSetupCrudController::class, 'handlingRates']
+        )->name('parcel-handling-rates.index');
 
-            /*
-            |--------------------------------------------------------------------------
-            | Rate Calculation
-            |--------------------------------------------------------------------------
-            | rates.calculate
-            */
+        Route::post(
+            'parcel-handling-rates',
+            [AdminSetupCrudController::class, 'saveHandlingRate']
+        )->name('parcel-handling-rates.store');
 
-            Route::post('rates/calculate', [RateController::class, 'calculate'])
-                ->name('rates.calculate');
-        });
+        Route::get(
+            'cod-rate-rules',
+            [AdminSetupCrudController::class, 'codRates']
+        )->name('cod-rate-rules.index');
+
+        Route::post(
+            'cod-rate-rules',
+            [AdminSetupCrudController::class, 'saveCodRate']
+        )->name('cod-rate-rules.store');
     });
 
 /*
 |--------------------------------------------------------------------------
-| Merchant Rate Routes
+| Public Merchant Pricing
 |--------------------------------------------------------------------------
 */
 
-Route::prefix('v1/merchant')
-    ->name('merchant.')
-    ->middleware(['auth:sanctum', 'role:merchant'])
-    ->group(function () {
-
-        Route::middleware(['route.permission'])->group(function () {
-
-            /*
-            |--------------------------------------------------------------------------
-            | Rate Calculation (Merchant)
-            |--------------------------------------------------------------------------
-            */
-
-            Route::post('rates/calculate', [RateController::class, 'calculate'])
-                ->name('rates.calculate');
-        });
-    });
-
-/*
-|--------------------------------------------------------------------------
-| Gateway Rate Routes
-|--------------------------------------------------------------------------
-*/
-
-Route::prefix('v1/gateway')
-    ->name('gateway.')
-    ->middleware(['gateway.auth'])
-    ->group(function () {
+Route::prefix('v1/public-merchant')
+    ->name('public-merchant.')
+    ->middleware([
+        'merchant.api-key',
+        'throttle:public-merchant',
+    ])
+    ->group(function (): void {
+        /*
+         * One pickup/store only.
+         */
+        Route::post(
+            'pricing/quotes',
+            [PublicPricingQuoteController::class, 'storeSingle']
+        )->name('pricing-quotes.single');
 
         /*
-        |--------------------------------------------------------------------------
-        | Rate Calculation (Gateway)
-        |--------------------------------------------------------------------------
-        | No permission middleware (external system)
-        */
+         * Multiple stores/pickup locations.
+         */
+        Route::post(
+            'pricing/checkout-quotes',
+            [PublicPricingQuoteController::class, 'storeMultiStore']
+        )->name('pricing-quotes.multi-store');
 
-        Route::post('rates/calculate', [RateController::class, 'calculate'])
-            ->name('rates.calculate');
+        Route::get(
+            'pricing/checkout-quotes/{quoteNumber}',
+            [PublicPricingQuoteController::class, 'showCheckoutQuote']
+        )->name('pricing-quotes.show');
     });
-
-
-
-Route::prefix('v1/public-merchant')->group(function () {
-    Route::post('/pricing/quote', [PublicPricingQuoteController::class, 'store']);
-});
-Route::prefix('v1/admin')->middleware(['auth:sanctum'])->group(function () {
-    Route::post('/pricing/test', [AdminPricingTestController::class, 'test']);
-    Route::get('/service-types', [AdminSetupCrudController::class, 'serviceTypes']);
-    Route::post('/service-types', [AdminSetupCrudController::class, 'saveServiceType']);
-    Route::get('/branch-pricing-rules', [AdminSetupCrudController::class, 'branchPricing']);
-    Route::post('/branch-pricing-rules', [AdminSetupCrudController::class, 'saveBranchPricing']);
-    Route::get('/branch-transfer-lanes', [AdminSetupCrudController::class, 'transferLanes']);
-    Route::post('/branch-transfer-lanes', [AdminSetupCrudController::class, 'saveTransferLane']);
-});

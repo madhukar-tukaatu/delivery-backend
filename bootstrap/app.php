@@ -9,6 +9,7 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Http\Middleware\HandleCors;
+use Modules\Merchant\Http\Middleware\AuthenticateMerchantApiKey;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -26,6 +27,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'permission' => PermissionMiddleware::class,
             'branch.scope' => BranchScopeMiddleware::class,
             'route.permission' => CheckRoutePermission::class,
+            'merchant.api-key' => AuthenticateMerchantApiKey::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

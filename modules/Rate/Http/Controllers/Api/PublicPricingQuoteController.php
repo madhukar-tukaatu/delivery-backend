@@ -19,7 +19,6 @@ final class PublicPricingQuoteController extends Controller
         StorePublicPricingQuoteRequest $request,
         PricingEngineService $pricingEngine
     ): JsonResponse {
-        dd($request->all());
         $validated = $request->validated();
 
         $merchantId = $request->attributes->get(

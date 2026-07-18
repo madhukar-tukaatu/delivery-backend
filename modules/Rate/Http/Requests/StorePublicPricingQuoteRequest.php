@@ -5,7 +5,7 @@ namespace Modules\Rate\Http\Requests;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
-final class StorePublicPricingQuoteRequest extends FormRequest
+class StorePublicPricingQuoteRequest extends FormRequest
 {
     public function authorize(): bool
     {

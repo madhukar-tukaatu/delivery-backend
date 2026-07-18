@@ -27,7 +27,7 @@ final class MultiStorePricingService
                 $storeCalculations = [];
 
                 $productsTotal = 0.0;
-                $codTotal = 0.0;
+                $podTotal = 0.0;
                 $deliveryTotal = 0.0;
 
                 foreach ($data['stores'] as $store) {
@@ -35,7 +35,7 @@ final class MultiStorePricingService
                         $store
                     );
 
-                    $storeCodAmount =
+                    $storePodAmount =
                         $data['payment_type'] === 'pod'
                             ? $summary['parcel_value']
                             : 0.0;
@@ -93,8 +93,8 @@ final class MultiStorePricingService
                                         'payment_type'
                                     ],
 
-                                'cod_amount' =>
-                                    $storeCodAmount,
+                                'pod_amount' =>
+                                    $storePodAmount,
 
                                 'service_type' =>
                                     $data[
@@ -107,16 +107,16 @@ final class MultiStorePricingService
                     $storeCalculations[] = [
                         'store' => $store,
                         'summary' => $summary,
-                        'cod_amount' =>
-                            $storeCodAmount,
+                        'pod_amount' =>
+                            $storePodAmount,
                         'quote' => $quote,
                     ];
 
                     $productsTotal +=
                         $summary['parcel_value'];
 
-                    $codTotal +=
-                        $storeCodAmount;
+                    $podTotal +=
+                        $storePodAmount;
 
                     $deliveryTotal +=
                         (float) $quote[
@@ -185,8 +185,8 @@ final class MultiStorePricingService
                                 2
                             ),
 
-                        'cod_total' =>
-                            round($codTotal, 2),
+                        'pod_total' =>
+                            round($podTotal, 2),
 
                         'delivery_total' =>
                             round(
@@ -256,8 +256,8 @@ final class MultiStorePricingService
                             2
                         ),
 
-                    'cod_total' =>
-                        round($codTotal, 2),
+                    'pod_total' =>
+                        round($podTotal, 2),
 
                     'delivery_total' =>
                         round(
@@ -408,9 +408,9 @@ final class MultiStorePricingService
                 'payment_type' =>
                     $data['payment_type'],
 
-                'cod_amount' =>
+                'pod_amount' =>
                     $calculation[
-                        'cod_amount'
+                        'pod_amount'
                     ],
 
                 'service_type' =>

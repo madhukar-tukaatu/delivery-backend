@@ -80,7 +80,7 @@ final class PricingEngineService
 
         $pod = $this->codFee(
             (string) $data['payment_type'],
-            (float) ($data['cod_amount'] ?? 0),
+            (float) ($data['pod_amount'] ?? 0),
             (int) $serviceType->id,
             $merchantId
         );
@@ -509,13 +509,13 @@ final class PricingEngineService
             return [
                 'payment_type' => 'prepaid',
                 'calculation_type' => 'none',
-                'cod_amount' => 0.0,
+                'pod_amount' => 0.0,
                 'total' => 0.0,
             ];
         }
 
         $rule = $this->priorityRule(
-            'cod_rate_rules',
+            'pod_rate_rules',
             [],
             $serviceTypeId,
             $merchantId
@@ -525,7 +525,7 @@ final class PricingEngineService
             return [
                 'payment_type' => 'pod',
                 'calculation_type' => 'none',
-                'cod_amount' => round(
+                'pod_amount' => round(
                     $codAmount,
                     2
                 ),
@@ -575,7 +575,7 @@ final class PricingEngineService
             'rule_id' => (int) $rule->id,
             'payment_type' => 'pod',
             'calculation_type' => $type,
-            'cod_amount' => round(
+            'pod_amount' => round(
                 $codAmount,
                 2
             ),

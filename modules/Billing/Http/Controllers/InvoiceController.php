@@ -26,9 +26,9 @@ class InvoiceController extends Controller
             'invoice_number' => 'INV-'.now()->format('YmdHis').'-'.random_int(100, 999),
             'type' => 'shipment',
             'invoice_date' => now()->toDateString(),
-            'subtotal' => $shipment->delivery_charge + $shipment->cod_charge,
+            'subtotal' => $shipment->delivery_charge + $shipment->pod_charge,
             'tax_amount' => 0,
-            'total_amount' => $shipment->delivery_charge + $shipment->cod_charge,
+            'total_amount' => $shipment->delivery_charge + $shipment->pod_charge,
             'status' => 'unpaid',
         ]);
         InvoiceItem::create([
@@ -38,13 +38,13 @@ class InvoiceController extends Controller
             'unit_price' => $shipment->delivery_charge,
             'total' => $shipment->delivery_charge,
         ]);
-        if ($shipment->cod_charge > 0) {
+        if ($shipment->pod_charge > 0) {
             InvoiceItem::create([
                 'invoice_id' => $invoice->id,
-                'description' => 'COD charge for '.$shipment->tracking_number,
+                'description' => 'POD charge for '.$shipment->tracking_number,
                 'quantity' => 1,
-                'unit_price' => $shipment->cod_charge,
-                'total' => $shipment->cod_charge,
+                'unit_price' => $shipment->pod_charge,
+                'total' => $shipment->pod_charge,
             ]);
         }
         return ApiResponse::success($invoice->load('items'), 'Invoice generated.', 201);

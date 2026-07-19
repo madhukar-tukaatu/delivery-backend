@@ -12,26 +12,26 @@ class AccountsPaymentLifecycleController extends Controller
 {
     public function codPending(): JsonResponse
     {
-        $rows = DB::table('cod_transactions')
-            ->join('shipments', 'shipments.id', '=', 'cod_transactions.shipment_id')
-            ->whereIn('cod_transactions.status', ['collected_pending_deposit', 'pending_collection'])
-            ->select('cod_transactions.*', 'shipments.tracking_number', 'shipments.customer_name')
-            ->latest('cod_transactions.id')
+        $rows = DB::table('pod_transactions')
+            ->join('shipments', 'shipments.id', '=', 'pod_transactions.shipment_id')
+            ->whereIn('pod_transactions.status', ['collected_pending_deposit', 'pending_collection'])
+            ->select('pod_transactions.*', 'shipments.tracking_number', 'shipments.customer_name')
+            ->latest('pod_transactions.id')
             ->get();
 
         return response()->json(['data' => $rows]);
     }
 
-    public function confirmDeposit(Request $request, int $cod, PaymentWorkflowService $service): JsonResponse
+    public function confirmDeposit(Request $request, int $pod, PaymentWorkflowService $service): JsonResponse
     {
         $payload = $request->validate([
             'amount' => ['nullable', 'numeric', 'min:0'],
             'note' => ['nullable', 'string'],
         ]);
 
-        $row = $service->confirmCodDeposit($cod, $request->user()->id, $payload);
+        $row = $service->confirmCodDeposit($pod, $request->user()->id, $payload);
 
-        return response()->json(['message' => 'COD deposit confirmed.', 'data' => $row]);
+        return response()->json(['message' => 'POD deposit confirmed.', 'data' => $row]);
     }
 
     public function settlements(): JsonResponse

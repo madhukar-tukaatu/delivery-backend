@@ -58,7 +58,7 @@ class ShipmentController extends Controller
                 'delivery_lat' => $data['delivery_lat'],
                 'delivery_lng' => $data['delivery_lng'],
                 'weight' => $data['weight'] ?? $shipment->weight ?? 1,
-                'cod_amount' => $data['cod_amount'] ?? $shipment->cod_amount ?? 0,
+                'pod_amount' => $data['pod_amount'] ?? $shipment->pod_amount ?? 0,
             ]);
         }
 
@@ -123,10 +123,10 @@ class ShipmentController extends Controller
             'weight' => ['nullable', 'numeric', 'min:0.1'],
             'declared_value' => ['nullable', 'numeric', 'min:0'],
             'fragile' => ['nullable', 'boolean'],
-            'payment_type' => ['nullable', 'in:prepaid,cod,to_pay'],
-            'cod_amount' => ['nullable', 'numeric', 'min:0'],
+            'payment_type' => ['nullable', 'in:prepaid,pod,to_pay'],
+            'pod_amount' => ['nullable', 'numeric', 'min:0'],
             'delivery_charge' => ['nullable', 'numeric', 'min:0'],
-            'cod_charge' => ['nullable', 'numeric', 'min:0'],
+            'pod_charge' => ['nullable', 'numeric', 'min:0'],
             'delivery_charge_paid_by' => ['nullable', 'in:merchant,customer'],
             'remarks' => ['nullable', 'string'],
         ]);

@@ -43,6 +43,24 @@ class MenuSeeder extends Seeder
             ],
             [
                 'section' => 'admin',
+                'title' => 'Branch Allocation',
+                'label' => 'Branch Allocation',
+                'route' => '/admin/coverage-locations',
+                'icon' => 'location',
+                'permission' => 'coverage_locations.view',
+                'sort_order' => 21,
+            ],
+            [
+                'section' => 'admin',
+                'title' => 'Franchise / Branch Offices',
+                'label' => 'Franchise / Branch Offices',
+                'route' => '/admin/branch-offices',
+                'icon' => 'branches',
+                'permission' => 'branches.view',
+                'sort_order' => 22,
+            ],
+            [
+                'section' => 'admin',
                 'title' => 'Merchants',
                 'label' => 'Merchants',
                 'route' => '/admin/merchants',
@@ -115,11 +133,11 @@ class MenuSeeder extends Seeder
             ],
             [
                 'section' => 'admin',
-                'title' => 'COD',
-                'label' => 'COD',
-                'route' => '/admin/cod',
-                'icon' => 'cod',
-                'permission' => 'cod.view',
+                'title' => 'POD',
+                'label' => 'POD',
+                'route' => '/admin/pod',
+                'icon' => 'pod',
+                'permission' => 'pod.view',
                 'sort_order' => 80,
             ],
             [
@@ -402,11 +420,11 @@ class MenuSeeder extends Seeder
             ],
             [
                 'section' => 'merchant',
-                'title' => 'COD',
-                'label' => 'COD',
-                'route' => '/merchant/cod',
-                'icon' => 'cod',
-                'permission' => 'merchant.cod',
+                'title' => 'POD',
+                'label' => 'POD',
+                'route' => '/merchant/pod',
+                'icon' => 'pod',
+                'permission' => 'merchant.pod',
                 'sort_order' => 130,
             ],
             [
@@ -509,11 +527,11 @@ class MenuSeeder extends Seeder
             ],
             [
                 'section' => 'staff',
-                'title' => 'COD',
-                'label' => 'COD',
-                'route' => '/staff/cod',
-                'icon' => 'cod',
-                'permission' => 'staff.cod',
+                'title' => 'POD',
+                'label' => 'POD',
+                'route' => '/staff/pod',
+                'icon' => 'pod',
+                'permission' => 'staff.pod',
                 'sort_order' => 40,
             ],
         ];
@@ -563,7 +581,7 @@ class MenuSeeder extends Seeder
     private function filterColumns(string $table, array $data): array
     {
         return collect($data)
-            ->filter(fn ($value, $column) => Schema::hasColumn($table, $column))
+            ->filter(fn($value, $column) => Schema::hasColumn($table, $column))
             ->toArray();
     }
 }

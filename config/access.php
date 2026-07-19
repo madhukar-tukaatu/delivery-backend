@@ -148,13 +148,13 @@ return [
             ],
         ],
 
-        'cod' => [
-            'label' => 'COD',
+        'pod' => [
+            'label' => 'POD',
             'permissions' => [
-                'cod.view',
-                'cod.collect',
-                'cod.deposit',
-                'cod.confirm',
+                'pod.view',
+                'pod.collect',
+                'pod.deposit',
+                'pod.confirm',
             ],
         ],
 
@@ -261,7 +261,7 @@ return [
                 'reports.merchants',
                 'reports.branches',
                 'reports.staff',
-                'reports.cod',
+                'reports.pod',
                 'reports.revenue',
                 'reports.export',
             ],
@@ -285,7 +285,7 @@ return [
                 'merchant.dashboard',
                 'merchant.shipments',
                 'merchant.pickups',
-                'merchant.cod',
+                'merchant.pod',
                 'merchant.settlements',
                 'merchant.invoices',
                 'merchant.api_keys',
@@ -300,7 +300,7 @@ return [
                 'staff.dashboard',
                 'staff.pickups',
                 'staff.deliveries',
-                'staff.cod',
+                'staff.pod',
             ],
         ],
     ],
@@ -349,10 +349,10 @@ return [
             'deliveries.assign_branch',
             'deliveries.status',
 
-            'cod.view',
-            'cod.collect',
-            'cod.deposit',
-            'cod.confirm',
+            'pod.view',
+            'pod.collect',
+            'pod.deposit',
+            'pod.confirm',
 
             'settlements.view',
             'settlements.create',
@@ -374,7 +374,7 @@ return [
             'reports.merchants',
             'reports.branches',
             'reports.staff',
-            'reports.cod',
+            'reports.pod',
             'reports.revenue',
             'reports.export',
 
@@ -406,14 +406,14 @@ return [
             'deliveries.assign',
             'deliveries.status',
 
-            'cod.view',
-            'cod.deposit',
+            'pod.view',
+            'pod.deposit',
 
             'branches.view',
             'customers.view',
             'reports.view',
             'reports.shipments',
-            'reports.cod',
+            'reports.pod',
         ],
 
         'sub_branch_manager' => [
@@ -434,8 +434,8 @@ return [
             'deliveries.assign',
             'deliveries.status',
 
-            'cod.view',
-            'cod.deposit',
+            'pod.view',
+            'pod.deposit',
         ],
 
         'booking_staff' => [
@@ -464,17 +464,17 @@ return [
         'delivery_rider' => [
             'staff.dashboard',
             'staff.deliveries',
-            'staff.cod',
+            'staff.pod',
             'deliveries.view',
             'deliveries.status',
-            'cod.collect',
+            'pod.collect',
         ],
 
         'merchant' => [
             'merchant.dashboard',
             'merchant.shipments',
             'merchant.pickups',
-            'merchant.cod',
+            'merchant.pod',
             'merchant.settlements',
             'merchant.invoices',
             'merchant.api_keys',
@@ -488,7 +488,7 @@ return [
             'shipments.view',
             'shipments.create',
             'pickups.view',
-            'cod.view',
+            'pod.view',
             'settlements.view',
         ],
     ],

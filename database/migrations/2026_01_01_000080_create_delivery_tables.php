@@ -27,7 +27,7 @@ return new class extends Migration
             $table->string('failure_reason')->nullable();
             $table->string('receiver_name')->nullable();
             $table->string('receiver_phone')->nullable();
-            $table->decimal('cod_collected_amount', 12, 2)->default(0);
+            $table->decimal('pod_collected_amount', 12, 2)->default(0);
             $table->text('remarks')->nullable();
             $table->string('proof_photo_path')->nullable();
             $table->text('signature_data')->nullable();

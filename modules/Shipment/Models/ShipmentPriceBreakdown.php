@@ -19,7 +19,7 @@ class ShipmentPriceBreakdown extends Model
         'delivery_extra_km',
         'delivery_extra_charge',
         'weight_charge',
-        'cod_fee',
+        'pod_fee',
         'discount',
         'final_price',
         'snapshot_json',

@@ -18,8 +18,8 @@ class BranchPricingRule extends Model
         'max_delivery_distance_km',
         'base_weight_kg',
         'extra_weight_per_kg',
-        'cod_fee_fixed',
-        'cod_fee_percentage',
+        'pod_fee_fixed',
+        'pod_fee_percentage',
         'is_active',
     ];
 

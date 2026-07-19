@@ -8,13 +8,13 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('cod_records', function (Blueprint $table) {
+        Schema::create('pod_records', function (Blueprint $table) {
             $table->id();
             $table->foreignId('shipment_id')->constrained()->cascadeOnDelete();
             $table->foreignId('merchant_id')->nullable()->constrained()->nullOnDelete();
-            $table->decimal('cod_amount', 12, 2)->default(0);
+            $table->decimal('pod_amount', 12, 2)->default(0);
             $table->decimal('delivery_charge', 12, 2)->default(0);
-            $table->decimal('cod_charge', 12, 2)->default(0);
+            $table->decimal('pod_charge', 12, 2)->default(0);
             $table->decimal('collected_amount', 12, 2)->default(0);
             $table->string('status')->default('pending')->index();
             $table->foreignId('collected_by')->nullable()->constrained('users')->nullOnDelete();
@@ -25,7 +25,7 @@ return new class extends Migration
             $table->timestamps();
         });
 
-        Schema::create('cod_deposits', function (Blueprint $table) {
+        Schema::create('pod_deposits', function (Blueprint $table) {
             $table->id();
             $table->foreignId('branch_id')->nullable()->constrained('branches')->nullOnDelete();
             $table->foreignId('staff_id')->nullable()->constrained('users')->nullOnDelete();
@@ -38,7 +38,7 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::dropIfExists('cod_deposits');
-        Schema::dropIfExists('cod_records');
+        Schema::dropIfExists('pod_deposits');
+        Schema::dropIfExists('pod_records');
     }
 };

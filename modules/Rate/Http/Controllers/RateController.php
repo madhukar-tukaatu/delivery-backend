@@ -60,8 +60,8 @@ class RateController extends Controller
             'max_weight' => ['required', 'numeric'],
             'base_charge' => ['required', 'numeric'],
             'extra_per_kg' => ['nullable', 'numeric'],
-            'cod_percent' => ['nullable', 'numeric'],
-            'cod_fixed' => ['nullable', 'numeric'],
+            'pod_percent' => ['nullable', 'numeric'],
+            'pod_fixed' => ['nullable', 'numeric'],
             'return_charge' => ['nullable', 'numeric'],
             'estimated_delivery_time' => ['nullable', 'string'],
             'status' => ['nullable', 'in:active,inactive'],
@@ -79,8 +79,8 @@ class RateController extends Controller
             'max_weight' => ['sometimes', 'numeric'],
             'base_charge' => ['sometimes', 'numeric'],
             'extra_per_kg' => ['nullable', 'numeric'],
-            'cod_percent' => ['nullable', 'numeric'],
-            'cod_fixed' => ['nullable', 'numeric'],
+            'pod_percent' => ['nullable', 'numeric'],
+            'pod_fixed' => ['nullable', 'numeric'],
             'return_charge' => ['nullable', 'numeric'],
             'estimated_delivery_time' => ['nullable', 'string'],
             'status' => ['nullable', 'in:active,inactive'],
@@ -103,7 +103,7 @@ class RateController extends Controller
             'pickup_city' => ['nullable', 'string'],
             'delivery_city' => ['nullable', 'string'],
             'weight' => ['required', 'numeric', 'min:0.1'],
-            'cod_amount' => ['nullable', 'numeric', 'min:0'],
+            'pod_amount' => ['nullable', 'numeric', 'min:0'],
         ]);
         $merchantId = $request->user()?->merchant_id;
         if (!$merchantId && $request->attributes->has('merchant')) {

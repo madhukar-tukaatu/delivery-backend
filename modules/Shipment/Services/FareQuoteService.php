@@ -47,16 +47,16 @@ class FareQuoteService
         $distanceFee = round($distanceKm * (float) config('delivery_operations.pricing.rate_per_km', 12), 2);
         $weightFee = round($chargeableWeight * (float) config('delivery_operations.pricing.rate_per_kg', 25), 2);
 
-        $codAmount = (float) ($payment['cod_amount'] ?? 0);
+        $podAmount = (float) ($payment['pod_amount'] ?? 0);
         $paymentType = $payment['type'] ?? 'prepaid';
-        $codFee = $paymentType === 'cod'
-            ? round((float) config('delivery_operations.pricing.cod_fee_fixed', 20) + ($codAmount * ((float) config('delivery_operations.pricing.cod_fee_percent', 0) / 100)), 2)
+        $codFee = $paymentType === 'pod'
+            ? round((float) config('delivery_operations.pricing.pod_fee_fixed', 20) + ($podAmount * ((float) config('delivery_operations.pricing.pod_fee_percent', 0) / 100)), 2)
             : 0;
 
         $deliveryCharge = round($baseFee + $distanceFee + $weightFee + $codFee, 2);
         $paidBy = $payment['delivery_charge_paid_by'] ?? 'merchant';
-        $totalCollectable = $paymentType === 'cod'
-            ? $codAmount + ($paidBy === 'customer' ? $deliveryCharge : 0)
+        $totalCollectable = $paymentType === 'pod'
+            ? $podAmount + ($paidBy === 'customer' ? $deliveryCharge : 0)
             : 0;
 
         return [
@@ -72,7 +72,7 @@ class FareQuoteService
                 'volumetric_weight' => $volumetric,
                 'chargeable_weight' => $chargeableWeight,
                 'weight_fee' => $weightFee,
-                'cod_fee' => $codFee,
+                'pod_fee' => $codFee,
                 'delivery_charge' => $deliveryCharge,
                 'total_collectable' => round($totalCollectable, 2),
             ],

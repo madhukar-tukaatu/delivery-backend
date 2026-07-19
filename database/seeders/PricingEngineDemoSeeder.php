@@ -773,7 +773,7 @@ final class PricingEngineDemoSeeder extends Seeder
 
     /*
     |--------------------------------------------------------------------------
-    | COD Rates
+    | POD Rates
     |--------------------------------------------------------------------------
     */
 
@@ -854,7 +854,7 @@ final class PricingEngineDemoSeeder extends Seeder
             'Handling rules',
 
             'pod_rate_rules' =>
-            'COD rules',
+            'POD rules',
         ];
 
         foreach ($tables as $table => $label) {

@@ -103,7 +103,7 @@ return new class extends Migration
                 $table->unsignedInteger('daily_shipment_capacity')->nullable();
             }
 
-            foreach (['pickup_enabled', 'delivery_enabled', 'cod_enabled', 'return_enabled'] as $column) {
+            foreach (['pickup_enabled', 'delivery_enabled', 'pod_enabled', 'return_enabled'] as $column) {
                 if (!Schema::hasColumn('branches', $column)) {
                     $table->boolean($column)->default(false)->index();
                 }
@@ -142,7 +142,7 @@ return new class extends Migration
                 'business_type', 'status', 'country', 'province', 'district', 'city', 'area',
                 'address', 'landmark', 'latitude', 'longitude', 'coverage_radius_km', 'covered_areas',
                 'opening_time', 'closing_time', 'operating_days', 'daily_shipment_capacity',
-                'pickup_enabled', 'delivery_enabled', 'cod_enabled', 'return_enabled',
+                'pickup_enabled', 'delivery_enabled', 'pod_enabled', 'return_enabled',
                 'manager_user_id', 'approved_by', 'approved_at', 'rejected_by', 'rejected_at',
                 'rejection_reason',
             ];

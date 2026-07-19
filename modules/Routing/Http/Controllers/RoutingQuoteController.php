@@ -17,7 +17,7 @@ class RoutingQuoteController extends Controller
             'delivery_lat' => ['required', 'numeric', 'between:-90,90'],
             'delivery_lng' => ['required', 'numeric', 'between:-180,180'],
             'weight' => ['nullable', 'numeric', 'min:0.1'],
-            'cod_amount' => ['nullable', 'numeric', 'min:0'],
+            'pod_amount' => ['nullable', 'numeric', 'min:0'],
         ]);
 
         return ApiResponse::success($routing->quote($data), 'Route quote calculated.');

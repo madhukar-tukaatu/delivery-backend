@@ -183,8 +183,8 @@ class PricingEngineProductionSeeder extends Seeder
                 'max_delivery_distance_km' => 25,
                 'base_weight_kg' => 1,
                 'extra_weight_per_kg' => 30,
-                'cod_fee_fixed' => 25,
-                'cod_fee_percentage' => 0,
+                'pod_fee_fixed' => 25,
+                'pod_fee_percentage' => 0,
             ],
             'same_day' => [
                 'base_radius_km' => $isSubBranch ? 4 : 5,
@@ -196,8 +196,8 @@ class PricingEngineProductionSeeder extends Seeder
                 'max_delivery_distance_km' => 15,
                 'base_weight_kg' => 1,
                 'extra_weight_per_kg' => 40,
-                'cod_fee_fixed' => 30,
-                'cod_fee_percentage' => 0,
+                'pod_fee_fixed' => 30,
+                'pod_fee_percentage' => 0,
             ],
             default => [
                 'base_radius_km' => $isSubBranch ? 4 : 5,
@@ -209,8 +209,8 @@ class PricingEngineProductionSeeder extends Seeder
                 'max_delivery_distance_km' => 25,
                 'base_weight_kg' => 1,
                 'extra_weight_per_kg' => 25,
-                'cod_fee_fixed' => 20,
-                'cod_fee_percentage' => 0,
+                'pod_fee_fixed' => 20,
+                'pod_fee_percentage' => 0,
             ],
         };
     }

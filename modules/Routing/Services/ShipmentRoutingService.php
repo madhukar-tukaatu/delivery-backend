@@ -26,7 +26,7 @@ class ShipmentRoutingService
             (float) ($data['weight'] ?? 1)
         );
 
-        $tariff = $this->tariff->calculate($steps, (float) ($data['weight'] ?? 1), (float) ($data['cod_amount'] ?? 0));
+        $tariff = $this->tariff->calculate($steps, (float) ($data['weight'] ?? 1), (float) ($data['pod_amount'] ?? 0));
 
         return [
             'origin' => [
@@ -68,7 +68,7 @@ class ShipmentRoutingService
             'route_fee' => $tariff['route_fee'],
             'estimated_delivery_time' => $tariff['estimated_delivery_time'],
             'delivery_charge' => $tariff['delivery_charge'],
-            'cod_charge' => $tariff['cod_charge'],
+            'pod_charge' => $tariff['pod_charge'],
             'delivery_charge_breakdown' => $tariff['breakdown'],
         ]);
 

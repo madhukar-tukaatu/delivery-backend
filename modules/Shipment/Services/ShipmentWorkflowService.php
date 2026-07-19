@@ -20,7 +20,7 @@ class ShipmentWorkflowService
             'pickup_extra_charge'=>$b['pickup_extra_charge'] ?? 0,
             'delivery_extra_charge'=>$b['delivery_extra_charge'] ?? 0,
             'weight_charge'=>$b['weight_charge'] ?? 0,
-            'cod_fee'=>$b['cod_fee'] ?? 0,
+            'pod_fee'=>$b['pod_fee'] ?? 0,
             'discount'=>$b['discount'] ?? 0,
             'final_price'=>$b['final_price'] ?? $snapshot['final_price'] ?? 0,
             'snapshot_json'=>json_encode($snapshot),

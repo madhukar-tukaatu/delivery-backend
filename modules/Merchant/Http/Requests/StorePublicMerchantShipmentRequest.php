@@ -142,14 +142,14 @@ final class StorePublicMerchantShipmentRequest extends FormRequest
             'payment_type' => [
                 'required',
                 Rule::in([
-                    'cod',
+                    'pod',
                     'prepaid',
                 ]),
             ],
 
-            'cod_amount' => [
+            'pod_amount' => [
                 'nullable',
-                'required_if:payment_type,cod',
+                'required_if:payment_type,pod',
                 'numeric',
                 'min:0.01',
                 'max:999999999.99',
@@ -166,8 +166,8 @@ final class StorePublicMerchantShipmentRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'cod_amount.required_if' =>
-                'COD amount is required when payment type is COD.',
+            'pod_amount.required_if' =>
+                'POD amount is required when payment type is POD.',
         ];
     }
 }

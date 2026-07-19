@@ -40,7 +40,7 @@ class StaffDeliveryController extends Controller
     public function delivered(Request $request, DeliveryAssignment $delivery, DeliveryWorkflowService $service)
     {
         $data = $request->validate([
-            'cod_collected_amount' => ['nullable', 'numeric', 'min:0'],
+            'pod_collected_amount' => ['nullable', 'numeric', 'min:0'],
             'remarks' => ['nullable', 'string', 'max:500'],
         ]);
 

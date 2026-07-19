@@ -89,8 +89,8 @@ class ShipmentSeeder extends Seeder
                     'declared_value' => $codAmount,
                     'fragile' => random_int(1, 100) <= 12,
 
-                    'payment_type' => $codAmount > 0 ? 'cod' : 'prepaid',
-                    'cod_amount' => $codAmount,
+                    'payment_type' => $codAmount > 0 ? 'pod' : 'prepaid',
+                    'pod_amount' => $codAmount,
                     'delivery_charge_paid_by' => random_int(1, 100) <= 70 ? 'customer' : 'merchant',
 
                     /*
@@ -329,7 +329,7 @@ class ShipmentSeeder extends Seeder
 
     private function randomCodAmount(): float
     {
-        // 80% COD, 20% prepaid
+        // 80% POD, 20% prepaid
         if (random_int(1, 100) <= 20) {
             return 0;
         }

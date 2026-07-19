@@ -91,8 +91,8 @@ class DeliveryWorkflowService
             'updated_at' => now(),
         ]);
 
-        if ($shipment->payment_type === 'cod') {
-            DB::table('cod_transactions')->where('shipment_id', $shipment->id)->update([
+        if ($shipment->payment_type === 'pod') {
+            DB::table('pod_transactions')->where('shipment_id', $shipment->id)->update([
                 'rider_id' => $riderId,
                 'status' => 'collected_pending_deposit',
                 'payment_method' => $payload['payment_method'] ?? 'cash',

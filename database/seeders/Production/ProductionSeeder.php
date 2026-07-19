@@ -10,6 +10,7 @@ class ProductionSeeder extends Seeder
     {
         $this->call([
             NepalBranchProductionSeeder::class,
+            CoverageLocationSeeder::class,
             PricingEngineProductionSeeder::class,
         ]);
     }

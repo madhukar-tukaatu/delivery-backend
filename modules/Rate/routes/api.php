@@ -86,14 +86,14 @@ Route::prefix('v1/admin')
         )->name('parcel-handling-rates.store');
 
         Route::get(
-            'cod-rate-rules',
+            'pod-rate-rules',
             [AdminSetupCrudController::class, 'codRates']
-        )->name('cod-rate-rules.index');
+        )->name('pod-rate-rules.index');
 
         Route::post(
-            'cod-rate-rules',
+            'pod-rate-rules',
             [AdminSetupCrudController::class, 'saveCodRate']
-        )->name('cod-rate-rules.store');
+        )->name('pod-rate-rules.store');
     });
 
 /*

@@ -31,7 +31,7 @@ class WebhookService
                 'merchant_order_id' => $shipment->merchant_order_id,
                 'status' => $shipment->status,
                 'merchant_status' => $shipment->merchant_status,
-                'cod_amount' => (float) $shipment->cod_amount,
+                'pod_amount' => (float) $shipment->pod_amount,
                 'delivery_charge' => (float) $shipment->delivery_charge,
                 'updated_at' => now()->toIso8601String(),
             ];

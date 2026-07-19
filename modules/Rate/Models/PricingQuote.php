@@ -20,7 +20,7 @@ class PricingQuote extends Model
         'parcel_weight',
         'parcel_value',
         'payment_type',
-        'cod_amount',
+        'pod_amount',
         'service_type',
         'final_price',
         'expires_at',

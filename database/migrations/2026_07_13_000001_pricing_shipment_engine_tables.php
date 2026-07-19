@@ -47,8 +47,8 @@ return new class extends Migration
                 $table->decimal('max_delivery_distance_km', 8, 2)->nullable();
                 $table->decimal('base_weight_kg', 8, 2)->default(1);
                 $table->decimal('extra_weight_per_kg', 10, 2)->default(0);
-                $table->decimal('cod_fee_fixed', 10, 2)->default(0);
-                $table->decimal('cod_fee_percentage', 8, 2)->default(0);
+                $table->decimal('pod_fee_fixed', 10, 2)->default(0);
+                $table->decimal('pod_fee_percentage', 8, 2)->default(0);
                 $table->boolean('is_active')->default(true);
                 $table->timestamps();
                 $table->index(['branch_id','service_type_id']);
@@ -96,7 +96,7 @@ return new class extends Migration
                 $table->decimal('parcel_weight', 10, 2)->default(0);
                 $table->decimal('parcel_value', 12, 2)->default(0);
                 $table->string('payment_type')->default('prepaid');
-                $table->decimal('cod_amount', 12, 2)->default(0);
+                $table->decimal('pod_amount', 12, 2)->default(0);
                 $table->decimal('final_price', 12, 2)->default(0);
                 $table->timestamp('sla_due_at')->nullable();
                 $table->timestamp('expires_at')->nullable();
@@ -141,7 +141,7 @@ return new class extends Migration
                 $table->decimal('parcel_weight', 10, 2)->default(0);
                 $table->decimal('parcel_value', 12, 2)->default(0);
                 $table->string('payment_type')->default('prepaid');
-                $table->decimal('cod_amount', 12, 2)->default(0);
+                $table->decimal('pod_amount', 12, 2)->default(0);
                 $table->decimal('delivery_fee', 12, 2)->default(0);
                 $table->unsignedBigInteger('pickup_branch_id')->nullable();
                 $table->unsignedBigInteger('delivery_branch_id')->nullable();
@@ -168,7 +168,7 @@ return new class extends Migration
                 $table->decimal('pickup_extra_charge', 12, 2)->default(0);
                 $table->decimal('delivery_extra_charge', 12, 2)->default(0);
                 $table->decimal('weight_charge', 12, 2)->default(0);
-                $table->decimal('cod_fee', 12, 2)->default(0);
+                $table->decimal('pod_fee', 12, 2)->default(0);
                 $table->decimal('discount', 12, 2)->default(0);
                 $table->decimal('final_price', 12, 2)->default(0);
                 $table->json('snapshot_json')->nullable();

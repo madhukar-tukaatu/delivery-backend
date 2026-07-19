@@ -66,13 +66,13 @@ class MerchantShipmentController extends Controller
         $rate = $rateCalculator->calculate($data, $merchant->id);
 
         $deliveryCharge = (float) ($rate['delivery_charge'] ?? 0);
-        $codCharge = (float) ($rate['cod_charge'] ?? 0);
+        $codCharge = (float) ($rate['pod_charge'] ?? 0);
 
         $paymentType = $data['payment_type'] ?? 'prepaid';
-        $codAmount = (float) ($data['cod_amount'] ?? 0);
+        $codAmount = (float) ($data['pod_amount'] ?? 0);
         $paidBy = $data['delivery_charge_paid_by'] ?? 'customer';
 
-        $totalCollectable = $paymentType === 'cod'
+        $totalCollectable = $paymentType === 'pod'
             ? $codAmount + ($paidBy === 'customer' ? $deliveryCharge : 0)
             : ($paidBy === 'customer' ? $deliveryCharge : 0);
 
@@ -83,9 +83,9 @@ class MerchantShipmentController extends Controller
                 'name' => $this->serviceTypeLabel($data['service_type'] ?? 'standard'),
             ],
             'delivery_charge' => $deliveryCharge,
-            'cod_charge' => $codCharge,
+            'pod_charge' => $codCharge,
             'final_delivery_fee' => $deliveryCharge + $codCharge,
-            'cod_amount' => $codAmount,
+            'pod_amount' => $codAmount,
             'total_collectable_amount' => $totalCollectable,
             'payment_type' => $paymentType,
             'delivery_charge_paid_by' => $paidBy,
@@ -203,8 +203,8 @@ class MerchantShipmentController extends Controller
             'declared_value' => ['nullable', 'numeric', 'min:0'],
             'fragile' => ['nullable', 'boolean'],
 
-            'payment_type' => ['required', 'in:cod,prepaid'],
-            'cod_amount' => ['nullable', 'numeric', 'min:0'],
+            'payment_type' => ['required', 'in:pod,prepaid'],
+            'pod_amount' => ['nullable', 'numeric', 'min:0'],
             'delivery_charge_paid_by' => ['nullable', 'in:customer,merchant'],
 
             'self_drop' => ['nullable', 'boolean'],

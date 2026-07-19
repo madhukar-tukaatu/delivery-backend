@@ -47,15 +47,15 @@ return new class extends Migration
             $table->decimal('declared_value', 12, 2)->default(0);
             $table->boolean('fragile')->default(false);
 
-            $table->string('payment_type')->default('cod')->index();
-            $table->decimal('cod_amount', 12, 2)->default(0);
+            $table->string('payment_type')->default('pod')->index();
+            $table->decimal('pod_amount', 12, 2)->default(0);
 
             $table->decimal('delivery_charge', 12, 2)->default(0);
             $table->decimal('pickup_fee', 12, 2)->default(0);
             $table->decimal('route_fee', 12, 2)->default(0);
             $table->decimal('last_mile_fee', 12, 2)->default(0);
             $table->decimal('weight_fee', 12, 2)->default(0);
-            $table->decimal('cod_charge', 12, 2)->default(0);
+            $table->decimal('pod_charge', 12, 2)->default(0);
             $table->decimal('return_charge', 12, 2)->default(0);
 
             $table->decimal('route_distance_km', 10, 2)->default(0);
@@ -66,7 +66,7 @@ return new class extends Migration
 
             $table->string('status')->default('booked')->index();
             $table->string('merchant_status')->default('pending')->index();
-            $table->string('cod_status')->default('pending')->index();
+            $table->string('pod_status')->default('pending')->index();
             $table->string('settlement_status')->default('not_ready')->index();
             $table->timestamp('delivered_at')->nullable();
             $table->timestamp('cancelled_at')->nullable();

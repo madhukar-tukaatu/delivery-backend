@@ -536,9 +536,9 @@ final class MultiStorePricingService
                     'parcel_type'
                 ],
 
-            'cod_amount' =>
+            'pod_amount' =>
                 $calculation[
-                    'cod_amount'
+                    'pod_amount'
                 ],
 
             'pickup_branch' =>

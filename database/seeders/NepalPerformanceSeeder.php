@@ -17,7 +17,7 @@ class NepalPerformanceSeeder extends Seeder
      * Nepal performance/load-test data for Courier DMS.
      *
      * Default volume creates 10k+ shipments plus related pickups, dispatches,
-     * deliveries, COD, settlements, invoices, API logs and notifications.
+     * deliveries, POD, settlements, invoices, API logs and notifications.
      *
      * You can override counts from .env:
      * PERFORMANCE_MERCHANTS=500
@@ -290,8 +290,8 @@ class NepalPerformanceSeeder extends Seeder
                     'max_weight' => 2,
                     'base_charge' => $base,
                     'extra_per_kg' => random_int(25, 60),
-                    'cod_percent' => 1.00,
-                    'cod_fixed' => 10,
+                    'pod_percent' => 1.00,
+                    'pod_fixed' => 10,
                     'return_charge' => max(60, (int) round($base * 0.65)),
                     'estimated_delivery_time' => $eta,
                     'status' => 'active',
@@ -382,7 +382,7 @@ class NepalPerformanceSeeder extends Seeder
                 'merchant_id' => $merchant->id,
                 'url' => 'https://merchant'.$merchant->id.'.example.test/webhooks/courier',
                 'secret' => Str::random(40),
-                'events' => json_encode(['shipment.created', 'delivery.out_for_delivery', 'delivery.delivered', 'delivery.failed', 'cod.collected']),
+                'events' => json_encode(['shipment.created', 'delivery.out_for_delivery', 'delivery.delivered', 'delivery.failed', 'pod.collected']),
                 'status' => 'active',
                 'created_at' => $now,
                 'updated_at' => $now,
@@ -427,11 +427,11 @@ class NepalPerformanceSeeder extends Seeder
 
     private function seedShipmentsAndFlow(): void
     {
-        $this->command?->info('Seeding shipments, tracking, pickups, deliveries and COD...');
+        $this->command?->info('Seeding shipments, tracking, pickups, deliveries and POD...');
         $now = now();
         $statuses = ['booked', 'pickup_assigned', 'picked_up', 'received_at_origin', 'dispatched', 'in_transit', 'received_at_destination', 'out_for_delivery', 'delivered', 'delivery_failed', 'returned'];
         $products = ['Kurta set', 'Mobile cover', 'Smart watch', 'Shoes', 'T-shirt', 'Rice cooker', 'Cosmetics kit', 'Book set', 'Medicine pack', 'Bluetooth speaker', 'Baby clothes', 'Laptop charger'];
-        $paymentTypes = ['cod', 'cod', 'cod', 'prepaid'];
+        $paymentTypes = ['pod', 'pod', 'pod', 'prepaid'];
 
         $shipmentRows = [];
         $itemRows = [];
@@ -456,9 +456,9 @@ class NepalPerformanceSeeder extends Seeder
             $weight = random_int(1, 800) / 100;
             $declared = random_int(400, 25000);
             $deliveryCharge = $this->deliveryCharge($originBranchId, $destBranchId, $weight);
-            $codAmount = $paymentType === 'cod' ? $declared : 0;
-            $codCharge = $paymentType === 'cod' ? round(max(10, $codAmount * 0.01), 2) : 0;
-            $totalCollect = $paymentType === 'cod' ? $codAmount + $deliveryCharge : 0;
+            $codAmount = $paymentType === 'pod' ? $declared : 0;
+            $codCharge = $paymentType === 'pod' ? round(max(10, $codAmount * 0.01), 2) : 0;
+            $totalCollect = $paymentType === 'pod' ? $codAmount + $deliveryCharge : 0;
             $createdAt = Carbon::now()->subDays(random_int(0, 120))->subMinutes(random_int(0, 1440));
             $tracking = 'NP'.now()->format('ym').str_pad((string)$i, 8, '0', STR_PAD_LEFT);
 
@@ -495,16 +495,16 @@ class NepalPerformanceSeeder extends Seeder
                 'declared_value' => $declared,
                 'fragile' => random_int(1, 100) <= 12,
                 'payment_type' => $paymentType,
-                'cod_amount' => $codAmount,
+                'pod_amount' => $codAmount,
                 'delivery_charge' => $deliveryCharge,
-                'cod_charge' => $codCharge,
+                'pod_charge' => $codCharge,
                 'return_charge' => in_array($status, ['returned'], true) ? round($deliveryCharge * 0.65, 2) : 0,
                 'total_collectable_amount' => $totalCollect,
                 'delivery_charge_paid_by' => $this->random(['customer', 'merchant']),
                 'status' => $status,
                 'merchant_status' => $merchantStatus,
-                'cod_status' => $this->codStatus($status, $paymentType),
-                'settlement_status' => $status === 'delivered' && $paymentType === 'cod' ? $this->random(['ready', 'pending', 'settled']) : 'not_ready',
+                'pod_status' => $this->codStatus($status, $paymentType),
+                'settlement_status' => $status === 'delivered' && $paymentType === 'pod' ? $this->random(['ready', 'pending', 'settled']) : 'not_ready',
                 'delivered_at' => $status === 'delivered' ? $createdAt->copy()->addDays(random_int(1, 4))->toDateTimeString() : null,
                 'cancelled_at' => null,
                 'remarks' => random_int(1, 100) <= 10 ? 'Customer requested careful handling.' : null,
@@ -578,15 +578,15 @@ class NepalPerformanceSeeder extends Seeder
                 ];
             }
 
-            if ($paymentType === 'cod') {
+            if ($paymentType === 'pod') {
                 $collected = $status === 'delivered' ? $codAmount + $deliveryCharge : 0;
                 $codRows[] = [
                     'shipment_id' => null,
                     'tracking_number_tmp' => $tracking,
                     'merchant_id' => $merchantId,
-                    'cod_amount' => $codAmount,
+                    'pod_amount' => $codAmount,
                     'delivery_charge' => $deliveryCharge,
-                    'cod_charge' => $codCharge,
+                    'pod_charge' => $codCharge,
                     'collected_amount' => $collected,
                     'status' => $this->codStatus($status, $paymentType),
                     'collected_by' => $status === 'delivered' ? $this->random($this->riderIds) : null,
@@ -621,7 +621,7 @@ class NepalPerformanceSeeder extends Seeder
                     'failure_reason' => $shipment->status === 'delivery_failed' ? $this->random(['Customer unavailable', 'Phone unreachable', 'Wrong address', 'Payment not ready']) : null,
                     'receiver_name' => $shipment->status === 'delivered' ? $shipment->receiver_name : null,
                     'receiver_phone' => $shipment->status === 'delivered' ? $shipment->receiver_phone : null,
-                    'cod_collected_amount' => $shipment->status === 'delivered' ? $shipment->total_collectable_amount : 0,
+                    'pod_collected_amount' => $shipment->status === 'delivered' ? $shipment->total_collectable_amount : 0,
                     'remarks' => $shipment->status === 'delivered' ? 'Delivered successfully.' : null,
                     'proof_photo_path' => $shipment->status === 'delivered' ? 'proofs/demo-'.$assignment->shipment_id.'.jpg' : null,
                     'signature_data' => null,
@@ -661,7 +661,7 @@ class NepalPerformanceSeeder extends Seeder
         $this->insertChunks('shipment_items', $patch($itemRows));
         $this->insertChunks('tracking_events', $patch($trackingRows));
         $this->insertChunks('pickup_requests', $patch($pickupRows));
-        $this->insertChunks('cod_records', $patch($codRows));
+        $this->insertChunks('pod_records', $patch($codRows));
         $this->insertChunks('delivery_assignments', $patch($deliveryAssignmentRows));
     }
 
@@ -701,23 +701,23 @@ class NepalPerformanceSeeder extends Seeder
 
     private function seedSettlementsAndInvoices(): void
     {
-        $this->command?->info('Seeding settlements, invoices, receipts and COD deposits...');
+        $this->command?->info('Seeding settlements, invoices, receipts and POD deposits...');
         $now = now();
-        $codRows = DB::table('cod_records')->whereIn('shipment_id', $this->deliveredShipmentIds)->where('status', 'collected')->get()->groupBy('merchant_id');
+        $codRows = DB::table('pod_records')->whereIn('shipment_id', $this->deliveredShipmentIds)->where('status', 'collected')->get()->groupBy('merchant_id');
         $settlementNo = 1;
         foreach ($codRows as $merchantId => $records) {
             foreach ($records->chunk(50) as $chunk) {
-                $totalCod = $chunk->sum('cod_amount');
+                $totalCod = $chunk->sum('pod_amount');
                 $delivery = $chunk->sum('delivery_charge');
-                $codCharge = $chunk->sum('cod_charge');
+                $codCharge = $chunk->sum('pod_charge');
                 $settlementId = DB::table('merchant_settlements')->insertGetId([
                     'merchant_id' => $merchantId,
                     'settlement_number' => 'SET-NP-'.str_pad((string)$settlementNo++, 8, '0', STR_PAD_LEFT),
                     'period_from' => now()->subDays(30)->toDateString(),
                     'period_to' => now()->toDateString(),
-                    'total_cod_collected' => $totalCod,
+                    'total_pod_collected' => $totalCod,
                     'total_delivery_charges' => $delivery,
-                    'total_cod_charges' => $codCharge,
+                    'total_pod_charges' => $codCharge,
                     'return_charges' => 0,
                     'adjustments' => 0,
                     'final_payable_amount' => $totalCod - $delivery - $codCharge,
@@ -734,10 +734,10 @@ class NepalPerformanceSeeder extends Seeder
                     $items[] = [
                         'merchant_settlement_id' => $settlementId,
                         'shipment_id' => $record->shipment_id,
-                        'cod_amount' => $record->cod_amount,
+                        'pod_amount' => $record->pod_amount,
                         'delivery_charge' => $record->delivery_charge,
-                        'cod_charge' => $record->cod_charge,
-                        'net_amount' => $record->cod_amount - $record->delivery_charge - $record->cod_charge,
+                        'pod_charge' => $record->pod_charge,
+                        'net_amount' => $record->pod_amount - $record->delivery_charge - $record->pod_charge,
                         'created_at' => $now,
                         'updated_at' => $now,
                     ];
@@ -750,7 +750,7 @@ class NepalPerformanceSeeder extends Seeder
         $shipments = DB::table('shipments')->whereIn('id', array_slice($this->shipmentIds, 0, min(3000, count($this->shipmentIds))))->get();
         $n = 1;
         foreach ($shipments as $shipment) {
-            $subtotal = $shipment->delivery_charge + $shipment->cod_charge + $shipment->return_charge;
+            $subtotal = $shipment->delivery_charge + $shipment->pod_charge + $shipment->return_charge;
             $tax = round($subtotal * 0.13, 2);
             $invoiceRows[] = [
                 'merchant_id' => $shipment->merchant_id,
@@ -783,10 +783,10 @@ class NepalPerformanceSeeder extends Seeder
         foreach (array_chunk($this->branchIds, 1) as $branchChunk) {
             $branchId = $branchChunk[0];
             for ($i = 0; $i < 3; $i++) {
-                $depositRows[] = ['branch_id' => $branchId, 'staff_id' => $this->random($this->accountsStaffIds), 'amount' => random_int(50000, 250000), 'status' => $this->random(['pending', 'confirmed', 'confirmed']), 'remarks' => 'Daily COD counter deposit', 'created_at' => $now->copy()->subDays(random_int(0, 30)), 'updated_at' => $now];
+                $depositRows[] = ['branch_id' => $branchId, 'staff_id' => $this->random($this->accountsStaffIds), 'amount' => random_int(50000, 250000), 'status' => $this->random(['pending', 'confirmed', 'confirmed']), 'remarks' => 'Daily POD counter deposit', 'created_at' => $now->copy()->subDays(random_int(0, 30)), 'updated_at' => $now];
             }
         }
-        $this->insertChunks('cod_deposits', $depositRows);
+        $this->insertChunks('pod_deposits', $depositRows);
     }
 
     private function seedApiWebhookNotifications(): void
@@ -817,7 +817,7 @@ class NepalPerformanceSeeder extends Seeder
         $smsRows = [];
         $subset = DB::table('shipments')->whereIn('id', array_slice($this->shipmentIds, 0, min(8000, count($this->shipmentIds))))->get();
         foreach ($subset as $shipment) {
-            $event = $this->random(['shipment.created', 'pickup.completed', 'delivery.out_for_delivery', 'delivery.delivered', 'delivery.failed', 'cod.collected']);
+            $event = $this->random(['shipment.created', 'pickup.completed', 'delivery.out_for_delivery', 'delivery.delivered', 'delivery.failed', 'pod.collected']);
             $webhookRows[] = [
                 'merchant_id' => $shipment->merchant_id,
                 'shipment_id' => $shipment->id,
@@ -879,7 +879,7 @@ class NepalPerformanceSeeder extends Seeder
             $tickets[] = [
                 'merchant_id' => $merchantId,
                 'user_id' => null,
-                'subject' => $this->random(['Parcel delay inquiry', 'COD settlement question', 'Webhook not received', 'Pickup reschedule request']),
+                'subject' => $this->random(['Parcel delay inquiry', 'POD settlement question', 'Webhook not received', 'Pickup reschedule request']),
                 'message' => 'Demo support ticket for load testing.',
                 'status' => $this->random(['open', 'pending', 'resolved']),
                 'priority' => $this->random(['low', 'medium', 'high']),
@@ -938,7 +938,7 @@ class NepalPerformanceSeeder extends Seeder
 
     private function codStatus(string $status, string $paymentType): string
     {
-        if ($paymentType !== 'cod') return 'not_applicable';
+        if ($paymentType !== 'pod') return 'not_applicable';
         return match ($status) {
             'delivered' => 'collected',
             'returned', 'delivery_failed' => 'pending',

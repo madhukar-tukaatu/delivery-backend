@@ -5,7 +5,7 @@ namespace Modules\Delivery\Services;
 use App\Models\User;
 use App\Support\CourierStatus;
 use Illuminate\Support\Facades\DB;
-use Modules\COD\Services\CODWorkflowService;
+use Modules\POD\Services\PODWorkflowService;
 use Modules\Delivery\Models\DeliveryAssignment;
 use Modules\Shipment\Models\Shipment;
 use Modules\Tracking\Services\TrackingService;
@@ -85,12 +85,12 @@ class DeliveryWorkflowService
             abort_unless((int) $delivery->rider_id === (int) $user->id || $user->isSuperAdmin(), 403);
 
             $shipment = $delivery->shipment;
-            $codCollected = (float) ($data['cod_collected_amount'] ?? $shipment->total_collectable_amount ?? 0);
+            $codCollected = (float) ($data['pod_collected_amount'] ?? $shipment->total_collectable_amount ?? 0);
 
             $delivery->update([
                 'status' => 'delivered',
                 'delivered_at' => now(),
-                'cod_collected_amount' => $codCollected,
+                'pod_collected_amount' => $codCollected,
                 'remarks' => $data['remarks'] ?? null,
             ]);
 
@@ -98,12 +98,12 @@ class DeliveryWorkflowService
                 'status' => CourierStatus::DELIVERED,
                 'merchant_status' => CourierStatus::merchantStatus(CourierStatus::DELIVERED),
                 'delivered_at' => now(),
-                'cod_status' => $shipment->cod_amount > 0 ? 'collected' : 'not_required',
-                'settlement_status' => $shipment->cod_amount > 0 ? 'ready' : 'not_required',
+                'pod_status' => $shipment->pod_amount > 0 ? 'collected' : 'not_required',
+                'settlement_status' => $shipment->pod_amount > 0 ? 'ready' : 'not_required',
             ]);
 
-            if ($shipment->cod_amount > 0) {
-                app(CODWorkflowService::class)->markCollected($shipment, $user, $codCollected);
+            if ($shipment->pod_amount > 0) {
+                app(PODWorkflowService::class)->markCollected($shipment, $user, $codCollected);
             }
 
             $this->trackingService->record($shipment->fresh(), CourierStatus::DELIVERED, $data['remarks'] ?? 'Delivered successfully.', $user->id);

@@ -59,7 +59,7 @@ class ShipmentLifecycleService
                 $destination = $quote['destination'];
 
                 $paymentType = data_get($payload, 'payment.type', data_get($payload, 'payment_type', 'prepaid'));
-                $codAmount = (float) ($fare['cod_amount'] ?? 0);
+                $codAmount = (float) ($fare['pod_amount'] ?? 0);
 
                 $shipmentId = DB::table('shipments')->insertGetId([
                     'tracking_number' => $trackingNumber,
@@ -87,7 +87,7 @@ class ShipmentLifecycleService
                     'pieces' => data_get($payload, 'package.pieces', data_get($payload, 'pieces', 1)),
                     'declared_value' => data_get($payload, 'package.value', data_get($payload, 'declared_value', 0)),
                     'payment_type' => $paymentType,
-                    'cod_amount' => $codAmount,
+                    'pod_amount' => $codAmount,
                     'delivery_charge' => $fare['delivery_charge'],
                     'delivery_charge_paid_by' => $fare['delivery_charge_paid_by'],
                     'total_collectable' => $fare['total_collectable'],
@@ -100,8 +100,8 @@ class ShipmentLifecycleService
                     'status' => 'pending_pickup',
                     'pickup_status' => 'pending',
                     'delivery_status' => 'not_ready',
-                    'cod_status' => $paymentType === 'cod' ? 'pending' : 'none',
-                    'settlement_status' => $paymentType === 'cod' ? 'unsettled' : 'none',
+                    'pod_status' => $paymentType === 'pod' ? 'pending' : 'none',
+                    'settlement_status' => $paymentType === 'pod' ? 'unsettled' : 'none',
                     'created_by' => $actorId,
                     'created_at' => now(),
                     'updated_at' => now(),
@@ -116,9 +116,9 @@ class ShipmentLifecycleService
                     'volumetric_weight' => $fare['volumetric_weight'],
                     'chargeable_weight' => $fare['chargeable_weight'],
                     'weight_fee' => $fare['weight_fee'],
-                    'cod_fee' => $fare['cod_fee'],
+                    'pod_fee' => $fare['pod_fee'],
                     'delivery_charge' => $fare['delivery_charge'],
-                    'cod_amount' => $fare['cod_amount'],
+                    'pod_amount' => $fare['pod_amount'],
                     'total_collectable' => $fare['total_collectable'],
                     'meta' => json_encode($quote),
                     'created_at' => now(),
@@ -129,11 +129,11 @@ class ShipmentLifecycleService
                 $pickupId = $this->createPickupRequest($shipmentId, $merchantId, $payload, $origin);
                 $this->logEvent($shipmentId, 'shipment.created', 'pending_pickup', $origin['branch_id'], $origin['sub_branch_id'], $actorId, 'Shipment created');
 
-                if ($paymentType === 'cod') {
-                    DB::table('cod_collections')->insert([
+                if ($paymentType === 'pod') {
+                    DB::table('pod_collections')->insert([
                         'shipment_id' => $shipmentId,
                         'merchant_id' => $merchantId,
-                        'cod_amount' => $codAmount,
+                        'pod_amount' => $codAmount,
                         'delivery_charge_collected' => $fare['delivery_charge_paid_by'] === 'customer' ? $fare['delivery_charge'] : 0,
                         'total_collected' => 0,
                         'status' => 'pending',
@@ -284,7 +284,7 @@ class ShipmentLifecycleService
             'delivery' => DB::table('delivery_assignments')->where('shipment_id', $shipmentId)->latest()->first(),
             'route_steps' => DB::table('shipment_route_steps')->where('shipment_id', $shipmentId)->orderBy('sequence')->get(),
             'events' => DB::table('shipment_lifecycle_events')->where('shipment_id', $shipmentId)->latest()->limit(50)->get(),
-            'cod' => DB::table('cod_collections')->where('shipment_id', $shipmentId)->first(),
+            'pod' => DB::table('pod_collections')->where('shipment_id', $shipmentId)->first(),
         ];
     }
 

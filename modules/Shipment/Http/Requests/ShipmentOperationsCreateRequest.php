@@ -79,8 +79,8 @@ class ShipmentOperationsCreateRequest extends FormRequest
             ?: data_get($this->input('package'), 'value')
             ?: 0;
 
-        $codAmount = $this->input('cod_amount')
-            ?: data_get($this->input('payment'), 'cod_amount')
+        $codAmount = $this->input('pod_amount')
+            ?: data_get($this->input('payment'), 'pod_amount')
             ?: 0;
 
         $deliveryChargePaidBy = $this->input('delivery_charge_paid_by')
@@ -120,7 +120,7 @@ class ShipmentOperationsCreateRequest extends FormRequest
             'declared_value' => $declaredValue,
 
             'payment_type' => $paymentType,
-            'cod_amount' => $codAmount,
+            'pod_amount' => $codAmount,
             'delivery_charge_paid_by' => $deliveryChargePaidBy,
 
             'customer' => [
@@ -150,7 +150,7 @@ class ShipmentOperationsCreateRequest extends FormRequest
 
             'payment' => [
                 'type' => $paymentType,
-                'cod_amount' => $codAmount,
+                'pod_amount' => $codAmount,
                 'delivery_charge_paid_by' => $deliveryChargePaidBy,
             ],
         ]);
@@ -184,8 +184,8 @@ class ShipmentOperationsCreateRequest extends FormRequest
             'package.pieces' => ['nullable', 'integer', 'min:1'],
             'package.value' => ['nullable', 'numeric', 'min:0'],
 
-            'payment.type' => ['required', 'in:prepaid,cod'],
-            'payment.cod_amount' => ['required_if:payment.type,cod', 'nullable', 'numeric', 'min:0'],
+            'payment.type' => ['required', 'in:prepaid,pod'],
+            'payment.pod_amount' => ['required_if:payment.type,pod', 'nullable', 'numeric', 'min:0'],
             'payment.delivery_charge_paid_by' => ['required', 'in:merchant,customer'],
 
             'special_instruction' => ['nullable', 'string', 'max:500'],

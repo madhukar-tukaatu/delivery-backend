@@ -88,12 +88,12 @@ return new class extends Migration
                     $table->decimal('extra_weight_per_kg', 10, 2)->default(0);
                 }
 
-                if (!Schema::hasColumn('branch_pricing_rules', 'cod_fee_fixed')) {
-                    $table->decimal('cod_fee_fixed', 10, 2)->default(0);
+                if (!Schema::hasColumn('branch_pricing_rules', 'pod_fee_fixed')) {
+                    $table->decimal('pod_fee_fixed', 10, 2)->default(0);
                 }
 
-                if (!Schema::hasColumn('branch_pricing_rules', 'cod_fee_percentage')) {
-                    $table->decimal('cod_fee_percentage', 8, 2)->default(0);
+                if (!Schema::hasColumn('branch_pricing_rules', 'pod_fee_percentage')) {
+                    $table->decimal('pod_fee_percentage', 8, 2)->default(0);
                 }
 
                 if (!Schema::hasColumn('branch_pricing_rules', 'is_active')) {
@@ -185,7 +185,7 @@ return new class extends Migration
                 $table->decimal('delivery_extra_charge', 12, 2)->default(0);
 
                 $table->decimal('weight_charge', 12, 2)->default(0);
-                $table->decimal('cod_fee', 12, 2)->default(0);
+                $table->decimal('pod_fee', 12, 2)->default(0);
                 $table->decimal('discount', 12, 2)->default(0);
                 $table->decimal('final_price', 12, 2)->default(0);
 

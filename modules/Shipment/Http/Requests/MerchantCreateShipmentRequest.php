@@ -38,8 +38,8 @@ class MerchantCreateShipmentRequest extends FormRequest
             'package.pieces' => ['nullable', 'integer', 'min:1'],
             'package.value' => ['nullable', 'numeric', 'min:0'],
 
-            'payment.type' => ['nullable', 'in:prepaid,cod'],
-            'payment.cod_amount' => ['nullable', 'numeric', 'min:0'],
+            'payment.type' => ['nullable', 'in:prepaid,pod'],
+            'payment.pod_amount' => ['nullable', 'numeric', 'min:0'],
             'payment.delivery_charge_paid_by' => ['nullable', 'in:merchant,customer'],
 
             'delivery_type' => ['nullable', 'in:standard,express,same_day'],
@@ -55,8 +55,8 @@ class MerchantCreateShipmentRequest extends FormRequest
                 $validator->errors()->add('pickup_location_id', 'Pickup location is required.');
             }
 
-            if ($this->input('payment.type') === 'cod' && (float) $this->input('payment.cod_amount', 0) <= 0) {
-                $validator->errors()->add('payment.cod_amount', 'COD amount must be greater than zero.');
+            if ($this->input('payment.type') === 'pod' && (float) $this->input('payment.pod_amount', 0) <= 0) {
+                $validator->errors()->add('payment.pod_amount', 'POD amount must be greater than zero.');
             }
         });
     }

@@ -1,6 +1,6 @@
 {
-  "name": "COD",
-  "alias": "cod",
-  "description": "COD module for Courier Delivery Gateway",
+  "name": "POD",
+  "alias": "pod",
+  "description": "POD module for Courier Delivery Gateway",
   "active": true
 }

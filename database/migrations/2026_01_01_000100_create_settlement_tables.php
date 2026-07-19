@@ -14,9 +14,9 @@ return new class extends Migration
             $table->string('settlement_number')->unique();
             $table->date('period_from')->nullable();
             $table->date('period_to')->nullable();
-            $table->decimal('total_cod_collected', 12, 2)->default(0);
+            $table->decimal('total_pod_collected', 12, 2)->default(0);
             $table->decimal('total_delivery_charges', 12, 2)->default(0);
-            $table->decimal('total_cod_charges', 12, 2)->default(0);
+            $table->decimal('total_pod_charges', 12, 2)->default(0);
             $table->decimal('return_charges', 12, 2)->default(0);
             $table->decimal('adjustments', 12, 2)->default(0);
             $table->decimal('final_payable_amount', 12, 2)->default(0);
@@ -32,9 +32,9 @@ return new class extends Migration
             $table->id();
             $table->foreignId('merchant_settlement_id')->constrained()->cascadeOnDelete();
             $table->foreignId('shipment_id')->constrained()->cascadeOnDelete();
-            $table->decimal('cod_amount', 12, 2)->default(0);
+            $table->decimal('pod_amount', 12, 2)->default(0);
             $table->decimal('delivery_charge', 12, 2)->default(0);
-            $table->decimal('cod_charge', 12, 2)->default(0);
+            $table->decimal('pod_charge', 12, 2)->default(0);
             $table->decimal('net_amount', 12, 2)->default(0);
             $table->timestamps();
         });

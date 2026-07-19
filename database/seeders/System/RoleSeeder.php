@@ -174,13 +174,13 @@ class RoleSeeder extends Seeder
                 'dispatches.transfer_batches',
                 'dispatches.route_workflow',
 
-                'cod.view',
-                'cod.collect',
-                'cod.confirm',
-                'cod.deposit',
-                'cod.rider_deposit',
-                'cod.collections',
-                'cod.settle',
+                'pod.view',
+                'pod.collect',
+                'pod.confirm',
+                'pod.deposit',
+                'pod.rider_deposit',
+                'pod.collections',
+                'pod.settle',
 
                 'rates.view',
                 'rates.calculate',
@@ -216,7 +216,7 @@ class RoleSeeder extends Seeder
                 'reports.view',
                 'reports.export',
                 'reports.branches',
-                'reports.cod',
+                'reports.pod',
                 'reports.merchants',
                 'reports.revenue',
                 'reports.shipments',
@@ -290,10 +290,10 @@ class RoleSeeder extends Seeder
                 'dispatches.transfer_batches',
                 'dispatches.route_workflow',
 
-                'cod.view',
-                'cod.collect',
-                'cod.deposit',
-                'cod.collections',
+                'pod.view',
+                'pod.collect',
+                'pod.deposit',
+                'pod.collections',
 
                 'rates.view',
                 'rates.calculate',
@@ -311,7 +311,7 @@ class RoleSeeder extends Seeder
                 'staff.dashboard',
                 'staff.pickups',
                 'staff.deliveries',
-                'staff.cod',
+                'staff.pod',
                 'staff.rider_location',
             ],
 
@@ -361,9 +361,9 @@ class RoleSeeder extends Seeder
                 'dispatches.receive',
                 'dispatches.route_workflow',
 
-                'cod.view',
-                'cod.collect',
-                'cod.deposit',
+                'pod.view',
+                'pod.collect',
+                'pod.deposit',
 
                 'rates.calculate',
 
@@ -372,7 +372,7 @@ class RoleSeeder extends Seeder
                 'staff.dashboard',
                 'staff.pickups',
                 'staff.deliveries',
-                'staff.cod',
+                'staff.pod',
                 'staff.rider_location',
             ],
 
@@ -471,7 +471,7 @@ class RoleSeeder extends Seeder
                 'staff.dashboard',
                 'staff.pickups',
                 'staff.deliveries',
-                'staff.cod',
+                'staff.pod',
                 'staff.rider_location',
 
                 'shipments.view',
@@ -489,8 +489,8 @@ class RoleSeeder extends Seeder
                 'deliveries.delivered',
                 'deliveries.failed',
 
-                'cod.view',
-                'cod.collect',
+                'pod.view',
+                'pod.collect',
 
                 'notifications.view',
             ],
@@ -499,7 +499,7 @@ class RoleSeeder extends Seeder
             |--------------------------------------------------------------------------
             | Accounts Staff
             |--------------------------------------------------------------------------
-            | COD, settlements, invoices, receipts and reports.
+            | POD, settlements, invoices, receipts and reports.
             */
             'accounts_staff' => [
                 'dashboard.view',
@@ -508,13 +508,13 @@ class RoleSeeder extends Seeder
 
                 'shipments.view',
 
-                'cod.view',
-                'cod.collect',
-                'cod.confirm',
-                'cod.deposit',
-                'cod.rider_deposit',
-                'cod.collections',
-                'cod.settle',
+                'pod.view',
+                'pod.collect',
+                'pod.confirm',
+                'pod.deposit',
+                'pod.rider_deposit',
+                'pod.collections',
+                'pod.settle',
 
                 'settlements.view',
                 'settlements.create',
@@ -531,7 +531,7 @@ class RoleSeeder extends Seeder
 
                 'reports.view',
                 'reports.export',
-                'reports.cod',
+                'reports.pod',
                 'reports.revenue',
                 'reports.merchants',
 
@@ -595,7 +595,7 @@ class RoleSeeder extends Seeder
                 'merchant.pickup_locations',
                 'merchant.customers',
                 'merchant.rates',
-                'merchant.cod',
+                'merchant.pod',
                 'merchant.settlements',
                 'merchant.invoices',
                 'merchant.api_keys',

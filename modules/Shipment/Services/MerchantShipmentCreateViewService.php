@@ -96,7 +96,7 @@ class MerchantShipmentCreateViewService
                     'declared_value' => data_get($payload, 'package.value', 0),
 
                     'payment_type' => data_get($payload, 'payment.type', 'prepaid'),
-                    'cod_amount' => data_get($payload, 'payment.type') === 'cod' ? data_get($payload, 'payment.cod_amount', 0) : 0,
+                    'pod_amount' => data_get($payload, 'payment.type') === 'pod' ? data_get($payload, 'payment.pod_amount', 0) : 0,
                     'delivery_charge_paid_by' => data_get($payload, 'payment.delivery_charge_paid_by', 'merchant'),
                     'delivery_charge' => data_get($quote, 'fare.delivery_charge', 0),
                     'total_collectable' => data_get($quote, 'fare.total_collectable', 0),
@@ -137,8 +137,8 @@ class MerchantShipmentCreateViewService
             'shipment' => $shipment,
             'pickup' => $this->tableFirst('pickup_requests', 'shipment_id', $shipment->id),
             'delivery' => $this->tableFirst('delivery_assignments', 'shipment_id', $shipment->id),
-            'payment' => $this->tableFirst('cod_transactions', 'shipment_id', $shipment->id)
-                ?: $this->tableFirst('cod_records', 'shipment_id', $shipment->id),
+            'payment' => $this->tableFirst('pod_transactions', 'shipment_id', $shipment->id)
+                ?: $this->tableFirst('pod_records', 'shipment_id', $shipment->id),
             'route' => $this->buildRouteFromShipment($shipment),
             'history' => $this->history($shipment->id),
         ];
@@ -240,12 +240,12 @@ class MerchantShipmentCreateViewService
         $baseFee = (float) config('delivery_workflow.pricing.base_fee', 80);
         $ratePerKm = (float) config('delivery_workflow.pricing.rate_per_km', 12);
         $ratePerKg = (float) config('delivery_workflow.pricing.rate_per_kg', 25);
-        $codFeePercent = (float) config('delivery_workflow.pricing.cod_fee_percent', 1);
+        $codFeePercent = (float) config('delivery_workflow.pricing.pod_fee_percent', 1);
         $minimumCharge = (float) config('delivery_workflow.pricing.minimum_charge', 100);
 
         $distanceFee = round($distanceKm * $ratePerKm, 2);
         $weightFee = round($chargeableWeight * $ratePerKg, 2);
-        $codAmount = data_get($payload, 'payment.type') === 'cod' ? (float) data_get($payload, 'payment.cod_amount', 0) : 0;
+        $codAmount = data_get($payload, 'payment.type') === 'pod' ? (float) data_get($payload, 'payment.pod_amount', 0) : 0;
         $codFee = round($codAmount * $codFeePercent / 100, 2);
         $deliveryCharge = max($minimumCharge, round($baseFee + $distanceFee + $weightFee + $codFee, 2));
         $paidBy = data_get($payload, 'payment.delivery_charge_paid_by', 'merchant');
@@ -259,8 +259,8 @@ class MerchantShipmentCreateViewService
             'volumetric_weight' => round($volumetricWeight, 2),
             'chargeable_weight' => round($chargeableWeight, 2),
             'weight_fee' => $weightFee,
-            'cod_amount' => $codAmount,
-            'cod_fee' => $codFee,
+            'pod_amount' => $codAmount,
+            'pod_fee' => $codFee,
             'delivery_charge' => $deliveryCharge,
             'delivery_charge_paid_by' => $paidBy,
             'total_collectable' => round($totalCollectable, 2),
@@ -289,15 +289,15 @@ class MerchantShipmentCreateViewService
 
     private function createPaymentRecord(int $shipmentId, Merchant $merchant, array $payload, array $quote): void
     {
-        if (data_get($payload, 'payment.type') !== 'cod') return;
+        if (data_get($payload, 'payment.type') !== 'pod') return;
 
-        $table = Schema::hasTable('cod_transactions') ? 'cod_transactions' : (Schema::hasTable('cod_records') ? 'cod_records' : null);
+        $table = Schema::hasTable('pod_transactions') ? 'pod_transactions' : (Schema::hasTable('pod_records') ? 'pod_records' : null);
         if (!$table) return;
 
         DB::table($table)->insert($this->filterColumns($table, [
             'shipment_id' => $shipmentId,
             'merchant_id' => $merchant->id,
-            'cod_amount' => data_get($quote, 'fare.cod_amount', 0),
+            'pod_amount' => data_get($quote, 'fare.pod_amount', 0),
             'delivery_charge' => data_get($quote, 'fare.delivery_charge', 0),
             'total_collectable' => data_get($quote, 'fare.total_collectable', 0),
             'status' => 'pending_collection',

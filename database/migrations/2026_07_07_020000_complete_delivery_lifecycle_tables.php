@@ -36,7 +36,7 @@ return new class extends Migration
                 $this->addColumnIfMissing($table, 'declared_value', 'decimal', ['total' => 12, 'places' => 2, 'default' => 0]);
 
                 $this->addColumnIfMissing($table, 'payment_type', 'string', ['default' => 'prepaid']);
-                $this->addColumnIfMissing($table, 'cod_amount', 'decimal', ['total' => 12, 'places' => 2, 'default' => 0]);
+                $this->addColumnIfMissing($table, 'pod_amount', 'decimal', ['total' => 12, 'places' => 2, 'default' => 0]);
                 $this->addColumnIfMissing($table, 'delivery_charge', 'decimal', ['total' => 12, 'places' => 2, 'default' => 0]);
                 $this->addColumnIfMissing($table, 'delivery_charge_paid_by', 'string', ['default' => 'merchant']);
                 $this->addColumnIfMissing($table, 'total_collectable', 'decimal', ['total' => 12, 'places' => 2, 'default' => 0]);
@@ -50,7 +50,7 @@ return new class extends Migration
 
                 $this->addColumnIfMissing($table, 'pickup_status', 'string', ['default' => 'pending']);
                 $this->addColumnIfMissing($table, 'delivery_status', 'string', ['default' => 'not_ready']);
-                $this->addColumnIfMissing($table, 'cod_status', 'string', ['default' => 'none']);
+                $this->addColumnIfMissing($table, 'pod_status', 'string', ['default' => 'none']);
                 $this->addColumnIfMissing($table, 'settlement_status', 'string', ['default' => 'unsettled']);
                 $this->addColumnIfMissing($table, 'failed_attempts', 'integer', ['default' => 0]);
                 $this->addColumnIfMissing($table, 'delivered_at', 'timestamp', ['nullable' => true]);
@@ -69,9 +69,9 @@ return new class extends Migration
                 $table->decimal('volumetric_weight', 10, 2)->default(0);
                 $table->decimal('chargeable_weight', 10, 2)->default(0);
                 $table->decimal('weight_fee', 12, 2)->default(0);
-                $table->decimal('cod_fee', 12, 2)->default(0);
+                $table->decimal('pod_fee', 12, 2)->default(0);
                 $table->decimal('delivery_charge', 12, 2)->default(0);
-                $table->decimal('cod_amount', 12, 2)->default(0);
+                $table->decimal('pod_amount', 12, 2)->default(0);
                 $table->decimal('total_collectable', 12, 2)->default(0);
                 $table->json('meta')->nullable();
                 $table->timestamps();
@@ -205,13 +205,13 @@ return new class extends Migration
             });
         }
 
-        if (!Schema::hasTable('cod_collections')) {
-            Schema::create('cod_collections', function (Blueprint $table) {
+        if (!Schema::hasTable('pod_collections')) {
+            Schema::create('pod_collections', function (Blueprint $table) {
                 $table->id();
                 $table->unsignedBigInteger('shipment_id')->index();
                 $table->unsignedBigInteger('merchant_id')->index();
                 $table->unsignedBigInteger('rider_id')->nullable()->index();
-                $table->decimal('cod_amount', 12, 2)->default(0);
+                $table->decimal('pod_amount', 12, 2)->default(0);
                 $table->decimal('delivery_charge_collected', 12, 2)->default(0);
                 $table->decimal('total_collected', 12, 2)->default(0);
                 $table->string('payment_method')->default('cash');
@@ -262,8 +262,8 @@ return new class extends Migration
                 $table->id();
                 $table->unsignedBigInteger('merchant_settlement_id')->index();
                 $table->unsignedBigInteger('shipment_id')->index();
-                $table->unsignedBigInteger('cod_collection_id')->nullable();
-                $table->decimal('cod_amount', 12, 2)->default(0);
+                $table->unsignedBigInteger('pod_collection_id')->nullable();
+                $table->decimal('pod_amount', 12, 2)->default(0);
                 $table->decimal('delivery_charge_deduction', 12, 2)->default(0);
                 $table->decimal('net_amount', 12, 2)->default(0);
                 $table->timestamps();
@@ -303,7 +303,7 @@ return new class extends Migration
         Schema::dropIfExists('merchant_settlement_items');
         Schema::dropIfExists('merchant_settlements');
         Schema::dropIfExists('rider_cash_deposits');
-        Schema::dropIfExists('cod_collections');
+        Schema::dropIfExists('pod_collections');
         Schema::dropIfExists('shipment_transfer_batch_items');
         Schema::dropIfExists('shipment_transfer_batches');
         Schema::dropIfExists('shipment_route_steps');

@@ -38,8 +38,8 @@ class GatewayShipmentController extends Controller
             'weight' => ['nullable', 'numeric', 'min:0.1'],
             'declared_value' => ['nullable', 'numeric', 'min:0'],
             'fragile' => ['nullable', 'boolean'],
-            'payment_type' => ['nullable', 'in:prepaid,cod,to_pay'],
-            'cod_amount' => ['nullable', 'numeric', 'min:0'],
+            'payment_type' => ['nullable', 'in:prepaid,pod,to_pay'],
+            'pod_amount' => ['nullable', 'numeric', 'min:0'],
             'delivery_charge_paid_by' => ['nullable', 'in:merchant,customer'],
         ]);
         try {
@@ -57,7 +57,7 @@ class GatewayShipmentController extends Controller
             'route_distance_km' => (float) $shipment->route_distance_km,
             'route_fee' => (float) $shipment->route_fee,
             'delivery_charge' => (float) $shipment->delivery_charge,
-            'cod_charge' => (float) $shipment->cod_charge,
+            'pod_charge' => (float) $shipment->pod_charge,
             'total_collectable_amount' => (float) $shipment->total_collectable_amount,
             'delivery_charge_breakdown' => $shipment->delivery_charge_breakdown,
             'estimated_delivery_time' => $shipment->estimated_delivery_time,

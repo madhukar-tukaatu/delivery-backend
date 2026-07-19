@@ -1,11 +1,11 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use Modules\COD\Http\Controllers\CodController;
+use Modules\POD\Http\Controllers\CodController;
 
 /*
 |--------------------------------------------------------------------------
-| Admin COD Routes
+| Admin POD Routes
 |--------------------------------------------------------------------------
 */
 
@@ -18,28 +18,28 @@ Route::prefix('v1/admin')
 
             /*
             |--------------------------------------------------------------------------
-            | COD (Admin)
+            | POD (Admin)
             |--------------------------------------------------------------------------
             | Auto generated permissions:
-            | cod.view
-            | cod.collect
-            | cod.deposit
+            | pod.view
+            | pod.collect
+            | pod.deposit
             */
 
-            Route::get('cod', [CodController::class, 'index'])
-                ->name('cod.index');
+            Route::get('pod', [CodController::class, 'index'])
+                ->name('pod.index');
 
-            Route::post('cod/{cod}/collect', [CodController::class, 'collect'])
-                ->name('cod.collect');
+            Route::post('pod/{pod}/collect', [CodController::class, 'collect'])
+                ->name('pod.collect');
 
-            Route::post('cod/deposit', [CodController::class, 'deposit'])
-                ->name('cod.deposit');
+            Route::post('pod/deposit', [CodController::class, 'deposit'])
+                ->name('pod.deposit');
         });
     });
 
 /*
 |--------------------------------------------------------------------------
-| Merchant COD Routes
+| Merchant POD Routes
 |--------------------------------------------------------------------------
 */
 
@@ -52,20 +52,20 @@ Route::prefix('v1/merchant')
 
             /*
             |--------------------------------------------------------------------------
-            | COD (Merchant)
+            | POD (Merchant)
             |--------------------------------------------------------------------------
             | Permissions:
-            | merchant.cod OR cod.view
+            | merchant.pod OR pod.view
             */
 
-            Route::get('cod', [CodController::class, 'index'])
-                ->name('cod.index');
+            Route::get('pod', [CodController::class, 'index'])
+                ->name('pod.index');
         });
     });
 
 /*
 |--------------------------------------------------------------------------
-| Staff COD Routes
+| Staff POD Routes
 |--------------------------------------------------------------------------
 */
 
@@ -78,16 +78,16 @@ Route::prefix('v1/staff')
 
             /*
             |--------------------------------------------------------------------------
-            | COD (Staff)
+            | POD (Staff)
             |--------------------------------------------------------------------------
             | Permissions:
-            | staff.cod OR cod.view
+            | staff.pod OR pod.view
             */
 
-            Route::get('cod', [CodController::class, 'index'])
-                ->name('cod.index');
+            Route::get('pod', [CodController::class, 'index'])
+                ->name('pod.index');
 
-            Route::post('cod/deposit', [CodController::class, 'deposit'])
-                ->name('cod.deposit');
+            Route::post('pod/deposit', [CodController::class, 'deposit'])
+                ->name('pod.deposit');
         });
     });

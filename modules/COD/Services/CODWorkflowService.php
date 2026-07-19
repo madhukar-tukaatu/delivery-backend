@@ -1,17 +1,17 @@
 <?php
 
-namespace Modules\COD\Services;
+namespace Modules\POD\Services;
 
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
-use Modules\COD\Models\CodRecord;
+use Modules\POD\Models\CodRecord;
 use Modules\Shipment\Models\Shipment;
 
-class CODWorkflowService
+class PODWorkflowService
 {
     public function markCollectedForShipment(Shipment $shipment, User $rider, float $amount): ?CodRecord
     {
-        if ((float) $shipment->cod_amount <= 0) {
+        if ((float) $shipment->pod_amount <= 0) {
             return null;
         }
 
@@ -20,9 +20,9 @@ class CODWorkflowService
                 ['shipment_id' => $shipment->id],
                 [
                     'merchant_id' => $shipment->merchant_id,
-                    'cod_amount' => $shipment->cod_amount,
+                    'pod_amount' => $shipment->pod_amount,
                     'delivery_charge' => $shipment->delivery_charge,
-                    'cod_charge' => $shipment->cod_charge,
+                    'pod_charge' => $shipment->pod_charge,
                     'status' => 'pending',
                 ]
             );
@@ -45,9 +45,9 @@ class CODWorkflowService
                 'shipment_id' => $shipment->id,
             ], [
                 'merchant_id' => $shipment->merchant_id,
-                'cod_amount' => $shipment->cod_amount,
+                'pod_amount' => $shipment->pod_amount,
                 'delivery_charge' => $shipment->delivery_charge,
-                'cod_charge' => $shipment->cod_charge,
+                'pod_charge' => $shipment->pod_charge,
                 'status' => 'pending',
             ]);
 
@@ -59,7 +59,7 @@ class CODWorkflowService
             ]);
 
             $shipment->update([
-                'cod_status' => 'collected',
+                'pod_status' => 'collected',
                 'settlement_status' => 'ready',
             ]);
 

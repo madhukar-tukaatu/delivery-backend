@@ -33,8 +33,8 @@ class ShipmentLifecycleCreateRequest extends FormRequest
             'package.height_cm' => ['nullable', 'numeric', 'min:0'],
             'package.pieces' => ['nullable', 'integer', 'min:1'],
             'package.value' => ['nullable', 'numeric', 'min:0'],
-            'payment.type' => ['nullable', 'in:prepaid,cod'],
-            'payment.cod_amount' => ['nullable', 'numeric', 'min:0'],
+            'payment.type' => ['nullable', 'in:prepaid,pod'],
+            'payment.pod_amount' => ['nullable', 'numeric', 'min:0'],
             'payment.delivery_charge_paid_by' => ['nullable', 'in:merchant,customer'],
             'special_instruction' => ['nullable', 'string'],
         ];

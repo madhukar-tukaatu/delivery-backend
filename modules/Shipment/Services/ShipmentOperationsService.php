@@ -114,8 +114,8 @@ class ShipmentOperationsService
                 $shipment->pieces = $package['pieces'] ?? 1;
 
                 $shipment->payment_type = $paymentType;
-                $shipment->cod_amount = $paymentType === 'cod'
-                    ? (float) ($payment['cod_amount'] ?? 0)
+                $shipment->pod_amount = $paymentType === 'pod'
+                    ? (float) ($payment['pod_amount'] ?? 0)
                     : 0;
 
                 $shipment->delivery_charge_paid_by = $payment['delivery_charge_paid_by'] ?? 'merchant';
@@ -142,11 +142,11 @@ class ShipmentOperationsService
                     'updated_at' => now(),
                 ]));
 
-                if ($shipment->payment_type === 'cod') {
-                    DB::table('cod_transactions')->insert([
+                if ($shipment->payment_type === 'pod') {
+                    DB::table('pod_transactions')->insert([
                         'shipment_id' => $shipment->id,
                         'merchant_id' => $merchant->id,
-                        'cod_amount' => $shipment->cod_amount,
+                        'pod_amount' => $shipment->pod_amount,
                         'delivery_charge' => $shipment->delivery_charge,
                         'total_collected' => $shipment->total_collectable,
                         'status' => 'pending_collection',
@@ -190,7 +190,7 @@ class ShipmentOperationsService
             ->latest('id')
             ->first();
 
-        $cod = DB::table('cod_transactions')
+        $pod = DB::table('pod_transactions')
             ->where('shipment_id', $shipment->id)
             ->first();
 
@@ -208,7 +208,7 @@ class ShipmentOperationsService
             'shipment' => $shipment,
             'pickup' => $pickup,
             'charge' => $charge,
-            'cod' => $cod,
+            'pod' => $pod,
             'delivery' => $delivery,
             'tracking' => $tracking,
             'route' => [
@@ -383,8 +383,8 @@ class ShipmentOperationsService
             'payment' => [
                 'type' => $paymentType,
 
-                'cod_amount' => $payload['cod_amount']
-                    ?? data_get($payload, 'payment.cod_amount')
+                'pod_amount' => $payload['pod_amount']
+                    ?? data_get($payload, 'payment.pod_amount')
                     ?? 0,
 
                 'delivery_charge_paid_by' => $payload['delivery_charge_paid_by']

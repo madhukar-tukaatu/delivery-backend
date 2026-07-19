@@ -27,8 +27,8 @@ return new class extends Migration
             $table->decimal('max_weight', 10, 2)->default(1);
             $table->decimal('base_charge', 12, 2)->default(0);
             $table->decimal('extra_per_kg', 12, 2)->default(0);
-            $table->decimal('cod_percent', 5, 2)->default(0);
-            $table->decimal('cod_fixed', 12, 2)->default(0);
+            $table->decimal('pod_percent', 5, 2)->default(0);
+            $table->decimal('pod_fixed', 12, 2)->default(0);
             $table->decimal('return_charge', 12, 2)->default(0);
             $table->string('estimated_delivery_time')->nullable();
             $table->string('status')->default('active');

@@ -6,7 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Modules\COD\Models\CodRecord;
+use Modules\POD\Models\CodRecord;
 use Modules\Settlement\Models\MerchantSettlement;
 use Modules\Settlement\Models\MerchantSettlementItem;
 use Modules\Shipment\Models\Shipment;
@@ -36,9 +36,9 @@ class SettlementController extends Controller
                 ->where('settlement_status', 'ready')
                 ->get();
 
-            $totalCod = $shipments->sum('cod_amount');
+            $totalCod = $shipments->sum('pod_amount');
             $deliveryCharges = $shipments->sum('delivery_charge');
-            $codCharges = $shipments->sum('cod_charge');
+            $codCharges = $shipments->sum('pod_charge');
             $adjustments = (float) ($data['adjustments'] ?? 0);
             $final = $totalCod - $deliveryCharges - $codCharges + $adjustments;
 
@@ -47,9 +47,9 @@ class SettlementController extends Controller
                 'settlement_number' => 'SET-'.now()->format('YmdHis').'-'.random_int(100, 999),
                 'period_from' => $data['period_from'] ?? null,
                 'period_to' => $data['period_to'] ?? null,
-                'total_cod_collected' => $totalCod,
+                'total_pod_collected' => $totalCod,
                 'total_delivery_charges' => $deliveryCharges,
-                'total_cod_charges' => $codCharges,
+                'total_pod_charges' => $codCharges,
                 'adjustments' => $adjustments,
                 'final_payable_amount' => $final,
                 'status' => 'pending',
@@ -59,10 +59,10 @@ class SettlementController extends Controller
                 MerchantSettlementItem::create([
                     'merchant_settlement_id' => $settlement->id,
                     'shipment_id' => $shipment->id,
-                    'cod_amount' => $shipment->cod_amount,
+                    'pod_amount' => $shipment->pod_amount,
                     'delivery_charge' => $shipment->delivery_charge,
-                    'cod_charge' => $shipment->cod_charge,
-                    'net_amount' => $shipment->cod_amount - $shipment->delivery_charge - $shipment->cod_charge,
+                    'pod_charge' => $shipment->pod_charge,
+                    'net_amount' => $shipment->pod_amount - $shipment->delivery_charge - $shipment->pod_charge,
                 ]);
                 $shipment->update(['settlement_status' => 'processing']);
             }

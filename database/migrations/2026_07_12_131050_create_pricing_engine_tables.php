@@ -43,8 +43,8 @@ return new class extends Migration
                 $table->decimal('base_weight_kg', 8, 2)->default(1);
                 $table->decimal('extra_weight_per_kg', 10, 2)->default(0);
 
-                $table->decimal('cod_fee_fixed', 10, 2)->default(0);
-                $table->decimal('cod_fee_percentage', 8, 2)->default(0);
+                $table->decimal('pod_fee_fixed', 10, 2)->default(0);
+                $table->decimal('pod_fee_percentage', 8, 2)->default(0);
 
                 $table->boolean('is_active')->default(true);
                 $table->timestamps();
@@ -105,7 +105,7 @@ return new class extends Migration
                 $table->decimal('parcel_value', 12, 2)->default(0);
 
                 $table->string('payment_type')->default('prepaid');
-                $table->decimal('cod_amount', 12, 2)->default(0);
+                $table->decimal('pod_amount', 12, 2)->default(0);
 
                 $table->string('service_type')->default('standard');
                 $table->decimal('final_price', 12, 2)->default(0);
@@ -166,7 +166,7 @@ return new class extends Migration
                 $table->decimal('delivery_extra_charge', 12, 2)->default(0);
 
                 $table->decimal('weight_charge', 12, 2)->default(0);
-                $table->decimal('cod_fee', 12, 2)->default(0);
+                $table->decimal('pod_fee', 12, 2)->default(0);
                 $table->decimal('discount', 12, 2)->default(0);
                 $table->decimal('final_price', 12, 2)->default(0);
 

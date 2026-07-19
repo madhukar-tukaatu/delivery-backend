@@ -89,21 +89,21 @@ return new class extends Migration
         //         if (!Schema::hasColumn('delivery_assignments', 'failed_at')) $table->timestamp('failed_at')->nullable();
         //         if (!Schema::hasColumn('delivery_assignments', 'failed_reason')) $table->string('failed_reason')->nullable();
         //         if (!Schema::hasColumn('delivery_assignments', 'receiver_name')) $table->string('receiver_name')->nullable();
-        //         if (!Schema::hasColumn('delivery_assignments', 'cod_collected_amount')) $table->decimal('cod_collected_amount', 12, 2)->default(0);
+        //         if (!Schema::hasColumn('delivery_assignments', 'pod_collected_amount')) $table->decimal('pod_collected_amount', 12, 2)->default(0);
         //         if (!Schema::hasColumn('delivery_assignments', 'remarks')) $table->text('remarks')->nullable();
         //     });
         // }
 
-        if (Schema::hasTable('cod_records')) {
-            Schema::table('cod_records', function (Blueprint $table) {
-                if (!Schema::hasColumn('cod_records', 'collected_by')) $table->foreignId('collected_by')->nullable();
-                if (!Schema::hasColumn('cod_records', 'deposited_by')) $table->foreignId('deposited_by')->nullable();
-                if (!Schema::hasColumn('cod_records', 'confirmed_by')) $table->foreignId('confirmed_by')->nullable();
-                if (!Schema::hasColumn('cod_records', 'collected_amount')) $table->decimal('collected_amount', 12, 2)->default(0);
-                if (!Schema::hasColumn('cod_records', 'collected_at')) $table->timestamp('collected_at')->nullable();
-                if (!Schema::hasColumn('cod_records', 'deposited_at')) $table->timestamp('deposited_at')->nullable();
-                if (!Schema::hasColumn('cod_records', 'confirmed_at')) $table->timestamp('confirmed_at')->nullable();
-                if (!Schema::hasColumn('cod_records', 'remarks')) $table->text('remarks')->nullable();
+        if (Schema::hasTable('pod_records')) {
+            Schema::table('pod_records', function (Blueprint $table) {
+                if (!Schema::hasColumn('pod_records', 'collected_by')) $table->foreignId('collected_by')->nullable();
+                if (!Schema::hasColumn('pod_records', 'deposited_by')) $table->foreignId('deposited_by')->nullable();
+                if (!Schema::hasColumn('pod_records', 'confirmed_by')) $table->foreignId('confirmed_by')->nullable();
+                if (!Schema::hasColumn('pod_records', 'collected_amount')) $table->decimal('collected_amount', 12, 2)->default(0);
+                if (!Schema::hasColumn('pod_records', 'collected_at')) $table->timestamp('collected_at')->nullable();
+                if (!Schema::hasColumn('pod_records', 'deposited_at')) $table->timestamp('deposited_at')->nullable();
+                if (!Schema::hasColumn('pod_records', 'confirmed_at')) $table->timestamp('confirmed_at')->nullable();
+                if (!Schema::hasColumn('pod_records', 'remarks')) $table->text('remarks')->nullable();
             });
         }
 

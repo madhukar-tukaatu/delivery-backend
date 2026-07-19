@@ -121,8 +121,8 @@ return new class extends Migration
                 $table->decimal('per_km_charge', 12, 2)->default(0);
                 $table->decimal('per_kg_charge', 12, 2)->default(0);
 
-                $table->decimal('cod_percent', 8, 2)->default(0);
-                $table->decimal('cod_fixed', 12, 2)->default(0);
+                $table->decimal('pod_percent', 8, 2)->default(0);
+                $table->decimal('pod_fixed', 12, 2)->default(0);
 
                 $table->decimal('pickup_fee', 12, 2)->default(0);
                 $table->decimal('delivery_fee', 12, 2)->default(0);

@@ -7,8 +7,8 @@ return [
         'base_fee' => 80,
         'rate_per_km' => 8,
         'rate_per_kg' => 25,
-        'cod_fee_percent' => 1.0,
-        'minimum_cod_fee' => 20,
+        'pod_fee_percent' => 1.0,
+        'minimum_pod_fee' => 20,
     ],
 
     'sharing' => [

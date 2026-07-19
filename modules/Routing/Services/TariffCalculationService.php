@@ -20,7 +20,7 @@ class TariffCalculationService
 
         return [
             'delivery_charge' => round($total, 2),
-            'cod_charge' => round($codFee, 2),
+            'pod_charge' => round($codFee, 2),
             'route_distance_km' => round($routeDistance, 2),
             'route_fee' => round($routeFee, 2),
             'estimated_delivery_time' => $estimatedHours <= 24 ? 'Same day / next day' : ceil($estimatedHours / 24) . ' days',
@@ -29,7 +29,7 @@ class TariffCalculationService
                 'delivery_fee' => round($deliveryFee, 2),
                 'route_fee' => round($routeFee, 2),
                 'weight_fee' => round($weightFee, 2),
-                'cod_fee' => round($codFee, 2),
+                'pod_fee' => round($codFee, 2),
                 'remote_area_fee' => round($remoteAreaFee, 2),
                 'total' => round($total, 2),
             ],

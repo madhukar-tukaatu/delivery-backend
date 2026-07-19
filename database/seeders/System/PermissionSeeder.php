@@ -70,6 +70,13 @@ class PermissionSeeder extends Seeder
                 'dashboard.view' => 'Dashboard View',
             ],
 
+            'Coverage Locations' => [
+                'coverage_locations.view' => 'Coverage Locations View',
+                'coverage_locations.create' => 'Coverage Locations Create',
+                'coverage_locations.edit' => 'Coverage Locations Edit',
+                'coverage_locations.delete' => 'Coverage Locations Delete',
+
+            ],
             'Branches' => [
                 'branches.view' => 'Branches View',
                 'branches.create' => 'Branches Create',
@@ -124,7 +131,7 @@ class PermissionSeeder extends Seeder
                 'merchant.customers' => 'Merchant Customers',
 
                 'merchant.rates' => 'Merchant Rates',
-                'merchant.cod' => 'Merchant COD',
+                'merchant.pod' => 'Merchant POD',
                 'merchant.settlements' => 'Merchant Settlements',
                 'merchant.invoices' => 'Merchant Invoices',
 
@@ -202,15 +209,15 @@ class PermissionSeeder extends Seeder
                 'dispatches.route_workflow' => 'Dispatches Route Workflow',
             ],
 
-            'COD' => [
-                'cod.view' => 'COD View',
-                'cod.collect' => 'COD Collect',
-                'cod.confirm' => 'COD Confirm',
-                'cod.deposit' => 'COD Deposit',
+            'POD' => [
+                'pod.view' => 'POD View',
+                'pod.collect' => 'POD Collect',
+                'pod.confirm' => 'POD Confirm',
+                'pod.deposit' => 'POD Deposit',
 
-                'cod.rider_deposit' => 'COD Rider Deposit',
-                'cod.collections' => 'COD Collections',
-                'cod.settle' => 'COD Settle',
+                'pod.rider_deposit' => 'POD Rider Deposit',
+                'pod.collections' => 'POD Collections',
+                'pod.settle' => 'POD Settle',
             ],
 
             'Rates' => [
@@ -272,7 +279,7 @@ class PermissionSeeder extends Seeder
                 'reports.export' => 'Reports Export',
 
                 'reports.branches' => 'Reports Branches',
-                'reports.cod' => 'Reports COD',
+                'reports.pod' => 'Reports POD',
                 'reports.merchants' => 'Reports Merchants',
                 'reports.revenue' => 'Reports Revenue',
                 'reports.shipments' => 'Reports Shipments',
@@ -289,7 +296,7 @@ class PermissionSeeder extends Seeder
                 'staff.dashboard' => 'Staff Dashboard',
                 'staff.pickups' => 'Staff Pickups',
                 'staff.deliveries' => 'Staff Deliveries',
-                'staff.cod' => 'Staff COD',
+                'staff.pod' => 'Staff POD',
                 'staff.rider_location' => 'Staff Rider Location',
             ],
 

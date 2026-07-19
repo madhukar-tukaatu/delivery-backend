@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\Branch\Http\Controllers\AdminCoverageLocationController;
 use Modules\Branch\Http\Controllers\BranchAgreementController;
 use Modules\Branch\Http\Controllers\BranchController;
 use Modules\Branch\Http\Controllers\BranchDocumentController;
@@ -11,7 +12,8 @@ Route::prefix('v1/admin')
     ->group(function () {
         Route::get('branches/parent-options', [BranchController::class, 'parentOptions'])
             ->name('branches.parent-options');
-
+        Route::get('coverage-locations/map', [AdminCoverageLocationController::class, 'map']);
+        Route::apiResource('coverage-locations', AdminCoverageLocationController::class);
         Route::middleware(['route.permission'])->group(function () {
             Route::apiResource('branches', BranchController::class)
                 ->names([

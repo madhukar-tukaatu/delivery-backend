@@ -86,13 +86,13 @@
                                     },
                                     "payment_type": {
                                         "type": "string",
-                                        "example": "cod",
+                                        "example": "pod",
                                         "enum": [
-                                            "cod",
+                                            "pod",
                                             "prepaid"
                                         ]
                                     },
-                                    "cod_amount": {
+                                    "pod_amount": {
                                         "type": "number",
                                         "format": "float",
                                         "example": 1250,

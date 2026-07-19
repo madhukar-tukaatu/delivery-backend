@@ -4,7 +4,7 @@ namespace Modules\Shipment\Services;
 
 use App\Support\CourierStatus;
 use Illuminate\Support\Facades\DB;
-use Modules\COD\Models\CodRecord;
+use Modules\POD\Models\CodRecord;
 use Modules\Merchant\Models\Merchant;
 use Modules\Merchant\Models\MerchantPickupLocation;
 use Modules\Pickup\Services\PickupWorkflowService;
@@ -37,17 +37,17 @@ class ShipmentService
 
             $data = $this->applyPickupDefaults($data, $merchant);
 
-            $codAmount = (float) ($data['cod_amount'] ?? 0);
-            $paymentType = $data['payment_type'] ?? ($codAmount > 0 ? 'cod' : 'prepaid');
+            $podPmount = (float) ($data['pod_amount'] ?? 0);
+            $paymentType = $data['payment_type'] ?? ($podPmount > 0 ? 'pod' : 'prepaid');
             $paidBy = $data['delivery_charge_paid_by'] ?? 'customer';
             $useAutoRouting = $this->shouldUseAutoRouting($data);
 
             $rate = $useAutoRouting
-                ? ['delivery_charge' => 0, 'cod_charge' => 0]
+                ? ['delivery_charge' => 0, 'pod_charge' => 0]
                 : $this->rateCalculator->calculate($data, $merchantId);
 
             $deliveryCharge = (float) ($data['delivery_charge'] ?? $rate['delivery_charge'] ?? 0);
-            $codCharge = (float) ($data['cod_charge'] ?? $rate['cod_charge'] ?? 0);
+            $codCharge = (float) ($data['pod_charge'] ?? $rate['pod_charge'] ?? 0);
 
             $shipment = Shipment::create([
                 'tracking_number' => $this->numberService->generate(),
@@ -87,15 +87,15 @@ class ShipmentService
                 'declared_value' => (float) ($data['declared_value'] ?? 0),
                 'fragile' => (bool) ($data['fragile'] ?? false),
                 'payment_type' => $paymentType,
-                'cod_amount' => $codAmount,
+                'pod_amount' => $podPmount,
                 'delivery_charge' => $deliveryCharge,
-                'cod_charge' => $codCharge,
+                'pod_charge' => $codCharge,
                 'total_collectable_amount' => 0,
                 'delivery_charge_paid_by' => $paidBy,
                 'status' => CourierStatus::BOOKED,
                 'merchant_status' => CourierStatus::merchantStatus(CourierStatus::BOOKED),
-                'cod_status' => $codAmount > 0 ? 'pending' : 'not_required',
-                'settlement_status' => $codAmount > 0 ? 'not_ready' : 'not_required',
+                'pod_status' => $podPmount > 0 ? 'pending' : 'not_required',
+                'settlement_status' => $podPmount > 0 ? 'not_ready' : 'not_required',
                 'remarks' => $data['remarks'] ?? null,
             ]);
 
@@ -109,33 +109,33 @@ class ShipmentService
                     'delivery_lat' => $data['delivery_lat'],
                     'delivery_lng' => $data['delivery_lng'],
                     'weight' => $data['weight'] ?? 1,
-                    'cod_amount' => $codAmount,
+                    'pod_amount' => $podPmount,
                 ])->fresh();
             }
 
             $deliveryCharge = (float) ($shipment->delivery_charge ?? 0);
             $breakdown = is_array($shipment->delivery_charge_breakdown) ? $shipment->delivery_charge_breakdown : [];
-            $codCharge = (float) ($shipment->cod_charge ?? ($breakdown['cod_fee'] ?? 0));
+            $codCharge = (float) ($shipment->pod_charge ?? ($breakdown['pod_fee'] ?? 0));
 
-            $totalCollectable = $paymentType === 'cod'
-                ? $codAmount + ($paidBy === 'customer' ? $deliveryCharge : 0)
+            $totalCollectable = $paymentType === 'pod'
+                ? $podPmount + ($paidBy === 'customer' ? $deliveryCharge : 0)
                 : ($paidBy === 'customer' ? $deliveryCharge : 0);
 
             $shipment->update([
                 'delivery_charge' => $deliveryCharge,
-                'cod_charge' => $codCharge,
+                'pod_charge' => $codCharge,
                 'total_collectable_amount' => $totalCollectable,
             ]);
 
             $this->trackingService->record($shipment->fresh(), CourierStatus::BOOKED, 'Shipment booked.', $userId);
 
-            if ($codAmount > 0) {
+            if ($podPmount > 0) {
                 CodRecord::create([
                     'shipment_id' => $shipment->id,
                     'merchant_id' => $shipment->merchant_id,
-                    'cod_amount' => $codAmount,
+                    'pod_amount' => $podPmount,
                     'delivery_charge' => $deliveryCharge,
-                    'cod_charge' => $codCharge,
+                    'pod_charge' => $codCharge,
                     'status' => 'pending',
                 ]);
             }

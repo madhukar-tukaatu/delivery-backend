@@ -12,6 +12,8 @@ class Branch extends Model
 {
     protected $fillable = [
         'parent_id',
+        'coverage_location_id',
+
         'type',
         'name',
         'code',
@@ -25,6 +27,7 @@ class Branch extends Model
         'registration_number',
         'business_type',
         'status',
+
         'country',
         'province',
         'district',
@@ -32,18 +35,36 @@ class Branch extends Model
         'area',
         'address',
         'landmark',
+
+        /*
+         * Assigned coverage point used by old routing/pricing.
+         */
         'latitude',
         'longitude',
         'coverage_radius_km',
+
+        /*
+         * Real physical branch office location.
+         */
+        'office_address',
+        'office_city',
+        'office_area',
+        'office_street',
+        'office_landmark',
+        'office_latitude',
+        'office_longitude',
+
         'covered_areas',
         'opening_time',
         'closing_time',
         'operating_days',
         'daily_shipment_capacity',
+
         'pickup_enabled',
         'delivery_enabled',
-        'cod_enabled',
+        'pod_enabled',
         'return_enabled',
+
         'manager_user_id',
         'approved_by',
         'approved_at',
@@ -55,13 +76,19 @@ class Branch extends Model
     protected $casts = [
         'covered_areas' => 'array',
         'operating_days' => 'array',
+
         'pickup_enabled' => 'boolean',
         'delivery_enabled' => 'boolean',
-        'cod_enabled' => 'boolean',
+        'pod_enabled' => 'boolean',
         'return_enabled' => 'boolean',
+
         'latitude' => 'decimal:7',
         'longitude' => 'decimal:7',
         'coverage_radius_km' => 'decimal:2',
+
+        'office_latitude' => 'decimal:7',
+        'office_longitude' => 'decimal:7',
+
         'approved_at' => 'datetime',
         'rejected_at' => 'datetime',
     ];
@@ -88,6 +115,11 @@ class Branch extends Model
     public function children(): HasMany
     {
         return $this->hasMany(self::class, 'parent_id');
+    }
+
+    public function coverageLocation(): BelongsTo
+    {
+        return $this->belongsTo(CoverageLocation::class, 'coverage_location_id');
     }
 
     public function documents(): HasMany
@@ -125,10 +157,53 @@ class Branch extends Model
         return $type ? $query->where('type', $type) : $query;
     }
 
+    public function scopeMainBranches(Builder $query): Builder
+    {
+        return $query->whereIn('type', [
+            self::TYPE_HEAD_BRANCH,
+            self::TYPE_FRANCHISE_BRANCH,
+        ]);
+    }
+
+    public function scopeSubBranches(Builder $query): Builder
+    {
+        return $query->where('type', self::TYPE_SUB_BRANCH);
+    }
+
     public function getFullAddressAttribute(): string
     {
-        return collect([$this->address, $this->area, $this->city, $this->district, $this->province, $this->country])
-            ->filter()
-            ->implode(', ');
+        return collect([
+            $this->address,
+            $this->area,
+            $this->city,
+            $this->district,
+            $this->province,
+            $this->country,
+        ])->filter()->implode(', ');
+    }
+
+    public function getOfficeFullAddressAttribute(): string
+    {
+        return collect([
+            $this->office_address,
+            $this->office_area,
+            $this->office_city,
+            $this->district,
+            $this->province,
+            $this->country,
+        ])->filter()->implode(', ');
+    }
+
+    public function getIsMainBranchAttribute(): bool
+    {
+        return in_array($this->type, [
+            self::TYPE_HEAD_BRANCH,
+            self::TYPE_FRANCHISE_BRANCH,
+        ], true);
+    }
+
+    public function getIsSubBranchAttribute(): bool
+    {
+        return $this->type === self::TYPE_SUB_BRANCH;
     }
 }

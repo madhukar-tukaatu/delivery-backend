@@ -159,8 +159,8 @@ return new class extends Migration
                 if (!Schema::hasColumn('delivery_assignments', 'remarks')) {
                     $table->text('remarks')->nullable()->after('failed_reason');
                 }
-                if (!Schema::hasColumn('delivery_assignments', 'cod_collected_amount')) {
-                    $table->decimal('cod_collected_amount', 12, 2)->default(0)->after('remarks');
+                if (!Schema::hasColumn('delivery_assignments', 'pod_collected_amount')) {
+                    $table->decimal('pod_collected_amount', 12, 2)->default(0)->after('remarks');
                 }
             });
         }

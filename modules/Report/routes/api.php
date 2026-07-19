@@ -41,8 +41,8 @@ Route::prefix('v1/admin')
                 Route::get('revenue', [ReportController::class, 'revenue'])
                     ->name('revenue');
 
-                Route::get('cod', [ReportController::class, 'cod'])
-                    ->name('cod');
+                Route::get('pod', [ReportController::class, 'pod'])
+                    ->name('pod');
 
                 Route::get('merchants', [ReportController::class, 'merchants'])
                     ->name('merchants');

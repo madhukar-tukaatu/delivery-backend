@@ -8,7 +8,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Modules\Branch\Models\Branch;
-use Modules\COD\Models\CodRecord;
+use Modules\POD\Models\CodRecord;
 use Modules\Delivery\Models\DeliveryAssignment;
 use Modules\Merchant\Models\Merchant;
 use Modules\Settlement\Models\MerchantSettlement;
@@ -66,19 +66,19 @@ class ReportController extends Controller
 
         return ApiResponse::success([
             'delivery_charges' => (clone $shipmentQuery)->sum('delivery_charge'),
-            'cod_charges'      => (clone $shipmentQuery)->sum('cod_charge'),
+            'pod_charges'      => (clone $shipmentQuery)->sum('pod_charge'),
             'return_charges'   => (clone $shipmentQuery)->sum('return_charge'),
-            'total_charges'    => (clone $shipmentQuery)->sum('delivery_charge') + (clone $shipmentQuery)->sum('cod_charge') + (clone $shipmentQuery)->sum('return_charge'),
+            'total_charges'    => (clone $shipmentQuery)->sum('delivery_charge') + (clone $shipmentQuery)->sum('pod_charge') + (clone $shipmentQuery)->sum('return_charge'),
             'monthly'          => (clone $shipmentQuery)->get()->groupBy(fn ($s) => $s->created_at->format('Y-m'))->map(fn ($rows, $month) => [
                 'month' => $month, 
-                'total' => $rows->sum(fn ($s) => (float) $s->delivery_charge + (float) $s->cod_charge + (float) $s->return_charge)
+                'total' => $rows->sum(fn ($s) => (float) $s->delivery_charge + (float) $s->pod_charge + (float) $s->return_charge)
             ])->values(),
         ]);
     }
 
-    public function cod()
+    public function pod()
     {
-        // COD Records mapped by matching scoped shipment networks
+        // POD Records mapped by matching scoped shipment networks
         $user = Auth::user();
         $codQuery = CodRecord::query();
 
@@ -90,11 +90,11 @@ class ReportController extends Controller
         }
 
         return ApiResponse::success([
-            'total_cod' => (clone $codQuery)->sum('cod_amount'),
+            'total_cod' => (clone $codQuery)->sum('pod_amount'),
             'collected' => (clone $codQuery)->whereIn('status', ['collected','deposited','settled'])->sum('collected_amount'),
-            'pending'   => (clone $codQuery)->where('status', 'pending')->sum('cod_amount'),
+            'pending'   => (clone $codQuery)->where('status', 'pending')->sum('pod_amount'),
             'settled'   => (clone $codQuery)->where('status', 'settled')->sum('collected_amount'),
-            'by_status' => (clone $codQuery)->selectRaw('status, count(*) as total, sum(cod_amount) as amount')->groupBy('status')->get(),
+            'by_status' => (clone $codQuery)->selectRaw('status, count(*) as total, sum(pod_amount) as amount')->groupBy('status')->get(),
         ]);
     }
 
@@ -111,7 +111,7 @@ class ReportController extends Controller
             'pending'         => Merchant::where('status', 'pending')->count(),
             'suspended'       => Merchant::where('status', 'suspended')->count(),
             'shipment_counts' => (clone $shipmentQuery)->with('merchant:id,name')
-                                    ->selectRaw('merchant_id, count(*) as total, sum(cod_amount) as cod_total')
+                                    ->selectRaw('merchant_id, count(*) as total, sum(pod_amount) as pod_total')
                                     ->groupBy('merchant_id')->get(),
             'settlements'     => MerchantSettlement::selectRaw('status, count(*) as total, sum(final_payable_amount) as amount')->groupBy('status')->get(),
         ]);

@@ -29,7 +29,7 @@ class PerformanceSeeder extends Seeder
             PickupSeeder::class,
             DispatchSeeder::class,
             DeliverySeeder::class,
-            CODSeeder::class,
+            PODSeeder::class,
             SettlementSeeder::class,
             InvoiceSeeder::class,
             NotificationSeeder::class,

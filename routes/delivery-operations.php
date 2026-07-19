@@ -91,11 +91,11 @@ Route::prefix('v1/admin')
         Route::post('shipments/{shipment}/assign-delivery', [AdminShipmentLifecycleController ::class, 'assignDelivery'])
             ->name('shipments.assign-delivery');
 
-        Route::get('accounts/cod-pending', [AccountsPaymentOperationsController::class, 'codPending'])
-            ->name('accounts.cod-pending');
+        Route::get('accounts/pod-pending', [AccountsPaymentOperationsController::class, 'codPending'])
+            ->name('accounts.pod-pending');
 
-        Route::post('accounts/cod/{cod}/confirm-deposit', [AccountsPaymentOperationsController::class, 'confirmDeposit'])
-            ->name('accounts.cod.confirm-deposit');
+        Route::post('accounts/pod/{pod}/confirm-deposit', [AccountsPaymentOperationsController::class, 'confirmDeposit'])
+            ->name('accounts.pod.confirm-deposit');
 
         Route::get('accounts/settlements', [AccountsPaymentOperationsController::class, 'settlements'])
             ->name('accounts.settlements.index');

@@ -48,7 +48,7 @@ Route::prefix('v1/admin')
         Route::post('shipments/transfer-batches/{batch}/dispatch', [AdminShipmentLifecycleController::class, 'dispatchTransferBatch'])->name('shipments.transfer-batches.dispatch');
         Route::post('shipments/transfer-batches/{batch}/receive', [AdminShipmentLifecycleController::class, 'receiveTransferBatch'])->name('shipments.transfer-batches.receive');
 
-        Route::get('accounts/cod-collections', [AccountsPaymentLifecycleController::class, 'codCollections'])->name('accounts.cod-collections');
+        Route::get('accounts/pod-collections', [AccountsPaymentLifecycleController::class, 'codCollections'])->name('accounts.pod-collections');
         Route::post('accounts/rider-deposits', [AccountsPaymentLifecycleController::class, 'riderDeposit'])->name('accounts.rider-deposits');
         Route::post('accounts/merchant-settlements', [AccountsPaymentLifecycleController::class, 'merchantSettlement'])->name('accounts.merchant-settlements');
         Route::post('accounts/merchant-settlements/{settlement}/mark-paid', [AccountsPaymentLifecycleController::class, 'markSettlementPaid'])->name('accounts.merchant-settlements.mark-paid');

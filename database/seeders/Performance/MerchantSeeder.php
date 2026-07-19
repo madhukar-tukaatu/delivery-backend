@@ -34,7 +34,7 @@ class MerchantSeeder extends Seeder
             $m = DB::table('merchants')->find($id);
             $pickupRows[] = ['merchant_id'=>$id,'branch_id'=>$m->default_branch_id,'sub_branch_id'=>$m->default_sub_branch_id,'name'=>'Default Warehouse','contact_person'=>$m->contact_person,'phone'=>$m->phone,'city'=>DB::table('branches')->where('id',$m->default_branch_id)->value('city'),'area'=>DB::table('branches')->where('id',$m->default_sub_branch_id)->value('area'),'address'=>$m->address,'is_default'=>true,'status'=>'active','created_at'=>now(),'updated_at'=>now()];
             $keyRows[] = ['merchant_id'=>$id,'name'=>'Performance Sandbox Key','api_key'=>'perf_key_'.$id,'api_secret_hash'=>Hash::make('perf_secret_'.$id),'environment'=>'sandbox','permissions'=>json_encode(['shipments:create','shipments:read','rates:calculate']),'status'=>'active','created_at'=>now(),'updated_at'=>now()];
-            $webhookRows[] = ['merchant_id'=>$id,'url'=>'https://webhook.site/perf-'.$id,'secret'=>'secret-'.$id,'events'=>json_encode(['shipment.created','shipment.status_changed','delivery.delivered','cod.collected']),'status'=>'active','created_at'=>now(),'updated_at'=>now()];
+            $webhookRows[] = ['merchant_id'=>$id,'url'=>'https://webhook.site/perf-'.$id,'secret'=>'secret-'.$id,'events'=>json_encode(['shipment.created','shipment.status_changed','delivery.delivered','pod.collected']),'status'=>'active','created_at'=>now(),'updated_at'=>now()];
         }
         foreach (array_chunk($pickupRows, 1000) as $chunk) DB::table('merchant_pickup_locations')->insertOrIgnore($chunk);
         foreach (array_chunk($keyRows, 1000) as $chunk) DB::table('merchant_api_keys')->insertOrIgnore($chunk);

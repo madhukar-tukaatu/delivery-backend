@@ -8,6 +8,6 @@ return [
     ],
     'from' => [
         'address' => env('MAIL_FROM_ADDRESS', 'hello@example.com'),
-        'name' => env('MAIL_FROM_NAME', env('APP_NAME', 'Courier Delivery Gateway')),
+        'name' => env('MAIL_FROM_NAME', env('APP_NAME', 'Tukaatu Express')),
     ],
 ];

@@ -93,6 +93,12 @@ class PermissionSeeder extends Seeder
 
                 'branches.agreements.view' => 'Branch Agreements View',
                 'branches.agreements.manage' => 'Branch Agreements Manage',
+
+                'branches.team.view' => 'Branch Team View',
+
+                'branches.team.manage' => 'Branch Team Manage',
+
+                'branches.team.credentials' => 'Branch Team Credentials',
             ],
 
             'Merchants' => [

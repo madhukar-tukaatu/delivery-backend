@@ -131,7 +131,21 @@ class Branch extends Model
     {
         return $this->hasMany(BranchAgreement::class, 'branch_id');
     }
+    public function users(): HasMany
+    {
+        return $this->hasMany(
+            User::class,
+            'branch_id'
+        );
+    }
 
+    public function teamPositions(): HasMany
+    {
+        return $this->hasMany(
+            BranchTeamPosition::class,
+            'branch_id'
+        );
+    }
     public function manager(): BelongsTo
     {
         return $this->belongsTo(User::class, 'manager_user_id');

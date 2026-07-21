@@ -3,6 +3,7 @@
 namespace Modules\Branch\Http\Controllers;
 
 use App\Http\Controllers\Controller;
+use Modules\Branch\Jobs\SendBranchCreatedNotification;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -11,6 +12,8 @@ use Illuminate\Validation\ValidationException;
 use Modules\Branch\Models\Branch;
 use Modules\Branch\Models\CoverageLocation;
 use Modules\Branch\Services\BranchVisibilityService;
+use Illuminate\Support\Str;
+use Modules\Branch\Services\BranchTeamProvisioner;
 
 class BranchController extends Controller
 {
@@ -131,40 +134,203 @@ class BranchController extends Controller
         return response()->json($query->paginate($perPage));
     }
 
-    public function store(Request $request, BranchVisibilityService $visibility): JsonResponse
-    {
+    // public function store(Request $request, BranchVisibilityService $visibility): JsonResponse
+    // {
+    //     $data = $this->validatedData($request);
+
+    //     $data['type'] = $this->normalizeBranchType($data['type']);
+
+    //     $this->validateHierarchyAccess($request, $visibility, $data);
+
+    //     $this->applyCoverageLocationToBranchPayload($data);
+
+    //     $branch = DB::transaction(function () use ($data) {
+    //         $data['status'] = $data['status'] ?? Branch::STATUS_DRAFT;
+
+    //         $branch = Branch::create($data);
+
+    //         if (!empty($data['coverage_location_id'])) {
+    //             CoverageLocation::where('id', $data['coverage_location_id'])->update([
+    //                 'branch_id' => $branch->id,
+    //             ]);
+    //         }
+
+    //         return $branch;
+    //     });
+
+    //     return response()->json([
+    //         'message' => 'Branch created successfully.',
+    //         'data' => $branch->load([
+    //             'parent',
+    //             'coverageLocation',
+    //             'manager',
+    //             'documents',
+    //             'agreements',
+    //         ]),
+    //     ], 201);
+    // }
+
+    public function store(
+        Request $request,
+        BranchVisibilityService $visibility,
+        BranchTeamProvisioner $teamProvisioner
+    ): JsonResponse {
         $data = $this->validatedData($request);
 
-        $data['type'] = $this->normalizeBranchType($data['type']);
+        $data['type'] = $this->normalizeBranchType(
+            $data['type']
+        );
 
-        $this->validateHierarchyAccess($request, $visibility, $data);
+        $this->validateHierarchyAccess(
+            $request,
+            $visibility,
+            $data
+        );
 
-        $this->applyCoverageLocationToBranchPayload($data);
+        $this->applyCoverageLocationToBranchPayload(
+            $data
+        );
 
-        $branch = DB::transaction(function () use ($data) {
-            $data['status'] = $data['status'] ?? Branch::STATUS_DRAFT;
+        /*
+     * The branch form currently hides name and code,
+     * so generate them safely when they are empty.
+     */
+        $data['name'] = trim(
+            (string) ($data['name'] ?? '')
+        ) ?: $data['legal_name'];
+
+        $data['code'] = trim(
+            (string) ($data['code'] ?? '')
+        ) ?: $this->generateBranchCode(
+            $data['name'],
+            $data['type']
+        );
+
+        $result = DB::transaction(function () use (
+            $data,
+            $teamProvisioner
+        ) {
+            $data['status'] = Branch::STATUS_DRAFT;
+            $data['manager_user_id'] = null;
 
             $branch = Branch::create($data);
 
             if (!empty($data['coverage_location_id'])) {
-                CoverageLocation::where('id', $data['coverage_location_id'])->update([
+                CoverageLocation::where(
+                    'id',
+                    $data['coverage_location_id']
+                )->update([
                     'branch_id' => $branch->id,
                 ]);
             }
 
-            return $branch;
+            /*
+         * Creates the manager and all prepared
+         * position-based login accounts.
+         */
+            $team = $teamProvisioner->provision(
+                $branch,
+                $data
+            );
+
+            $branch->update([
+                'manager_user_id' =>
+                $team['manager']->id,
+            ]);
+
+            /*
+         * This is added to Redis only after the
+         * database transaction commits.
+         */
+            SendBranchCreatedNotification::dispatch(
+                branchId: $branch->id,
+                managerUserId: $team['manager']->id,
+                generatedUserCount: $team['total_accounts']
+            )
+                ->onQueue('emails')
+                ->afterCommit();
+
+            return [
+                'branch' => $branch,
+                'team' => $team,
+            ];
         });
 
         return response()->json([
-            'message' => 'Branch created successfully.',
-            'data' => $branch->load([
-                'parent',
-                'coverageLocation',
-                'manager',
-                'documents',
-                'agreements',
-            ]),
+            'message' =>
+            'Branch and operational team accounts created successfully. The branch owner has been notified.',
+
+            'data' => $result['branch']
+                ->fresh()
+                ->load([
+                    'parent',
+                    'coverageLocation',
+                    'manager',
+                    'documents',
+                    'agreements',
+                ]),
+
+            'team_setup' => [
+                'manager' => [
+                    'id' =>
+                    $result['team']['manager']->id,
+
+                    'name' =>
+                    $result['team']['manager']->name,
+
+                    'username' =>
+                    $result['team']['manager']->username,
+
+                    'email' =>
+                    $result['team']['manager']->email,
+
+                    'role' =>
+                    $result['team']['manager']->role,
+                ],
+
+                'generated_accounts' =>
+                $result['team']['total_accounts'],
+
+                'vacant_positions' =>
+                count(
+                    $result['team']['staff_accounts']
+                ),
+
+                'owner_notification' => 'queued',
+            ],
         ], 201);
+    }
+    private function generateBranchCode(
+        string $name,
+        string $type
+    ): string {
+        $prefix = $this->isHeadBranchType($type)
+            ? 'BR'
+            : 'SUB';
+
+        $slug = Str::of($name)
+            ->upper()
+            ->replaceMatches('/[^A-Z0-9]+/', '-')
+            ->trim('-');
+
+        if ($slug->isEmpty()) {
+            $slug = Str::of('BRANCH');
+        }
+
+        $baseCode = "{$prefix}-{$slug}";
+        $code = (string) $baseCode;
+        $suffix = 1;
+
+        while (
+            Branch::query()
+            ->where('code', $code)
+            ->exists()
+        ) {
+            $code = "{$baseCode}-{$suffix}";
+            $suffix++;
+        }
+
+        return $code;
     }
 
     public function show(Request $request, Branch $branch, BranchVisibilityService $visibility): JsonResponse
@@ -273,18 +439,20 @@ class BranchController extends Controller
 
         $errors = [];
 
-        foreach ([
-            'name',
-            'code',
-            'phone',
-            'address',
-            'latitude',
-            'longitude',
-            'coverage_location_id',
-            'office_address',
-            'office_latitude',
-            'office_longitude',
-        ] as $field) {
+        foreach (
+            [
+                'name',
+                'code',
+                'phone',
+                'address',
+                'latitude',
+                'longitude',
+                'coverage_location_id',
+                'office_address',
+                'office_latitude',
+                'office_longitude',
+            ] as $field
+        ) {
             if (blank($branch->{$field})) {
                 $errors[$field] = ["The {$field} field is required before activation."];
             }
@@ -348,7 +516,7 @@ class BranchController extends Controller
     private function validatedData(Request $request, ?Branch $branch = null): array
     {
         $branchId = $branch?->id;
-
+        $managerUserId = $branch?->manager_user_id;
         return $request->validate([
             'parent_id' => ['nullable', 'integer', 'exists:branches,id'],
             'coverage_location_id' => ['nullable', 'integer', 'exists:coverage_locations,id'],
@@ -461,7 +629,7 @@ class BranchController extends Controller
 
         $allowedParentIds = $parentOptions
             ->pluck('id')
-            ->map(fn ($id) => (int) $id)
+            ->map(fn($id) => (int) $id)
             ->all();
 
         if (!in_array((int) $parentId, $allowedParentIds, true)) {

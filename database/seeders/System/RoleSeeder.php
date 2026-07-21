@@ -116,6 +116,9 @@ class RoleSeeder extends Seeder
                 'branches.documents.manage',
                 'branches.agreements.view',
                 'branches.agreements.manage',
+                'branches.team.view',
+                'branches.team.manage',
+                'branches.team.credentials',
 
                 'merchants.view',
                 'merchants.create',
@@ -247,6 +250,9 @@ class RoleSeeder extends Seeder
                 'dashboard.view',
 
                 'branches.view',
+                'branches.team.view',
+                'branches.team.manage',
+                'branches.team.credentials',
 
                 'customers.view',
                 'customers.create',
@@ -325,6 +331,9 @@ class RoleSeeder extends Seeder
                 'dashboard.view',
 
                 'branches.view',
+                'branches.team.view',
+                'branches.team.manage',
+                'branches.team.credentials',
 
                 'customers.view',
                 'customers.create',

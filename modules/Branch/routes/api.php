@@ -5,6 +5,7 @@ use Modules\Branch\Http\Controllers\AdminCoverageLocationController;
 use Modules\Branch\Http\Controllers\BranchAgreementController;
 use Modules\Branch\Http\Controllers\BranchController;
 use Modules\Branch\Http\Controllers\BranchDocumentController;
+use Modules\Branch\Http\Controllers\BranchTeamController;
 
 Route::prefix('v1/admin')
     ->name('admin.')
@@ -54,4 +55,45 @@ Route::prefix('v1/admin')
             Route::get('branch-agreements/{agreement}/download', [BranchAgreementController::class, 'download'])
                 ->name('branch-agreements.download');
         });
+    });
+
+Route::middleware('auth:sanctum')
+    ->prefix('branches/{branch}/team')
+    ->group(function () {
+        Route::get(
+            '/',
+            [BranchTeamController::class, 'index']
+        );
+
+        Route::post(
+            '/reveal-credentials',
+            [
+                BranchTeamController::class,
+                'revealCredentials',
+            ]
+        );
+
+        Route::put(
+            '/positions/{position}/assign',
+            [
+                BranchTeamController::class,
+                'assign',
+            ]
+        );
+
+        Route::put(
+            '/positions/{position}/unassign',
+            [
+                BranchTeamController::class,
+                'unassign',
+            ]
+        );
+
+        Route::post(
+            '/positions/{position}/reset-credentials',
+            [
+                BranchTeamController::class,
+                'resetCredentials',
+            ]
+        );
     });

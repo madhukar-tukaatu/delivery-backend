@@ -1,12 +1,13 @@
 <?php
 
-namespace Modules\POD\Models;
+namespace Modules\COD\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Modules\Shipment\Models\Shipment;
 
 class CodRecord extends Model
 {
+    protected $table = 'pod_records';
     protected $guarded = [];
 
     protected $casts = [

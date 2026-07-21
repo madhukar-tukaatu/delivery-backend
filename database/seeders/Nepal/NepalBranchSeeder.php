@@ -16,7 +16,7 @@ class NepalBranchSeeder extends Seeder
             ['code' => 'HO'],
             [
                 'name' => 'Kathmandu Main Branch',
-                'type' => 'main_branch',
+                'type' => 'head_office',
                 'phone' => '01-5900000',
                 'email' => 'head@courier.test',
                 'city' => 'Kathmandu',
@@ -60,7 +60,7 @@ class NepalBranchSeeder extends Seeder
                     [
                         'parent_id' => $main->id,
                         'name' => $district->name . ' Branch',
-                        'type' => 'branch',
+                        'type' => 'franchise_branch',
                         'city' => $district->name,
                         'area' => $district->headquarter,
                         'address' => $district->headquarter . ', ' . $district->name,

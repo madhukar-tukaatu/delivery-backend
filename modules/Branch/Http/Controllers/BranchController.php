@@ -354,7 +354,7 @@ class BranchController extends Controller
             'coverage_location_id' => ['nullable', 'integer', 'exists:coverage_locations,id'],
 
             'type' => ['required', Rule::in($this->allowedBranchTypes())],
-            'name' => ['required', 'string', 'max:255'],
+            'name' => ['nullable', 'string', 'max:255'],
             'code' => ['nullable', 'string', 'max:80', Rule::unique('branches', 'code')->ignore($branchId)],
 
             'legal_name' => ['nullable', 'string', 'max:255'],

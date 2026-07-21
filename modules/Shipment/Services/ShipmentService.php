@@ -228,4 +228,43 @@ class ShipmentService
             && !empty($data['delivery_lat'])
             && !empty($data['delivery_lng']);
     }
+
+
+    /**
+     * Persist additional shipment metadata / extras
+     */
+    private function persistShipmentExtras(Shipment $shipment, array $data): void
+    {
+        // You can store extra flexible data here if you have a JSON column or a related model
+        // For now, we'll update some fields that might not have been set during create()
+
+        $shipment->update([
+            'special_instructions' => $data['special_instructions'] ?? $data['remarks'] ?? null,
+            'self_drop' => $data['self_drop'] ?? false,
+        ]);
+
+        // If you have a dedicated ShipmentExtra / metadata table, add it here
+        // Example:
+        // $shipment->extras()->create([...]);
+    }
+
+    /**
+     * Persist shipment items (the most common missing piece)
+     */
+    private function persistShipmentItems(Shipment $shipment, array $data): void
+    {
+        if (empty($data['items']) || !is_array($data['items'])) {
+            return;
+        }
+
+        foreach ($data['items'] as $itemData) {
+            $shipment->items()->create([
+                'name'        => $itemData['name'],
+                'quantity'    => (int) ($itemData['quantity'] ?? 1),
+                'value'       => (float) ($itemData['value'] ?? 0),
+                'description' => $itemData['description'] ?? null,
+                // Add any other fields your ShipmentItem model has
+            ]);
+        }
+    }
 }

@@ -14,11 +14,11 @@ class AuthController extends Controller
     public function login(Request $request)
     {
         $data = $request->validate([
-            'email' => ['required', 'email'],
+            'email' => ['required', 'string'],
             'password' => ['required', 'string'],
         ]);
 
-        $user = User::where('email', $data['email'])->first();
+        $user = User::where('email', $data['email'])->orWhere('phone', $data['email'])->first();
 
         // dd($user);
         if (!$user || !Hash::check($data['password'], $user->password) || !$user->is_active) {

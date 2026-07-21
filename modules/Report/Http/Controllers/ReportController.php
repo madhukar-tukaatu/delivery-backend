@@ -8,7 +8,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Modules\Branch\Models\Branch;
-use Modules\POD\Models\CodRecord;
+use Modules\COD\Models\CodRecord;
 use Modules\Delivery\Models\DeliveryAssignment;
 use Modules\Merchant\Models\Merchant;
 use Modules\Settlement\Models\MerchantSettlement;

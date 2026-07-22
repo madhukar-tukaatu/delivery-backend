@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -8,77 +10,85 @@ return new class extends Migration
 {
     public function up(): void
     {
-        if (Schema::hasTable('parcel_handling_rates')) {
-            return;
-        }
-
         Schema::create(
             'parcel_handling_rates',
             function (Blueprint $table): void {
                 $table->id();
 
-                $table->string('handling_type', 30);
+                $table->string('name', 100);
 
-                $table->string(
-                    'calculation_type',
-                    50
-                );
+                /*
+                 * Examples:
+                 * standard
+                 * fragile
+                 * liquid
+                 * perishable
+                 * oversized
+                 * document
+                 * electronics
+                 */
+                $table->string('parcel_type', 50)
+                    ->unique();
 
-                $table->unsignedBigInteger('service_type_id')
+                $table->text('description')
                     ->nullable();
 
-                $table->unsignedBigInteger('merchant_id')
+                $table->decimal('flat_charge', 12, 2)
+                    ->default(0);
+
+                /*
+                 * Example:
+                 * 1.05 = add 5%
+                 */
+                $table->decimal('price_multiplier', 10, 4)
+                    ->default(1.0000);
+
+                $table->decimal('minimum_charge', 12, 2)
                     ->nullable();
 
-                $table->decimal('fixed_fee', 12, 2)
+                $table->decimal('maximum_charge', 12, 2)
                     ->nullable();
 
-                $table->decimal('percentage', 8, 4)
-                    ->nullable();
+                $table->boolean('requires_special_handling')
+                    ->default(false);
 
-                $table->decimal('minimum_fee', 12, 2)
-                    ->nullable();
-
-                $table->decimal('per_kg_fee', 12, 2)
-                    ->nullable();
+                $table->boolean('requires_manual_approval')
+                    ->default(false);
 
                 $table->boolean('is_active')
                     ->default(true);
 
+                $table->unsignedInteger('sort_order')
+                    ->default(0);
+
+                $table->dateTime('effective_from')
+                    ->nullable();
+
+                $table->dateTime('effective_to')
+                    ->nullable();
+
+                $table->foreignId('created_by')
+                    ->nullable()
+                    ->constrained('users')
+                    ->nullOnDelete();
+
+                $table->foreignId('updated_by')
+                    ->nullable()
+                    ->constrained('users')
+                    ->nullOnDelete();
+
                 $table->timestamps();
 
-                $table->index(
-                    'handling_type',
-                    'phr_type_idx'
-                );
-
-                $table->index(
-                    'service_type_id',
-                    'phr_service_idx'
-                );
-
-                $table->index(
-                    'merchant_id',
-                    'phr_merchant_idx'
-                );
-
-                $table->index(
-                    [
-                        'handling_type',
-                        'service_type_id',
-                        'merchant_id',
-                        'is_active',
-                    ],
-                    'phr_lookup_idx'
-                );
+                $table->index([
+                    'parcel_type',
+                    'is_active',
+                ]);
             }
         );
     }
 
     public function down(): void
     {
-        Schema::dropIfExists(
-            'parcel_handling_rates'
-        );
+        Schema::dropIfExists('parcel_handling_rates');
     }
 };

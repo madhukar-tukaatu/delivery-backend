@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -8,60 +10,71 @@ return new class extends Migration
 {
     public function up(): void
     {
-        if (Schema::hasTable('inter_branch_transfer_counts')) {
-            return;
-        }
-
         Schema::create(
             'inter_branch_transfer_counts',
             function (Blueprint $table): void {
                 $table->id();
 
-                $table->unsignedBigInteger('from_branch_id');
-                $table->unsignedBigInteger('to_branch_id');
+                $table->foreignId('pickup_branch_id')
+                    ->constrained('branches')
+                    ->cascadeOnDelete();
 
+                $table->foreignId('delivery_branch_id')
+                    ->constrained('branches')
+                    ->cascadeOnDelete();
+
+                /*
+                 * Number of branch transfers between pickup and delivery.
+                 *
+                 * Kathmandu -> Pokhara direct = 1
+                 * Kathmandu -> Central Hub -> Biratnagar = 2
+                 */
                 $table->unsignedInteger('transfer_count')
-                    ->default(0);
+                    ->default(1);
 
-                $table->boolean('is_bidirectional')
+                $table->json('transfer_path')
+                    ->nullable();
+
+                $table->decimal('estimated_transfer_hours', 10, 2)
+                    ->nullable();
+
+                $table->boolean('bidirectional')
                     ->default(false);
 
                 $table->boolean('is_active')
                     ->default(true);
 
+                $table->dateTime('effective_from')
+                    ->nullable();
+
+                $table->dateTime('effective_to')
+                    ->nullable();
+
+                $table->text('notes')
+                    ->nullable();
+
+                $table->foreignId('created_by')
+                    ->nullable()
+                    ->constrained('users')
+                    ->nullOnDelete();
+
+                $table->foreignId('updated_by')
+                    ->nullable()
+                    ->constrained('users')
+                    ->nullOnDelete();
+
                 $table->timestamps();
 
-                $table->unique(
-                    [
-                        'from_branch_id',
-                        'to_branch_id',
-                    ],
-                    'ibtc_branch_pair_uq'
-                );
+                $table->unique([
+                    'pickup_branch_id',
+                    'delivery_branch_id',
+                ], 'inter_branch_transfer_unique_route');
 
-                $table->index(
-                    'from_branch_id',
-                    'ibtc_from_idx'
-                );
-
-                $table->index(
-                    'to_branch_id',
-                    'ibtc_to_idx'
-                );
-
-                $table->index(
-                    'transfer_count',
-                    'ibtc_count_idx'
-                );
-
-                $table->index(
-                    [
-                        'from_branch_id',
-                        'to_branch_id',
-                        'is_active',
-                    ],
-                    'ibtc_lookup_idx'
-                );
+                $table->index([
+                    'pickup_branch_id',
+                    'delivery_branch_id',
+                    'is_active',
+                ], 'inter_branch_transfer_lookup_index');
             }
         );
     }

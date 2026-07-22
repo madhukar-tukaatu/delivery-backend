@@ -8,6 +8,8 @@ use Database\Seeders\Demo\DemoUserSeeder;
 use Database\Seeders\Nepal\NepalDistrictSeeder;
 use Database\Seeders\Nepal\NepalProvinceSeeder;
 use Database\Seeders\Performance\PerformanceSeeder;
+use Database\Seeders\Pricing\BranchRouteRateSeeder;
+use Database\Seeders\Pricing\PricingSettingSeeder;
 use Database\Seeders\Production\ProductionAdminUserSeeder;
 use Database\Seeders\Production\ProductionSeeder;
 use Database\Seeders\System\MenuSeeder;
@@ -41,6 +43,11 @@ class DatabaseSeeder extends Seeder
         $this->call([
             NepalProvinceSeeder::class,
             NepalDistrictSeeder::class,
+        ]);
+
+        $this->call([
+            PricingSettingSeeder::class,
+            BranchRouteRateSeeder::class,
         ]);
 
         /*

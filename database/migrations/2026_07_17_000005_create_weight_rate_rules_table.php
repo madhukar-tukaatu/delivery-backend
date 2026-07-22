@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -8,73 +10,91 @@ return new class extends Migration
 {
     public function up(): void
     {
-        if (Schema::hasTable('weight_rate_rules')) {
-            return;
-        }
-
         Schema::create(
             'weight_rate_rules',
             function (Blueprint $table): void {
                 $table->id();
 
-                $table->unsignedBigInteger('service_type_id');
+                /*
+                 * local or transfer.
+                 * NULL means the rule applies to both.
+                 */
+                $table->string('route_type', 30)
+                    ->nullable()
+                    ->index();
 
-                $table->unsignedBigInteger('merchant_id')
+                $table->foreignId('service_type_id')
+                    ->nullable()
+                    ->constrained('service_types')
+                    ->nullOnDelete();
+
+                $table->decimal('minimum_weight_kg', 10, 3)
+                    ->default(0);
+
+                $table->decimal('maximum_weight_kg', 10, 3)
                     ->nullable();
 
-                $table->decimal('base_weight_kg', 10, 3);
+                /*
+                 * Applied for each chargeable unit.
+                 */
+                $table->decimal('rate_per_kg', 12, 2)
+                    ->default(0);
 
-                $table->decimal('base_weight_fee', 12, 2);
+                /*
+                 * Optional fixed charge for this weight band.
+                 */
+                $table->decimal('flat_charge', 12, 2)
+                    ->default(0);
 
-                $table->decimal(
-                    'additional_weight_unit_kg',
-                    10,
-                    3
-                )->default(1);
+                $table->decimal('weight_step_kg', 10, 3)
+                    ->default(1.000);
 
-                $table->decimal(
-                    'additional_weight_fee',
-                    12,
-                    2
-                )->default(0);
+                /*
+                 * exact, ceil, floor, round
+                 */
+                $table->string('rounding_method', 20)
+                    ->default('ceil');
 
-                $table->decimal(
-                    'maximum_weight_kg',
-                    10,
-                    3
-                )->nullable();
+                $table->dateTime('effective_from')
+                    ->nullable();
+
+                $table->dateTime('effective_to')
+                    ->nullable();
 
                 $table->boolean('is_active')
                     ->default(true);
 
+                $table->unsignedInteger('priority')
+                    ->default(0);
+
+                $table->text('notes')
+                    ->nullable();
+
+                $table->foreignId('created_by')
+                    ->nullable()
+                    ->constrained('users')
+                    ->nullOnDelete();
+
+                $table->foreignId('updated_by')
+                    ->nullable()
+                    ->constrained('users')
+                    ->nullOnDelete();
+
                 $table->timestamps();
 
-                $table->index(
+                $table->index([
+                    'route_type',
                     'service_type_id',
-                    'wrr_service_idx'
-                );
-
-                $table->index(
-                    'merchant_id',
-                    'wrr_merchant_idx'
-                );
-
-                $table->index(
-                    [
-                        'service_type_id',
-                        'merchant_id',
-                        'is_active',
-                    ],
-                    'wrr_lookup_idx'
-                );
+                    'minimum_weight_kg',
+                    'maximum_weight_kg',
+                    'is_active',
+                ], 'weight_rate_lookup_index');
             }
         );
     }
 
     public function down(): void
     {
-        Schema::dropIfExists(
-            'weight_rate_rules'
-        );
+        Schema::dropIfExists('weight_rate_rules');
     }
 };

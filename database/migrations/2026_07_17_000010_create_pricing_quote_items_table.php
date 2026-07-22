@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -8,91 +10,92 @@ return new class extends Migration
 {
     public function up(): void
     {
-        if (Schema::hasTable('pricing_quote_items')) {
-            return;
-        }
-
         Schema::create(
             'pricing_quote_items',
             function (Blueprint $table): void {
                 $table->id();
 
-                $table->unsignedBigInteger(
-                    'pricing_quote_id'
-                );
+                $table->foreignId('pricing_quote_id')
+                    ->constrained('pricing_quotes')
+                    ->cascadeOnDelete();
 
-                $table->unsignedBigInteger('store_id')
+                /*
+                 * Examples:
+                 * base_price
+                 * weight_charge
+                 * distance_charge
+                 * transfer_charge
+                 * fragile_charge
+                 * same_day_charge
+                 * pickup_charge
+                 * pod_charge
+                 * tax
+                 * discount
+                 */
+                $table->string('item_type', 50)
+                    ->index();
+
+                $table->string('code', 80)
                     ->nullable();
 
-                $table->unsignedBigInteger('product_id')
+                $table->string('label', 150);
+
+                $table->text('description')
                     ->nullable();
 
-                $table->string('product_name', 255);
+                $table->decimal('quantity', 14, 4)
+                    ->default(1);
 
-                $table->string('sku', 100)
+                $table->decimal('unit_rate', 14, 4)
+                    ->default(0);
+
+                $table->decimal('multiplier', 10, 4)
+                    ->default(1);
+
+                $table->decimal('amount', 14, 2)
+                    ->default(0);
+
+                $table->string('currency', 3)
+                    ->default('NPR');
+
+                /*
+                 * References the rule that generated this item.
+                 *
+                 * Examples:
+                 * branch_pricing_rule
+                 * weight_rate_rule
+                 * parcel_handling_rate
+                 * pod_rate_rule
+                 */
+                $table->string('rule_type', 100)
                     ->nullable();
 
-                $table->unsignedInteger('quantity');
+                $table->unsignedBigInteger('rule_id')
+                    ->nullable();
 
-                $table->decimal(
-                    'unit_weight',
-                    10,
-                    3
-                );
+                $table->json('metadata_json')
+                    ->nullable();
 
-                $table->decimal(
-                    'total_weight',
-                    10,
-                    3
-                );
-
-                $table->decimal(
-                    'unit_price',
-                    14,
-                    2
-                );
-
-                $table->decimal(
-                    'total_price',
-                    14,
-                    2
-                );
-
-                $table->string('parcel_type', 30)
-                    ->default('non_fragile');
+                $table->unsignedInteger('sort_order')
+                    ->default(0);
 
                 $table->timestamps();
 
-                $table->index(
+                $table->index([
                     'pricing_quote_id',
-                    'pqi_quote_idx'
-                );
+                    'item_type',
+                ], 'pricing_quote_item_lookup_index');
 
-                $table->index(
-                    'store_id',
-                    'pqi_store_idx'
-                );
-
-                $table->index(
-                    'product_id',
-                    'pqi_product_idx'
-                );
-
-                $table->index(
-                    [
-                        'pricing_quote_id',
-                        'store_id',
-                    ],
-                    'pqi_quote_store_idx'
-                );
+                $table->index([
+                    'rule_type',
+                    'rule_id',
+                ], 'pricing_quote_item_rule_index');
             }
         );
     }
 
     public function down(): void
     {
-        Schema::dropIfExists(
-            'pricing_quote_items'
-        );
+        Schema::dropIfExists('pricing_quote_items');
     }
 };

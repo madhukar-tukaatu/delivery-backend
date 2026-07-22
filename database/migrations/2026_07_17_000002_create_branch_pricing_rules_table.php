@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -8,53 +10,96 @@ return new class extends Migration
 {
     public function up(): void
     {
-        if (Schema::hasTable('branch_pricing_rules')) {
-            return;
-        }
+        Schema::create(
+            'branch_pricing_rules',
+            function (Blueprint $table): void {
+                $table->id();
 
-        Schema::create('branch_pricing_rules', function (Blueprint $table): void {
-            $table->id();
+                $table->foreignId('pickup_branch_id')
+                    ->constrained('branches')
+                    ->cascadeOnDelete();
 
-            $table->unsignedBigInteger('branch_id');
-            $table->unsignedBigInteger('service_type_id');
-            $table->unsignedBigInteger('merchant_id')->nullable();
+                $table->foreignId('delivery_branch_id')
+                    ->constrained('branches')
+                    ->cascadeOnDelete();
 
-            $table->string('charge_type', 30);
+                $table->foreignId('service_type_id')
+                    ->nullable()
+                    ->constrained('service_types')
+                    ->nullOnDelete();
 
-            $table->decimal('base_radius_km', 10, 3);
-            $table->decimal('base_fee', 12, 2);
+                /*
+                 * local:
+                 * Pickup and delivery handled by the same branch.
+                 *
+                 * transfer:
+                 * Shipment moves between branches.
+                 */
+                $table->string('route_type', 30)
+                    ->default('local')
+                    ->index();
 
-            $table->decimal(
-                'additional_distance_unit_km',
-                10,
-                3
-            )->default(1);
+                $table->decimal('base_price', 12, 2);
 
-            $table->decimal(
-                'additional_distance_fee',
-                12,
-                2
-            )->default(0);
+                $table->decimal('included_weight_kg', 10, 3)
+                    ->default(1.500);
 
-            $table->decimal(
-                'maximum_radius_km',
-                10,
-                3
-            )->nullable();
+                $table->decimal('included_distance_km', 10, 3)
+                    ->default(5.000);
 
-            $table->boolean('is_active')->default(true);
-            $table->timestamps();
+                $table->decimal('extra_weight_rate', 12, 2)
+                    ->nullable();
 
-            $table->index(
-                [
-                    'branch_id',
+                $table->decimal('extra_distance_rate', 12, 2)
+                    ->nullable();
+
+                $table->decimal('minimum_charge', 12, 2)
+                    ->nullable();
+
+                $table->decimal('maximum_charge', 12, 2)
+                    ->nullable();
+
+                $table->boolean('bidirectional')
+                    ->default(false);
+
+                $table->dateTime('effective_from')
+                    ->nullable();
+
+                $table->dateTime('effective_to')
+                    ->nullable();
+
+                $table->boolean('is_active')
+                    ->default(true);
+
+                $table->text('notes')
+                    ->nullable();
+
+                $table->foreignId('created_by')
+                    ->nullable()
+                    ->constrained('users')
+                    ->nullOnDelete();
+
+                $table->foreignId('updated_by')
+                    ->nullable()
+                    ->constrained('users')
+                    ->nullOnDelete();
+
+                $table->timestamps();
+
+                $table->index([
+                    'pickup_branch_id',
+                    'delivery_branch_id',
                     'service_type_id',
-                    'merchant_id',
-                    'charge_type',
-                ],
-                'bpr_lookup_idx'
-            );
-        });
+                    'is_active',
+                ], 'branch_pricing_lookup_index');
+
+                $table->unique([
+                    'pickup_branch_id',
+                    'delivery_branch_id',
+                    'service_type_id',
+                ], 'branch_pricing_unique_route');
+            }
+        );
     }
 
     public function down(): void

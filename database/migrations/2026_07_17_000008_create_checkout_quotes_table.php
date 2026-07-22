@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -8,114 +10,104 @@ return new class extends Migration
 {
     public function up(): void
     {
-        if (Schema::hasTable('checkout_quotes')) {
-            return;
-        }
-
         Schema::create(
             'checkout_quotes',
             function (Blueprint $table): void {
                 $table->id();
 
-                $table->string('quote_number', 100)
+                $table->string('quote_number', 80)
                     ->unique();
 
-                $table->unsignedBigInteger('merchant_id')
+                $table->foreignId('merchant_id')
+                    ->nullable()
+                    ->constrained('merchants')
+                    ->nullOnDelete();
+
+                /*
+                 * Optional external API client reference.
+                 * Kept unsigned instead of constrained so this migration
+                 * does not depend on merchant_api_clients migration order.
+                 */
+                $table->unsignedBigInteger('api_client_id')
+                    ->nullable()
+                    ->index();
+
+                $table->string('idempotency_key', 150)
                     ->nullable();
 
-                $table->string('delivery_address', 500);
+                $table->string('external_cart_id', 150)
+                    ->nullable();
 
-                $table->decimal(
-                    'delivery_latitude',
-                    10,
-                    7
-                );
-
-                $table->decimal(
-                    'delivery_longitude',
-                    10,
-                    7
-                );
-
-                $table->string('service_type', 50);
-
-                $table->unsignedBigInteger(
-                    'service_type_id'
-                );
-
-                $table->string('payment_type', 30);
-
-                $table->decimal(
-                    'products_total',
-                    14,
-                    2
-                )->default(0);
-
-                $table->decimal(
-                    'pod_total',
-                    14,
-                    2
-                )->default(0);
-
-                $table->decimal(
-                    'delivery_total',
-                    14,
-                    2
-                )->default(0);
-
-                $table->decimal(
-                    'grand_total',
-                    14,
-                    2
-                )->default(0);
-
-                $table->string('currency', 10)
-                    ->default('NPR');
+                $table->string('external_order_id', 150)
+                    ->nullable()
+                    ->index();
 
                 $table->unsignedInteger('store_count')
-                    ->default(1);
+                    ->default(0);
 
+                $table->decimal('products_total', 14, 2)
+                    ->default(0);
+
+                $table->decimal('delivery_total', 14, 2)
+                    ->default(0);
+
+                $table->decimal('pod_total', 14, 2)
+                    ->default(0);
+
+                $table->decimal('discount_total', 14, 2)
+                    ->default(0);
+
+                $table->decimal('tax_total', 14, 2)
+                    ->default(0);
+
+                $table->decimal('grand_total', 14, 2)
+                    ->default(0);
+
+                $table->string('currency', 3)
+                    ->default('NPR');
+
+                /*
+                 * pending
+                 * accepted
+                 * expired
+                 * cancelled
+                 * rejected
+                 */
                 $table->string('status', 30)
-                    ->default('pending');
+                    ->default('pending')
+                    ->index();
 
-                $table->timestamp('expires_at');
-
-                $table->timestamp('used_at')
+                $table->json('request_snapshot_json')
                     ->nullable();
 
-                $table->json('snapshot_json')
+                $table->json('pricing_snapshot_json')
+                    ->nullable();
+
+                $table->timestamp('expires_at')
+                    ->nullable()
+                    ->index();
+
+                $table->timestamp('accepted_at')
+                    ->nullable();
+
+                $table->timestamp('confirmed_at')
+                    ->nullable();
+
+                $table->timestamp('cancelled_at')
                     ->nullable();
 
                 $table->timestamps();
 
-                $table->index(
+                $table->unique([
                     'merchant_id',
-                    'cq_merchant_idx'
-                );
+                    'idempotency_key',
+                ], 'checkout_quote_merchant_idempotency_unique');
 
-                $table->index(
-                    'service_type_id',
-                    'cq_service_idx'
-                );
-
-                $table->index(
+                $table->index([
+                    'merchant_id',
                     'status',
-                    'cq_status_idx'
-                );
-
-                $table->index(
                     'expires_at',
-                    'cq_expiry_idx'
-                );
-
-                $table->index(
-                    [
-                        'merchant_id',
-                        'status',
-                        'expires_at',
-                    ],
-                    'cq_lookup_idx'
-                );
+                ], 'checkout_quote_lookup_index');
             }
         );
     }

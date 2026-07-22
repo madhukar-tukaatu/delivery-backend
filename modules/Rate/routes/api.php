@@ -1,7 +1,5 @@
 <?php
 
-declare(strict_types=1);
-
 use Illuminate\Support\Facades\Route;
 use Modules\Rate\Http\Controllers\Api\AdminPricingTestController;
 use Modules\Rate\Http\Controllers\Api\AdminSetupCrudController;
@@ -20,11 +18,17 @@ Route::prefix('v1/admin')
         'route.permission',
     ])
     ->group(function (): void {
+        /*
+         * Pricing simulator.
+         */
         Route::post(
             'pricing/test',
             [AdminPricingTestController::class, 'test']
         )->name('pricing.test');
 
+        /*
+         * Service types.
+         */
         Route::get(
             'service-types',
             [AdminSetupCrudController::class, 'serviceTypes']
@@ -35,6 +39,9 @@ Route::prefix('v1/admin')
             [AdminSetupCrudController::class, 'saveServiceType']
         )->name('service-types.store');
 
+        /*
+         * Branch pricing rules.
+         */
         Route::get(
             'branch-pricing-rules',
             [AdminSetupCrudController::class, 'branchPricing']
@@ -45,6 +52,9 @@ Route::prefix('v1/admin')
             [AdminSetupCrudController::class, 'saveBranchPricing']
         )->name('branch-pricing-rules.store');
 
+        /*
+         * Inter-branch transfer counts.
+         */
         Route::get(
             'inter-branch-transfer-counts',
             [AdminSetupCrudController::class, 'transferCounts']
@@ -55,6 +65,9 @@ Route::prefix('v1/admin')
             [AdminSetupCrudController::class, 'saveTransferCount']
         )->name('inter-branch-transfer-counts.store');
 
+        /*
+         * Transfer count rates.
+         */
         Route::get(
             'transfer-count-rates',
             [AdminSetupCrudController::class, 'transferCountRates']
@@ -65,6 +78,9 @@ Route::prefix('v1/admin')
             [AdminSetupCrudController::class, 'saveTransferCountRate']
         )->name('transfer-count-rates.store');
 
+        /*
+         * Weight pricing rules.
+         */
         Route::get(
             'weight-rate-rules',
             [AdminSetupCrudController::class, 'weightRates']
@@ -75,6 +91,9 @@ Route::prefix('v1/admin')
             [AdminSetupCrudController::class, 'saveWeightRate']
         )->name('weight-rate-rules.store');
 
+        /*
+         * Parcel handling rates.
+         */
         Route::get(
             'parcel-handling-rates',
             [AdminSetupCrudController::class, 'handlingRates']
@@ -85,6 +104,9 @@ Route::prefix('v1/admin')
             [AdminSetupCrudController::class, 'saveHandlingRate']
         )->name('parcel-handling-rates.store');
 
+        /*
+         * POD / COD rate rules.
+         */
         Route::get(
             'pod-rate-rules',
             [AdminSetupCrudController::class, 'codRates']
@@ -110,23 +132,38 @@ Route::prefix('v1/public-merchant')
     ])
     ->group(function (): void {
         /*
-         * One pickup/store only.
+         * Create a quote for one store or pickup location.
          */
         Route::post(
             'pricing/quotes',
             [PublicPricingQuoteController::class, 'storeSingle']
-        )->name('pricing-quotes.single');
+        )->name('pricing-quotes.store');
 
         /*
-         * Multiple stores/pickup locations.
+         * Retrieve one single-store quote.
+         */
+        Route::get(
+            'pricing/quotes/{quoteNumber}',
+            [PublicPricingQuoteController::class, 'showSingleQuote']
+        )
+            ->where('quoteNumber', '[A-Za-z0-9\-]+')
+            ->name('pricing-quotes.show');
+
+        /*
+         * Create a combined quote for multiple stores.
          */
         Route::post(
             'pricing/checkout-quotes',
             [PublicPricingQuoteController::class, 'storeMultiStore']
-        )->name('pricing-quotes.multi-store');
+        )->name('checkout-quotes.store');
 
+        /*
+         * Retrieve a multi-store checkout quote.
+         */
         Route::get(
             'pricing/checkout-quotes/{quoteNumber}',
             [PublicPricingQuoteController::class, 'showCheckoutQuote']
-        )->name('pricing-quotes.show');
+        )
+            ->where('quoteNumber', '[A-Za-z0-9\-]+')
+            ->name('checkout-quotes.show');
     });

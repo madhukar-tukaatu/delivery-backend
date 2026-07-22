@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -8,67 +10,85 @@ return new class extends Migration
 {
     public function up(): void
     {
-        if (Schema::hasTable('pod_rate_rules')) {
-            return;
-        }
-
         Schema::create(
-            'pod_rate_rules',
+            'parcel_handling_rates',
             function (Blueprint $table): void {
                 $table->id();
 
-                $table->unsignedBigInteger('service_type_id')
+                $table->string('name', 100);
+
+                /*
+                 * Examples:
+                 * standard
+                 * fragile
+                 * liquid
+                 * perishable
+                 * oversized
+                 * document
+                 * electronics
+                 */
+                $table->string('parcel_type', 50)
+                    ->unique();
+
+                $table->text('description')
                     ->nullable();
 
-                $table->unsignedBigInteger('merchant_id')
+                $table->decimal('flat_charge', 12, 2)
+                    ->default(0);
+
+                /*
+                 * Example:
+                 * 1.05 = add 5%
+                 */
+                $table->decimal('price_multiplier', 10, 4)
+                    ->default(1.0000);
+
+                $table->decimal('minimum_charge', 12, 2)
                     ->nullable();
 
-                $table->string(
-                    'calculation_type',
-                    50
-                );
-
-                $table->decimal('fixed_fee', 12, 2)
+                $table->decimal('maximum_charge', 12, 2)
                     ->nullable();
 
-                $table->decimal('percentage', 8, 4)
-                    ->nullable();
+                $table->boolean('requires_special_handling')
+                    ->default(false);
 
-                $table->decimal('minimum_fee', 12, 2)
-                    ->nullable();
-
-                $table->decimal('maximum_fee', 12, 2)
-                    ->nullable();
+                $table->boolean('requires_manual_approval')
+                    ->default(false);
 
                 $table->boolean('is_active')
                     ->default(true);
 
+                $table->unsignedInteger('sort_order')
+                    ->default(0);
+
+                $table->dateTime('effective_from')
+                    ->nullable();
+
+                $table->dateTime('effective_to')
+                    ->nullable();
+
+                $table->foreignId('created_by')
+                    ->nullable()
+                    ->constrained('users')
+                    ->nullOnDelete();
+
+                $table->foreignId('updated_by')
+                    ->nullable()
+                    ->constrained('users')
+                    ->nullOnDelete();
+
                 $table->timestamps();
 
-                $table->index(
-                    'service_type_id',
-                    'pod_service_idx'
-                );
-
-                $table->index(
-                    'merchant_id',
-                    'pod_merchant_idx'
-                );
-
-                $table->index(
-                    [
-                        'service_type_id',
-                        'merchant_id',
-                        'is_active',
-                    ],
-                    'pod_lookup_idx'
-                );
+                $table->index([
+                    'parcel_type',
+                    'is_active',
+                ]);
             }
         );
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('pod_rate_rules');
+        Schema::dropIfExists('parcel_handling_rates');
     }
 };

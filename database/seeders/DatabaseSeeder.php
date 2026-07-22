@@ -10,6 +10,7 @@ use Database\Seeders\Nepal\NepalProvinceSeeder;
 use Database\Seeders\Performance\PerformanceSeeder;
 use Database\Seeders\Pricing\BranchRouteRateSeeder;
 use Database\Seeders\Pricing\PricingSettingSeeder;
+use Database\Seeders\Pricing\ServiceTypeSeeder;
 use Database\Seeders\Production\ProductionAdminUserSeeder;
 use Database\Seeders\Production\ProductionSeeder;
 use Database\Seeders\System\MenuSeeder;
@@ -46,8 +47,9 @@ class DatabaseSeeder extends Seeder
         ]);
 
         $this->call([
-            PricingSettingSeeder::class,
+            // PricingSettingSeeder::class,
             BranchRouteRateSeeder::class,
+            ServiceTypeSeeder::class,
         ]);
 
         /*

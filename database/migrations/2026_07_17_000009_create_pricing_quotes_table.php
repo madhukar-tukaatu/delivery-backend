@@ -31,10 +31,9 @@ return new class extends Migration
                 /*
                  * Store table may be named stores in your current system.
                  */
-                $table->foreignId('store_id')
+                $table->unsignedBigInteger('store_id')
                     ->nullable()
-                    ->constrained('stores')
-                    ->nullOnDelete();
+                    ->index('pricing_quotes_store_idx');
 
                 $table->unsignedBigInteger('api_client_id')
                     ->nullable()

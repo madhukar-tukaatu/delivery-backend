@@ -11,60 +11,81 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create(
-            'parcel_handling_rates',
+            'pod_rate_rules',
             function (Blueprint $table): void {
                 $table->id();
 
                 $table->string('name', 100);
 
                 /*
-                 * Examples:
-                 * standard
-                 * fragile
-                 * liquid
-                 * perishable
-                 * oversized
-                 * document
-                 * electronics
+                 * Supported examples:
+                 * prepaid
+                 * pod
+                 * cod
+                 * partial
                  */
-                $table->string('parcel_type', 50)
-                    ->unique();
+                $table->string('payment_type', 30)
+                    ->default('pod')
+                    ->index('prr_payment_type_idx');
 
-                $table->text('description')
-                    ->nullable();
+                $table->decimal(
+                    'minimum_amount',
+                    14,
+                    2
+                )->default(0);
 
-                $table->decimal('flat_charge', 12, 2)
-                    ->default(0);
+                $table->decimal(
+                    'maximum_amount',
+                    14,
+                    2
+                )->nullable();
+
+                $table->decimal(
+                    'flat_charge',
+                    12,
+                    2
+                )->default(0);
 
                 /*
                  * Example:
-                 * 1.05 = add 5%
+                 * 1.00 = 1%
+                 * 1.50 = 1.5%
                  */
-                $table->decimal('price_multiplier', 10, 4)
-                    ->default(1.0000);
+                $table->decimal(
+                    'percentage_rate',
+                    8,
+                    4
+                )->default(0);
 
-                $table->decimal('minimum_charge', 12, 2)
-                    ->nullable();
+                $table->decimal(
+                    'minimum_charge',
+                    12,
+                    2
+                )->nullable();
 
-                $table->decimal('maximum_charge', 12, 2)
-                    ->nullable();
+                $table->decimal(
+                    'maximum_charge',
+                    12,
+                    2
+                )->nullable();
 
-                $table->boolean('requires_special_handling')
-                    ->default(false);
-
-                $table->boolean('requires_manual_approval')
-                    ->default(false);
+                $table->unsignedInteger(
+                    'settlement_days'
+                )->default(0);
 
                 $table->boolean('is_active')
                     ->default(true);
-
-                $table->unsignedInteger('sort_order')
-                    ->default(0);
 
                 $table->dateTime('effective_from')
                     ->nullable();
 
                 $table->dateTime('effective_to')
+                    ->nullable();
+
+                $table->unsignedInteger('priority')
+                    ->default(0);
+
+                $table->text('notes')
                     ->nullable();
 
                 $table->foreignId('created_by')
@@ -79,16 +100,21 @@ return new class extends Migration
 
                 $table->timestamps();
 
-                $table->index([
-                    'parcel_type',
-                    'is_active',
-                ]);
+                $table->index(
+                    [
+                        'payment_type',
+                        'minimum_amount',
+                        'maximum_amount',
+                        'is_active',
+                    ],
+                    'prr_lookup_idx'
+                );
             }
         );
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('parcel_handling_rates');
+        Schema::dropIfExists('pod_rate_rules');
     }
 };

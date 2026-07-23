@@ -46,7 +46,7 @@ jobs:
             cd /var/www/delivery/delivery-deployment
 
             echo "Building backend containers..."
-            docker compose --env-file .env.production build backend-app backend-nginx backend-queue backend-scheduler backend-reverb
+            docker compose --env-file .env.production build --no-cache backend-app backend-nginx backend-queue backend-scheduler backend-reverb
 
             echo "Starting backend containers..."
             docker compose --env-file .env.production up -d backend-app backend-nginx backend-queue backend-scheduler backend-reverb

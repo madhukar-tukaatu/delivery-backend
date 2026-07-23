@@ -1,108 +1,104 @@
 <?php
 
-namespace Database\Seeders;
+namespace Database\Seeders\Pricing;
 
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\ValidationException;
+use RuntimeException;
 
 class KathmanduBranchRouteRateSeeder extends Seeder
 {
     public function run(): void
     {
         $routes = [
-            'Kathmandu Branch' => 79,
-            'Itahari Branch' => 149,
-            'Birtamode Branch' => 149,
-            'Damak Branch' => 169,
-            'Pokhara Branch' => 149,
-            'Bhairahawa Branch' => 149,
-            'Biratnagar Branch' => 149,
-            'Birgunj Branch' => 149,
-            'Chitwan-Bharatpur Branch' => 149,
-            'Banepa Branch' => 149,
-            'Dharan Branch' => 169,
-            'Janakpur Branch' => 149,
-            'Nepalgunj Branch' => 149,
-            'Mahendranagar Branch' => 149,
-            'Birendranagar Branch' => 149,
-            'Dhangadhi Branch' => 149,
-            'Lahan Branch' => 169,
-            'Hetauda Branch' => 149,
-            'Inaruwa Branch' => 169,
-            'Bardibas Branch' => 169,
-            'Butwol Branch' => 169,
-            'Dhankuta Branch' => 189,
-            'Ilam Branch' => 169,
-            'Baglung Branch' => 169,
+
+            ['code' => 'NP-KTM-MAIN', 'rate' => 79],
+
+            ['code' => 'NP-BR-IT',  'rate' => 149],
+            ['code' => 'NP-BR-BTM', 'rate' => 149],
+            ['code' => 'NP-BR-DMK', 'rate' => 169],
+            ['code' => 'PKR-MAIN-ZONE', 'rate' => 149],
+            ['code' => 'NP-BR-BHW', 'rate' => 149],
+            ['code' => 'BRT-MAIN-ZONE', 'rate' => 149],
+            ['code' => 'NP-BR-BRG', 'rate' => 149],
+            ['code' => 'NP-BR-C', 'rate' => 149],
+            ['code' => 'NP-BR-BNP', 'rate' => 149],
+            ['code' => 'NP-BR-DHR', 'rate' => 169],
+            ['code' => 'NP-BR-JNK', 'rate' => 149],
+            ['code' => 'NP-BR-NPJ', 'rate' => 149],
+            ['code' => 'NP-BR-K', 'rate' => 149],
+            ['code' => 'NP-BR-S', 'rate' => 149],
+            ['code' => 'NP-BR-DHG', 'rate' => 149],
+            ['code' => 'NP-BR-LHN', 'rate' => 169],
+            ['code' => 'NP-BR-HTD', 'rate' => 149],
+            ['code' => 'NP-BR-INR', 'rate' => 169],
+            ['code' => 'NP-BR-BDB', 'rate' => 169],
+            ['code' => 'NP-BR-BTL', 'rate' => 169],
+            ['code' => 'NP-BR-DKT', 'rate' => 189],
+            ['code' => 'NP-BR-I', 'rate' => 169],
+            ['code' => 'NP-BR-BGL', 'rate' => 169],
+
         ];
 
         $kathmandu = DB::table('branches')
-            ->where('name', 'Kathmandu Branch')
+            ->where('code', 'NP-KTM-MAIN')
             ->first();
 
         if (!$kathmandu) {
-            throw ValidationException::withMessages([
-                'branches' => [
-                    'Kathmandu Branch was not found.',
-                ],
-            ]);
+            throw new RuntimeException('Kathmandu Main Branch not found.');
         }
 
-        foreach ($routes as $destinationName => $rate) {
+        foreach ($routes as $route) {
+
             $destination = DB::table('branches')
-                ->where('name', $destinationName)
+                ->where('code', $route['code'])
                 ->first();
 
             if (!$destination) {
-                $this->command?->warn(
-                    "Skipped missing branch: {$destinationName}"
+
+                $this->command->warn(
+                    "Branch {$route['code']} not found."
                 );
 
                 continue;
             }
 
-            DB::table('branch_route_rates')
-                ->updateOrInsert(
-                    [
-                        'pickup_branch_id' =>
-                            $kathmandu->id,
+            DB::table('branch_route_rates')->updateOrInsert(
 
-                        'delivery_branch_id' =>
-                            $destination->id,
+                [
+                    'pickup_branch_id'   => $kathmandu->id,
+                    'delivery_branch_id' => $destination->id,
+                ],
+
+                [
+                    'base_rate'  => $route['rate'],
+                    'is_active'  => true,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]
+            );
+
+            if ($destination->id != $kathmandu->id) {
+
+                DB::table('branch_route_rates')->updateOrInsert(
+
+                    [
+                        'pickup_branch_id'   => $destination->id,
+                        'delivery_branch_id' => $kathmandu->id,
                     ],
-                    [
-                        'base_rate' => $rate,
-                        'is_active' => true,
 
+                    [
+                        'base_rate'  => $route['rate'],
+                        'is_active'  => true,
                         'created_at' => now(),
                         'updated_at' => now(),
                     ]
                 );
+            }
 
-            /*
-             * Add reverse route as well.
-             *
-             * Remove this block if reverse route prices
-             * are managed separately.
-             */
-            DB::table('branch_route_rates')
-                ->updateOrInsert(
-                    [
-                        'pickup_branch_id' =>
-                            $destination->id,
-
-                        'delivery_branch_id' =>
-                            $kathmandu->id,
-                    ],
-                    [
-                        'base_rate' => $rate,
-                        'is_active' => true,
-
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ]
-                );
+            $this->command->info(
+                "{$kathmandu->code} ↔ {$destination->code} = Rs. {$route['rate']}"
+            );
         }
     }
 }

@@ -70,6 +70,18 @@ final class PricingEngineService
          * Step 1:
          * Find the official route base rate.
          */
+
+        // dd([
+        //     'pickup_branch_id' => $pickupBranchId,
+        //     'pickup_branch_name' => $pickupBranch->name ?? null,
+        //     'pickup_distance_km' =>
+        //     $pickupBranch->resolved_distance_km ?? null,
+
+        //     'delivery_branch_id' => $deliveryBranchId,
+        //     'delivery_branch_name' => $deliveryBranch->name ?? null,
+        //     'delivery_distance_km' =>
+        //     $deliveryBranch->resolved_distance_km ?? null,
+        // ]);
         $routeRate = $this->routeBaseRate(
             $pickupBranchId,
             $deliveryBranchId

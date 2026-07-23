@@ -5,14 +5,13 @@ namespace Database\Seeders;
 use Database\Seeders\Demo\DemoMerchantSeeder;
 use Database\Seeders\Demo\DemoShipmentSeeder;
 use Database\Seeders\Demo\DemoUserSeeder;
-use Database\Seeders\KathmanduBranchRouteRateSeeder as SeedersKathmanduBranchRouteRateSeeder;
+use Database\Seeders\Pricing\KathmanduBranchRouteRateSeeder;
 use Database\Seeders\Nepal\NepalDistrictSeeder;
 use Database\Seeders\Nepal\NepalProvinceSeeder;
 use Database\Seeders\Performance\PerformanceSeeder;
-use Database\Seeders\Pricing\KathmanduBranchRouteRateSeeder;
+// use Database\Seeders\Pricing\KathmanduBranchRouteRateSeeder;
 use Database\Seeders\Pricing\PricingSettingsSeeder;
 use Database\Seeders\Pricing\ServiceTypeSeeder;
-use Database\Seeders\PricingSettingsSeeder as SeedersPricingSettingsSeeder;
 use Database\Seeders\Production\ProductionAdminUserSeeder;
 use Database\Seeders\Production\ProductionSeeder;
 use Database\Seeders\System\MenuSeeder;
@@ -65,8 +64,8 @@ class DatabaseSeeder extends Seeder
         */
         $this->call([
             ServiceTypeSeeder::class,
-            SeedersPricingSettingsSeeder::class,
-            SeedersKathmanduBranchRouteRateSeeder::class,
+            PricingSettingsSeeder::class,
+            KathmanduBranchRouteRateSeeder::class,
             PricingEngineDemoSeeder::class,
         ]);
 

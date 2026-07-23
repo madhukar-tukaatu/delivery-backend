@@ -132,6 +132,15 @@ Route::prefix('v1/public-merchant')
     ])
     ->group(function (): void {
         /*
+         * Calculate delivery charge only.
+         * Does not save a quote or create a shipment.
+         */
+        Route::post(
+            'pricing/check',
+            [PublicPricingQuoteController::class, 'checkPrice']
+        )->name('pricing.check');
+
+        /*
          * Create a quote for one store or pickup location.
          */
         Route::post(

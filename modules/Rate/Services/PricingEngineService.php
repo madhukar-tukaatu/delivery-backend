@@ -3,6 +3,7 @@
 namespace Modules\Rate\Services;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 final class PricingEngineService
@@ -10,16 +11,11 @@ final class PricingEngineService
     public function __construct(
         private readonly MainBranchResolverService $branchResolver,
         private readonly InterBranchTransferRateService $transferService
-    ) {
-    }
+    ) {}
 
-    public function calculate(
-        array $data,
-        ?int $merchantId = null
-    ): array {
-        $serviceType = $this->serviceType(
-            (string) $data['service_type']
-        );
+    public function calculate(array $data, ?int $merchantId = null): array
+    {
+        $serviceType = $this->serviceType((string) $data['service_type']);
 
         $pickupBranch = $this->branchResolver->resolve(
             (float) $data['pickup_latitude'],
@@ -31,22 +27,15 @@ final class PricingEngineService
             (float) $data['delivery_longitude']
         );
 
-        $pickup = $this->localFee(
-            branchId: (int) $pickupBranch->id,
-            serviceTypeId: (int) $serviceType->id,
-            merchantId: $merchantId,
-            chargeType: 'pickup',
-            distanceKm:
-                (float) $pickupBranch->resolved_distance_km
+        $rule = $this->routeRule(
+            (int) $pickupBranch->id,
+            (int) $deliveryBranch->id,
+            (int) $serviceType->id
         );
 
-        $delivery = $this->localFee(
-            branchId: (int) $deliveryBranch->id,
-            serviceTypeId: (int) $serviceType->id,
-            merchantId: $merchantId,
-            chargeType: 'delivery',
-            distanceKm:
-                (float) $deliveryBranch->resolved_distance_km
+        $weight = $this->weightFee(
+            (int) $serviceType->id,
+            (float) $data['parcel_weight']
         );
 
         $transfer = $this->transferService->calculate(
@@ -56,26 +45,21 @@ final class PricingEngineService
             $merchantId
         );
 
-        $weight = $this->weightFee(
-            (int) $serviceType->id,
-            $merchantId,
-            (float) $data['parcel_weight']
-        );
+        $basePrice     = $rule ? (float) $rule->base_price : 80.0;
+        $includedWeight = $rule ? (float) $rule->included_weight_kg : 1.5;
+        $extraWeightRate = $rule ? (float) ($rule->extra_weight_rate ?? 25) : 25.0;
+        $minimumCharge = $rule ? (float) ($rule->minimum_charge ?? $basePrice) : $basePrice;
 
-        $baseSubtotal =
-            $pickup['total'] +
-            $transfer['rate'] +
-            $delivery['total'] +
-            $weight['total'];
+        $chargeableWeight = (float) $data['parcel_weight'];
+        $extraWeight      = max(0, $chargeableWeight - $includedWeight);
+        $extraWeightFee   = round($extraWeight * $extraWeightRate, 2);
 
         $handling = $this->handlingFee(
-            (string) (
-                $data['parcel_type'] ?? 'non_fragile'
-            ),
+            (string) ($data['parcel_type'] ?? 'non_fragile'),
             (int) $serviceType->id,
             $merchantId,
-            $baseSubtotal,
-            (float) $data['parcel_weight']
+            $basePrice,
+            $chargeableWeight
         );
 
         $pod = $this->codFee(
@@ -85,76 +69,80 @@ final class PricingEngineService
             $merchantId
         );
 
-        $finalPrice = round(
-            $baseSubtotal +
-            $handling['total'] +
-            $pod['total'],
-            2
+        $finalPrice = max(
+            $minimumCharge,
+            round($basePrice + $extraWeightFee + $transfer['rate'] + $handling['total'] + $pod['total'], 2)
         );
 
-        $estimatedHours =
-            max(
-                1,
-                (int) (
-                    $serviceType->estimated_hours
-                    ?? 24
-                )
-            ) +
-            ((int) $transfer['transfer_count'] * 4);
+        $estimatedHours = max(1, (int) ($serviceType->estimated_hours ?? 24))
+            + ((int) $transfer['transfer_count'] * 4);
 
         return [
-            'currency' => 'NPR',
-
+            'currency'     => 'NPR',
             'service_type' => [
-                'id' => (int) $serviceType->id,
+                'id'   => (int) $serviceType->id,
                 'code' => (string) $serviceType->code,
                 'name' => (string) $serviceType->name,
             ],
-
             'pickup_branch' => [
-                'id' => (int) $pickupBranch->id,
-                'name' => (string) (
-                    $pickupBranch->name
-                    ?? "Branch {$pickupBranch->id}"
-                ),
-                'distance_km' =>
-                    (float) $pickupBranch
-                        ->resolved_distance_km,
+                'id'          => (int) $pickupBranch->id,
+                'name'        => (string) ($pickupBranch->name ?? "Branch {$pickupBranch->id}"),
+                'distance_km' => (float) $pickupBranch->resolved_distance_km,
             ],
-
             'delivery_branch' => [
-                'id' => (int) $deliveryBranch->id,
-                'name' => (string) (
-                    $deliveryBranch->name
-                    ?? "Branch {$deliveryBranch->id}"
-                ),
-                'distance_km' =>
-                    (float) $deliveryBranch
-                        ->resolved_distance_km,
+                'id'          => (int) $deliveryBranch->id,
+                'name'        => (string) ($deliveryBranch->name ?? "Branch {$deliveryBranch->id}"),
+                'distance_km' => (float) $deliveryBranch->resolved_distance_km,
             ],
-
             'estimated_hours' => $estimatedHours,
-            'sla_due_at' => now()->addHours(
-                $estimatedHours
-            ),
-            'valid_until' => now()->addMinutes(30),
-
+            'sla_due_at'      => now()->addHours($estimatedHours),
+            'valid_until'     => now()->addMinutes(30),
             'breakdown' => [
-                'pickup' => $pickup,
-                'branch_transfer' => $transfer,
-                'delivery' => $delivery,
-                'weight' => $weight,
-                'handling' => $handling,
-                'pod' => $pod,
-                'base_subtotal' => round(
-                    $baseSubtotal,
-                    2
-                ),
-                'final_price' => $finalPrice,
+                'base_price'       => $basePrice,
+                'included_weight'  => $includedWeight,
+                'extra_weight_kg'  => round($extraWeight, 3),
+                'extra_weight_fee' => $extraWeightFee,
+                'branch_transfer'  => $transfer,
+                'weight'           => $weight,
+                'handling'         => $handling,
+                'pod'              => $pod,
+                'final_price'      => $finalPrice,
             ],
-
             'final_price' => $finalPrice,
         ];
+    }
+
+    private function routeRule(int $pickupBranchId, int $deliveryBranchId, int $serviceTypeId): ?object
+    {
+        // exact route match
+        $rule = DB::table('branch_pricing_rules')
+            ->where('pickup_branch_id', $pickupBranchId)
+            ->where('delivery_branch_id', $deliveryBranchId)
+            ->where('service_type_id', $serviceTypeId)
+            ->where('is_active', true)
+            ->orderByDesc('id')
+            ->first();
+
+        if ($rule) return $rule;
+
+        // bidirectional fallback
+        $rule = DB::table('branch_pricing_rules')
+            ->where('pickup_branch_id', $deliveryBranchId)
+            ->where('delivery_branch_id', $pickupBranchId)
+            ->where('service_type_id', $serviceTypeId)
+            ->where('bidirectional', true)
+            ->where('is_active', true)
+            ->orderByDesc('id')
+            ->first();
+
+        if ($rule) return $rule;
+
+        // any active rule for this service type as default
+        return DB::table('branch_pricing_rules')
+            ->where('service_type_id', $serviceTypeId)
+            ->where('is_active', true)
+            ->orderByDesc('id')
+            ->first();
     }
 
     private function serviceType(
@@ -194,7 +182,7 @@ final class PricingEngineService
             throw ValidationException::withMessages([
                 "{$chargeType}_address" => [
                     ucfirst($chargeType) .
-                    ' pricing is not configured.',
+                        ' pricing is not configured.',
                 ],
             ]);
         }
@@ -207,7 +195,7 @@ final class PricingEngineService
             throw ValidationException::withMessages([
                 "{$chargeType}_address" => [
                     ucfirst($chargeType) .
-                    ' location is outside the service radius.',
+                        ' location is outside the service radius.',
                 ],
             ]);
         }
@@ -271,29 +259,73 @@ final class PricingEngineService
         ];
     }
 
+    // private function branchRule(
+    //     int $branchId,
+    //     int $serviceTypeId,
+    //     ?int $merchantId,
+    //     string $chargeType
+    // ): ?object {
+    //     if ($merchantId !== null) {
+    //         $merchantRule = DB::table(
+    //             'branch_pricing_rules'
+    //         )
+    //             ->where('branch_id', $branchId)
+    //             ->where(
+    //                 'service_type_id',
+    //                 $serviceTypeId
+    //             )
+    //             ->where(
+    //                 'merchant_id',
+    //                 $merchantId
+    //             )
+    //             ->where(
+    //                 'charge_type',
+    //                 $chargeType
+    //             )
+    //             ->where('is_active', true)
+    //             ->orderByDesc('id')
+    //             ->first();
+
+    //         if ($merchantRule) {
+    //             return $merchantRule;
+    //         }
+    //     }
+
+    //     return DB::table('branch_pricing_rules')
+    //         ->where('branch_id', $branchId)
+    //         ->where(
+    //             'service_type_id',
+    //             $serviceTypeId
+    //         )
+    //         ->whereNull('merchant_id')
+    //         ->where('charge_type', $chargeType)
+    //         ->where('is_active', true)
+    //         ->orderByDesc('id')
+    //         ->first();
+    // }
+
     private function branchRule(
         int $branchId,
         int $serviceTypeId,
         ?int $merchantId,
         string $chargeType
     ): ?object {
+        $branchColumn = match ($chargeType) {
+            'pickup' => 'pickup_branch_id',
+            'delivery' => 'delivery_branch_id',
+            default => throw ValidationException::withMessages([
+                'pricing' => [
+                    "Invalid charge type: {$chargeType}.",
+                ],
+            ]),
+        };
+
         if ($merchantId !== null) {
-            $merchantRule = DB::table(
-                'branch_pricing_rules'
-            )
-                ->where('branch_id', $branchId)
-                ->where(
-                    'service_type_id',
-                    $serviceTypeId
-                )
-                ->where(
-                    'merchant_id',
-                    $merchantId
-                )
-                ->where(
-                    'charge_type',
-                    $chargeType
-                )
+            $merchantRule = DB::table('branch_pricing_rules')
+                ->where($branchColumn, $branchId)
+                ->where('service_type_id', $serviceTypeId)
+                ->where('merchant_id', $merchantId)
+                ->where('charge_type', $chargeType)
                 ->where('is_active', true)
                 ->orderByDesc('id')
                 ->first();
@@ -304,11 +336,8 @@ final class PricingEngineService
         }
 
         return DB::table('branch_pricing_rules')
-            ->where('branch_id', $branchId)
-            ->where(
-                'service_type_id',
-                $serviceTypeId
-            )
+            ->where($branchColumn, $branchId)
+            ->where('service_type_id', $serviceTypeId)
             ->whereNull('merchant_id')
             ->where('charge_type', $chargeType)
             ->where('is_active', true)
@@ -318,15 +347,21 @@ final class PricingEngineService
 
     private function weightFee(
         int $serviceTypeId,
-        ?int $merchantId,
         float $weightKg
     ): array {
-        $rule = $this->priorityRule(
-            'weight_rate_rules',
-            [],
-            $serviceTypeId,
-            $merchantId
-        );
+        $rule = DB::table('weight_rate_rules')
+            ->where('service_type_id', $serviceTypeId)
+            ->where('is_active', true)
+            ->orderByDesc('id')
+            ->first();
+
+        if (!$rule) {
+            $rule = DB::table('weight_rate_rules')
+                ->whereNull('service_type_id')
+                ->where('is_active', true)
+                ->orderByDesc('id')
+                ->first();
+        }
 
         if (!$rule) {
             throw ValidationException::withMessages([
@@ -338,8 +373,7 @@ final class PricingEngineService
 
         if (
             $rule->maximum_weight_kg !== null &&
-            $weightKg >
-            (float) $rule->maximum_weight_kg
+            $weightKg > (float) $rule->maximum_weight_kg
         ) {
             throw ValidationException::withMessages([
                 'parcel_weight' => [
@@ -348,11 +382,8 @@ final class PricingEngineService
             ]);
         }
 
-        $baseWeight =
-            (float) $rule->base_weight_kg;
-
-        $baseFee =
-            (float) $rule->base_weight_fee;
+        $baseWeight = (float) $rule->base_weight_kg;
+        $baseFee = (float) $rule->base_weight_fee;
 
         $additionalWeight = max(
             0,
@@ -361,42 +392,30 @@ final class PricingEngineService
 
         $unit = max(
             0.001,
-            (float) $rule
-                ->additional_weight_unit_kg
+            (float) $rule->additional_weight_unit_kg
         );
 
         $units = $additionalWeight > 0
-            ? (int) ceil(
-                $additionalWeight / $unit
-            )
+            ? (int) ceil($additionalWeight / $unit)
             : 0;
 
         $additionalFee =
             $units *
-            (float) $rule
-                ->additional_weight_fee;
+            (float) $rule->additional_weight_fee;
 
         return [
             'rule_id' => (int) $rule->id,
-            'parcel_weight_kg' => round(
-                $weightKg,
-                3
-            ),
+            'parcel_weight_kg' => round($weightKg, 3),
             'base_weight_kg' => $baseWeight,
-            'base_weight_fee' => round(
-                $baseFee,
-                2
-            ),
+            'base_weight_fee' => round($baseFee, 2),
             'additional_weight_kg' => round(
                 $additionalWeight,
                 3
             ),
-            'additional_weight_unit_kg' =>
-                $unit,
+            'additional_weight_unit_kg' => $unit,
             'additional_units' => $units,
             'additional_unit_fee' => round(
-                (float) $rule
-                    ->additional_weight_fee,
+                (float) $rule->additional_weight_fee,
                 2
             ),
             'additional_fee' => round(
@@ -420,9 +439,9 @@ final class PricingEngineService
         if ($handlingType === 'non_fragile') {
             return [
                 'handling_type' =>
-                    'non_fragile',
+                'non_fragile',
                 'calculation_type' =>
-                    'none',
+                'none',
                 'total' => 0.0,
             ];
         }
@@ -431,7 +450,7 @@ final class PricingEngineService
             'parcel_handling_rates',
             [
                 'handling_type' =>
-                    $handlingType,
+                $handlingType,
             ],
             $serviceTypeId,
             $merchantId
@@ -450,10 +469,10 @@ final class PricingEngineService
 
         $fee = match ($type) {
             'fixed' =>
-                (float) ($rule->fixed_fee ?? 0),
+            (float) ($rule->fixed_fee ?? 0),
 
             'percentage' =>
-                $subtotal *
+            $subtotal *
                 (
                     (float) (
                         $rule->percentage ?? 0
@@ -461,30 +480,30 @@ final class PricingEngineService
                 ),
 
             'per_kg' =>
-                $weightKg *
+            $weightKg *
                 (float) (
                     $rule->per_kg_fee ?? 0
                 ),
 
             'percentage_with_minimum' =>
-                max(
-                    (float) (
-                        $rule->minimum_fee ?? 0
-                    ),
-                    $subtotal *
+            max(
+                (float) (
+                    $rule->minimum_fee ?? 0
+                ),
+                $subtotal *
                     (
                         (float) (
                             $rule->percentage ?? 0
                         ) / 100
                     )
-                ),
+            ),
 
             default =>
-                throw ValidationException::withMessages([
-                    'parcel_type' => [
-                        'Invalid fragile pricing type.',
-                    ],
-                ]),
+            throw ValidationException::withMessages([
+                'parcel_type' => [
+                    'Invalid fragile pricing type.',
+                ],
+            ]),
         };
 
         return [
@@ -538,10 +557,10 @@ final class PricingEngineService
 
         $fee = match ($type) {
             'fixed' =>
-                (float) ($rule->fixed_fee ?? 0),
+            (float) ($rule->fixed_fee ?? 0),
 
             'percentage' =>
-                $codAmount *
+            $codAmount *
                 (
                     (float) (
                         $rule->percentage ?? 0
@@ -549,17 +568,17 @@ final class PricingEngineService
                 ),
 
             'percentage_with_minimum' =>
-                max(
-                    (float) (
-                        $rule->minimum_fee ?? 0
-                    ),
-                    $codAmount *
+            max(
+                (float) (
+                    $rule->minimum_fee ?? 0
+                ),
+                $codAmount *
                     (
                         (float) (
                             $rule->percentage ?? 0
                         ) / 100
                     )
-                ),
+            ),
 
             default => 0.0,
         };
@@ -589,52 +608,99 @@ final class PricingEngineService
         int $serviceTypeId,
         ?int $merchantId
     ): ?object {
+        $hasMerchantColumn = Schema::hasColumn(
+            $table,
+            'merchant_id'
+        );
+
+        $hasServiceTypeColumn = Schema::hasColumn(
+            $table,
+            'service_type_id'
+        );
+
         $priorities = [];
 
-        if ($merchantId !== null) {
-            $priorities[] = [
-                'merchant_id' => $merchantId,
-                'service_type_id' =>
-                    $serviceTypeId,
-            ];
+        /*
+     * Merchant-specific priorities are only added when
+     * the table actually has a merchant_id column.
+     */
+        if ($hasMerchantColumn && $merchantId !== null) {
+            if ($hasServiceTypeColumn) {
+                $priorities[] = [
+                    'merchant_id' => $merchantId,
+                    'service_type_id' => $serviceTypeId,
+                ];
 
-            $priorities[] = [
-                'merchant_id' => $merchantId,
-                'service_type_id' => null,
-            ];
+                $priorities[] = [
+                    'merchant_id' => $merchantId,
+                    'service_type_id' => null,
+                ];
+            } else {
+                $priorities[] = [
+                    'merchant_id' => $merchantId,
+                ];
+            }
         }
 
-        $priorities[] = [
-            'merchant_id' => null,
-            'service_type_id' =>
-                $serviceTypeId,
-        ];
+        /*
+     * Global rules.
+     */
+        if ($hasServiceTypeColumn) {
+            $priorities[] = [
+                'merchant_id' => null,
+                'service_type_id' => $serviceTypeId,
+            ];
 
-        $priorities[] = [
-            'merchant_id' => null,
-            'service_type_id' => null,
-        ];
+            $priorities[] = [
+                'merchant_id' => null,
+                'service_type_id' => null,
+            ];
+        } else {
+            $priorities[] = [
+                'merchant_id' => null,
+            ];
+        }
 
         foreach ($priorities as $priority) {
             $query = DB::table($table)
                 ->where($required)
                 ->where('is_active', true);
 
-            $priority['merchant_id'] === null
-                ? $query->whereNull('merchant_id')
-                : $query->where(
-                    'merchant_id',
-                    $priority['merchant_id']
-                );
+            if ($hasMerchantColumn) {
+                if (
+                    array_key_exists(
+                        'merchant_id',
+                        $priority
+                    ) &&
+                    $priority['merchant_id'] !== null
+                ) {
+                    $query->where(
+                        'merchant_id',
+                        $priority['merchant_id']
+                    );
+                } else {
+                    $query->whereNull('merchant_id');
+                }
+            }
 
-            $priority['service_type_id'] === null
-                ? $query->whereNull(
-                    'service_type_id'
-                )
-                : $query->where(
-                    'service_type_id',
-                    $priority['service_type_id']
-                );
+            if ($hasServiceTypeColumn) {
+                if (
+                    array_key_exists(
+                        'service_type_id',
+                        $priority
+                    ) &&
+                    $priority['service_type_id'] !== null
+                ) {
+                    $query->where(
+                        'service_type_id',
+                        $priority['service_type_id']
+                    );
+                } else {
+                    $query->whereNull(
+                        'service_type_id'
+                    );
+                }
+            }
 
             $result = $query
                 ->orderByDesc('id')
@@ -647,4 +713,70 @@ final class PricingEngineService
 
         return null;
     }
+
+
+    // private function priorityRule(
+    //     string $table,
+    //     array $required,
+    //     int $serviceTypeId,
+    //     ?int $merchantId
+    // ): ?object {
+    //     $priorities = [];
+
+    //     if ($merchantId !== null) {
+    //         $priorities[] = [
+    //             'merchant_id' => $merchantId,
+    //             'service_type_id' =>
+    //             $serviceTypeId,
+    //         ];
+
+    //         $priorities[] = [
+    //             'merchant_id' => $merchantId,
+    //             'service_type_id' => null,
+    //         ];
+    //     }
+
+    //     $priorities[] = [
+    //         'merchant_id' => null,
+    //         'service_type_id' =>
+    //         $serviceTypeId,
+    //     ];
+
+    //     $priorities[] = [
+    //         'merchant_id' => null,
+    //         'service_type_id' => null,
+    //     ];
+
+    //     foreach ($priorities as $priority) {
+    //         $query = DB::table($table)
+    //             ->where($required)
+    //             ->where('is_active', true);
+
+    //         $priority['merchant_id'] === null
+    //             ? $query->whereNull('merchant_id')
+    //             : $query->where(
+    //                 'merchant_id',
+    //                 $priority['merchant_id']
+    //             );
+
+    //         $priority['service_type_id'] === null
+    //             ? $query->whereNull(
+    //                 'service_type_id'
+    //             )
+    //             : $query->where(
+    //                 'service_type_id',
+    //                 $priority['service_type_id']
+    //             );
+
+    //         $result = $query
+    //             ->orderByDesc('id')
+    //             ->first();
+
+    //         if ($result) {
+    //             return $result;
+    //         }
+    //     }
+
+    //     return null;
+    // }
 }

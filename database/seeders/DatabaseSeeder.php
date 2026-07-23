@@ -5,12 +5,14 @@ namespace Database\Seeders;
 use Database\Seeders\Demo\DemoMerchantSeeder;
 use Database\Seeders\Demo\DemoShipmentSeeder;
 use Database\Seeders\Demo\DemoUserSeeder;
+use Database\Seeders\KathmanduBranchRouteRateSeeder as SeedersKathmanduBranchRouteRateSeeder;
 use Database\Seeders\Nepal\NepalDistrictSeeder;
 use Database\Seeders\Nepal\NepalProvinceSeeder;
 use Database\Seeders\Performance\PerformanceSeeder;
-use Database\Seeders\Pricing\BranchRouteRateSeeder;
-use Database\Seeders\Pricing\PricingSettingSeeder;
+use Database\Seeders\Pricing\KathmanduBranchRouteRateSeeder;
+use Database\Seeders\Pricing\PricingSettingsSeeder;
 use Database\Seeders\Pricing\ServiceTypeSeeder;
+use Database\Seeders\PricingSettingsSeeder as SeedersPricingSettingsSeeder;
 use Database\Seeders\Production\ProductionAdminUserSeeder;
 use Database\Seeders\Production\ProductionSeeder;
 use Database\Seeders\System\MenuSeeder;
@@ -37,31 +39,42 @@ class DatabaseSeeder extends Seeder
 
         /*
         |--------------------------------------------------------------------------
-        | Nepal base geography
+        | Nepal geography
         |--------------------------------------------------------------------------
-        | Provinces and districts should come before branch/sub-branch setup.
         */
         $this->call([
             NepalProvinceSeeder::class,
             NepalDistrictSeeder::class,
         ]);
 
+        /*
+        |--------------------------------------------------------------------------
+        | Production branches and operational structure
+        |--------------------------------------------------------------------------
+        | Branches must exist before branch route rates are inserted.
+        */
         $this->call([
-            // PricingSettingSeeder::class,
-            BranchRouteRateSeeder::class,
-            ServiceTypeSeeder::class,
+            ProductionSeeder::class,
         ]);
 
         /*
         |--------------------------------------------------------------------------
-        | Production operational data
+        | Pricing configuration
         |--------------------------------------------------------------------------
-        | This replaces old NepalBranchSeeder and NepalSubBranchSeeder for production.
-        | It creates production branches, active/inactive verification status,
-        | service types, pricing rules and transfer lanes.
+        | Service types and pricing settings must exist before route pricing.
         */
         $this->call([
-            ProductionSeeder::class,
+            ServiceTypeSeeder::class,
+            SeedersPricingSettingsSeeder::class,
+            SeedersKathmanduBranchRouteRateSeeder::class,
+        ]);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Production admin user
+        |--------------------------------------------------------------------------
+        */
+        $this->call([
             ProductionAdminUserSeeder::class,
         ]);
 
@@ -69,9 +82,6 @@ class DatabaseSeeder extends Seeder
         |--------------------------------------------------------------------------
         | Optional demo data
         |--------------------------------------------------------------------------
-        | Keep this OFF in real production.
-        | Enable only for demo/staging:
-        | SEED_DEMO=true
         */
         if ((bool) env('SEED_DEMO', false)) {
             $this->call([
@@ -85,9 +95,6 @@ class DatabaseSeeder extends Seeder
         |--------------------------------------------------------------------------
         | Optional performance data
         |--------------------------------------------------------------------------
-        | Keep this OFF in real production unless you intentionally want load-test data.
-        | Enable only when needed:
-        | SEED_PERFORMANCE=true
         */
         if ((bool) env('SEED_PERFORMANCE', false)) {
             $this->call([

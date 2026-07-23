@@ -29,86 +29,58 @@ final class PublicPricingQuoteController extends Controller
         PricingEngineService $pricingEngine
     ): JsonResponse {
         $validated = $request->validated();
-        $merchantId = $this->resolveMerchantId($request);
 
         try {
-            /*
-         * Convert one or multiple products into one parcel total.
-         */
-            if (
-                isset($validated['products']) &&
-                is_array($validated['products']) &&
-                count($validated['products']) > 0
-            ) {
-                $products = collect($validated['products']);
-
-                $validated['parcel_weight'] = round(
-                    $products->sum(
-                        fn(array $product): float =>
-                        (float) $product['unit_weight']
-                            * (int) $product['quantity']
-                    ),
-                    3
-                );
-
-                $validated['parcel_value'] = round(
-                    $products->sum(
-                        fn(array $product): float =>
-                        (float) $product['unit_price']
-                            * (int) $product['quantity']
-                    ),
-                    2
-                );
-
-                $validated['parcel_type'] =
-                    $products->contains(
-                        fn(array $product): bool => ($product['parcel_type'] ?? 'normal')
-                            === 'fragile'
-                    )
-                    ? 'fragile'
-                    : 'normal';
-
-                $validated['product_count'] =
-                    (int) $products->sum('quantity');
-            } else {
-                $validated['product_count'] = 1;
-            }
-
-            /*
-         * Calculate only.
-         *
-         * No pricing_quotes insert.
-         * No shipment insert.
-         * No pickup insert.
-         */
-            $quote = $pricingEngine->calculate(
-                $validated,
-                $merchantId
+            $merchantId = $request->attributes->get(
+                'merchant_id'
             );
 
-            $this->validateCalculatedQuote($quote);
+            $quote = $pricingEngine->calculate(
+                $validated,
+                $merchantId !== null
+                    ? (int) $merchantId
+                    : null
+            );
 
             return response()->json([
                 'success' => true,
-                'message' => 'Delivery charge calculated successfully.',
+
+                'message' =>
+                'Delivery charge calculated successfully.',
 
                 'data' => [
                     'store_id' =>
                     isset($validated['store_id'])
-                        ? (int) $validated['store_id']
+                        ? (int)
+                        $validated['store_id']
                         : null,
 
-                    'product_count' =>
-                    (int) $validated['product_count'],
+                    'products' =>
+                    $validated['products'] ?? [],
+
+                    'product_count' => collect(
+                        $validated['products'] ?? []
+                    )->sum(
+                        fn(array $product) =>
+                        (int) (
+                            $product['quantity']
+                            ?? 0
+                        )
+                    ),
 
                     'packet_count' =>
-                    (int) ($validated['packet_count'] ?? 1),
+                    (int)
+                    $validated['packet_count'],
 
                     'parcel_weight' =>
-                    (float) $validated['parcel_weight'],
+                    (float)
+                    $validated['parcel_weight'],
 
                     'parcel_value' =>
-                    (float) ($validated['parcel_value'] ?? 0),
+                    (float) (
+                        $validated['parcel_value']
+                        ?? 0
+                    ),
 
                     'parcel_type' =>
                     $validated['parcel_type'],
@@ -116,43 +88,42 @@ final class PublicPricingQuoteController extends Controller
                     'payment_type' =>
                     $validated['payment_type'],
 
-                    'pod_amount' =>
-                    (float) ($validated['pod_amount'] ?? 0),
-
                     'pickup_branch' =>
                     $quote['pickup_branch'],
 
                     'delivery_branch' =>
                     $quote['delivery_branch'],
 
+                    'route' =>
+                    $quote['route'],
+
                     'service_type' =>
                     $quote['service_type'],
 
                     'breakdown' =>
-                    $quote['breakdown'] ?? [],
+                    $quote['breakdown'],
 
                     'delivery_charge' =>
-                    (float) $quote['final_price'],
+                    (float)
+                    $quote['final_price'],
 
                     'currency' =>
-                    $quote['currency'] ?? 'NPR',
+                    $quote['currency'],
+
+                    'vat' =>
+                    $quote['vat'],
 
                     'estimated_hours' =>
-                    isset($quote['estimated_hours'])
-                        ? (int) $quote['estimated_hours']
-                        : null,
+                    $quote['estimated_hours'],
 
                     'sla_due_at' =>
-                    $this->toIso8601(
-                        $quote['sla_due_at'] ?? null
-                    ),
+                    $quote['sla_due_at']
+                        ->toIso8601String(),
 
                     'valid_until' =>
-                    $this->toIso8601(
-                        $quote['valid_until'] ?? null
-                    ),
+                    $quote['valid_until']
+                        ->toIso8601String(),
 
-                    'is_estimate' => true,
                     'quote_stored' => false,
                     'shipment_created' => false,
                 ],
@@ -162,11 +133,17 @@ final class PublicPricingQuoteController extends Controller
         } catch (Throwable $exception) {
             report($exception);
 
-            return $this->errorResponse(
-                message: 'Unable to calculate the delivery charge.',
-                exception: $exception,
-                status: 422
-            );
+            return response()->json([
+                'success' => false,
+
+                'message' => app()->isLocal()
+                    ? $exception->getMessage()
+                    : 'Unable to calculate the delivery charge.',
+
+                'error_code' => app()->isLocal()
+                    ? class_basename($exception)
+                    : null,
+            ], 422);
         }
     }
 

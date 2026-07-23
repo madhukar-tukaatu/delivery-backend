@@ -19,7 +19,7 @@ class MerchantApiKeyGuard
         }
 
         $hash = hash('sha256', $apiKey);
-        dd($hash);
+        // dd($hash);
 
         $merchantKey = MerchantApiKey::query()
             ->where('api_key_hash', $hash)

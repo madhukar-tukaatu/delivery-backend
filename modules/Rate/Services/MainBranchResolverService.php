@@ -103,28 +103,53 @@ final class MainBranchResolverService
         );
     }
 
-    private function applyMainBranchFilter(
-        Builder $query
-    ): void {
-        if (Schema::hasColumn('branches', 'is_active')) {
+    // private function applyMainBranchFilter(
+    //     Builder $query
+    // ): void {
+    //     if (Schema::hasColumn('branches', 'status')) {
+    //         $query->where('status', true);
+    //     }
+
+    //     if (Schema::hasColumn('branches', 'is_main')) {
+    //         $query->where('is_main', true);
+
+    //         return;
+    //     }
+
+    //     if (Schema::hasColumn('branches', 'branch_type')) {
+    //         $query->where('branch_type', 'main');
+
+    //         return;
+    //     }
+
+    //     if (Schema::hasColumn('branches', 'type')) {
+    //         $query->where('type', 'main');
+
+    //         return;
+    //     }
+
+    //     if (Schema::hasColumn('branches', 'parent_id')) {
+    //         $query->whereNull('parent_id');
+    //     }
+    // }
+
+    private function applyMainBranchFilter(Builder $query): void
+    {
+        // use status column, not is_active boolean
+        if (Schema::hasColumn('branches', 'status')) {
+            $query->where('status', 'active');
+        } elseif (Schema::hasColumn('branches', 'is_active')) {
             $query->where('is_active', true);
         }
 
-        if (Schema::hasColumn('branches', 'is_main')) {
-            $query->where('is_main', true);
-
-            return;
-        }
-
-        if (Schema::hasColumn('branches', 'branch_type')) {
-            $query->where('branch_type', 'main');
-
-            return;
-        }
-
+        // match the actual types used in this system
         if (Schema::hasColumn('branches', 'type')) {
-            $query->where('type', 'main');
-
+            $query->whereIn('type', [
+                'head_branch',
+                'franchise_branch',
+                'main_branch',
+                'branch',
+            ]);
             return;
         }
 

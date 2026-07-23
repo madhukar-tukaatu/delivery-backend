@@ -342,58 +342,36 @@ class MerchantOnboardingService
 
     private function ensureSingleApiKey(Merchant $merchant): MerchantApiKey
     {
-        $existingKey = MerchantApiKey::query()
-            ->where('merchant_id', $merchant->id)
-            ->first();
+        $existingKey = MerchantApiKey::where('merchant_id', $merchant->id)->first();
 
         if ($existingKey) {
-            $update = [
-                'status' => 'active',
-                'environment' => $existingKey->environment ?: 'live',
-            ];
-
-            if (Schema::hasColumn('merchant_api_keys', 'is_active')) {
-                $update['is_active'] = true;
-            }
-
-            $existingKey->forceFill($update)->save();
+            $existingKey->forceFill([
+                'status'       => 'active',
+                'is_active'    => true,
+                'environment'  => $existingKey->environment ?: 'live',
+                // backfill hash if it was never set
+                'api_key_hash' => $existingKey->api_key_hash
+                    ?: hash('sha256', $existingKey->api_key),
+            ])->save();
 
             return $existingKey->fresh();
         }
 
-        $plainApiKey = 'tk_live_' . Str::random(40);
+        $plainApiKey    = 'tk_live_' . Str::random(40);
         $plainApiSecret = 'ts_live_' . Str::random(60);
 
-        $payload = [
-            'merchant_id' => $merchant->id,
-            'name' => 'Default Live API Key',
-            'api_key' => $plainApiKey,
-            'api_secret_hash' => Hash::make($plainApiSecret),
-            'environment' => 'live',
-            'permissions' => [
-                'pricing.quote',
-                'shipments.create',
-                'shipments.track',
-            ],
-            'status' => 'active',
-        ];
-
-        if (Schema::hasColumn('merchant_api_keys', 'api_key_hash')) {
-            $payload['api_key_hash'] = hash('sha256', $plainApiKey);
-        }
-
-        if (Schema::hasColumn('merchant_api_keys', 'api_secret_encrypted')) {
-            $payload['api_secret_encrypted'] = Crypt::encryptString($plainApiSecret);
-        }
-
-        if (Schema::hasColumn('merchant_api_keys', 'is_active')) {
-            $payload['is_active'] = true;
-        }
-
-        if (Schema::hasColumn('merchant_api_keys', 'expires_at')) {
-            $payload['expires_at'] = null;
-        }
-
-        return MerchantApiKey::create($payload);
+        return MerchantApiKey::create([
+            'merchant_id'         => $merchant->id,
+            'name'                => 'Default Live API Key',
+            'api_key'             => $plainApiKey,
+            'api_key_hash'        => hash('sha256', $plainApiKey),
+            'api_secret_hash'     => Hash::make($plainApiSecret),
+            'api_secret_encrypted' => Crypt::encryptString($plainApiSecret),
+            'environment'         => 'live',
+            'permissions'         => ['pricing.quote', 'shipments.create', 'shipments.track'],
+            'status'              => 'active',
+            'is_active'           => true,
+            'expires_at'          => null,
+        ]);
     }
 }

@@ -67,6 +67,7 @@ class DatabaseSeeder extends Seeder
             ServiceTypeSeeder::class,
             SeedersPricingSettingsSeeder::class,
             SeedersKathmanduBranchRouteRateSeeder::class,
+            PricingEngineDemoSeeder::class,
         ]);
 
         /*

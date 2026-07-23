@@ -2,21 +2,36 @@
 
 namespace Modules\Rate\Services;
 
+use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 
 final class PricingEngineService
 {
     public function __construct(
-        private readonly MainBranchResolverService $branchResolver,
-        private readonly InterBranchTransferRateService $transferService
+        private readonly MainBranchResolverService $branchResolver
     ) {}
 
-    public function calculate(array $data, ?int $merchantId = null): array
-    {
-        $serviceType = $this->serviceType((string) $data['service_type']);
+    public function calculate(
+        array $data,
+        ?int $merchantId = null
+    ): array {
+        /*
+         * Merchant ID is currently not used because the official
+         * pricing rules are global, not merchant-specific.
+         */
+        unset($merchantId);
 
+        $settings = $this->activeSettings();
+
+        $serviceType = $this->serviceType(
+            (string) $data['service_type']
+        );
+
+        /*
+         * Resolve the main branches responsible for pickup
+         * and delivery coordinates.
+         */
         $pickupBranch = $this->branchResolver->resolve(
             (float) $data['pickup_latitude'],
             (float) $data['pickup_longitude']
@@ -27,129 +42,320 @@ final class PricingEngineService
             (float) $data['delivery_longitude']
         );
 
-        $rule = $this->routeRule(
-            (int) $pickupBranch->id,
-            (int) $deliveryBranch->id,
-            (int) $serviceType->id
+        $pickupBranchId = (int) $pickupBranch->id;
+        $deliveryBranchId = (int) $deliveryBranch->id;
+
+        $isSameBranch =
+            $pickupBranchId === $deliveryBranchId;
+
+        /*
+         * The resolver should return the distance between the
+         * resolved delivery branch and the delivery coordinate.
+         */
+        $pickupDistanceKm = max(
+            0,
+            (float) (
+                $pickupBranch->resolved_distance_km ?? 0
+            )
         );
 
-        $weight = $this->weightFee(
-            (int) $serviceType->id,
-            (float) $data['parcel_weight']
+        $deliveryDistanceKm = max(
+            0,
+            (float) (
+                $deliveryBranch->resolved_distance_km ?? 0
+            )
         );
 
-        $transfer = $this->transferService->calculate(
-            (int) $pickupBranch->id,
-            (int) $deliveryBranch->id,
-            (int) $serviceType->id,
-            $merchantId
+        /*
+         * Step 1:
+         * Find the official route base rate.
+         */
+        $routeRate = $this->routeBaseRate(
+            $pickupBranchId,
+            $deliveryBranchId
         );
 
-        $basePrice     = $rule ? (float) $rule->base_price : 80.0;
-        $includedWeight = $rule ? (float) $rule->included_weight_kg : 1.5;
-        $extraWeightRate = $rule ? (float) ($rule->extra_weight_rate ?? 25) : 25.0;
-        $minimumCharge = $rule ? (float) ($rule->minimum_charge ?? $basePrice) : $basePrice;
+        $baseRate = (float) $routeRate->base_rate;
 
-        $chargeableWeight = (float) $data['parcel_weight'];
-        $extraWeight      = max(0, $chargeableWeight - $includedWeight);
-        $extraWeightFee   = round($extraWeight * $extraWeightRate, 2);
+        /*
+         * Step 2:
+         * Calculate excess weight above 1.5 KG.
+         *
+         * Same branch: Rs. 20 per KG
+         * Other branch: Rs. 30 per KG
+         */
+        $weight = $this->weightCharge(
+            parcelWeightKg: (float) $data['parcel_weight'],
 
-        $handling = $this->handlingFee(
-            (string) ($data['parcel_type'] ?? 'non_fragile'),
-            (int) $serviceType->id,
-            $merchantId,
-            $basePrice,
-            $chargeableWeight
+            isSameBranch: $isSameBranch,
+
+            settings: $settings
         );
 
-        $pod = $this->codFee(
-            (string) $data['payment_type'],
-            (float) ($data['pod_amount'] ?? 0),
-            (int) $serviceType->id,
-            $merchantId
+        $subtotalBeforeFragile =
+            $baseRate +
+            $weight['total'];
+
+        /*
+         * Step 3:
+         * Apply fragile multiplier to:
+         *
+         * Base rate + excess weight charge
+         */
+        $fragile = $this->fragileCharge(
+            parcelType: (string) (
+                $data['parcel_type']
+                ?? 'non_fragile'
+            ),
+
+            calculationBase: $subtotalBeforeFragile,
+
+            settings: $settings
         );
 
-        $finalPrice = max(
-            $minimumCharge,
-            round($basePrice + $extraWeightFee + $transfer['rate'] + $handling['total'] + $pod['total'], 2)
+        $subtotalAfterFragile =
+            $subtotalBeforeFragile +
+            $fragile['total'];
+
+        /*
+         * Step 4:
+         * First 5 KM from destination branch is included.
+         * Charge Rs. 6 per extra KM.
+         */
+        $distance = $this->extraDeliveryDistanceCharge(
+            deliveryDistanceKm: $deliveryDistanceKm,
+
+            settings: $settings
         );
 
-        $estimatedHours = max(1, (int) ($serviceType->estimated_hours ?? 24))
-            + ((int) $transfer['transfer_count'] * 4);
+        $subtotalBeforeSameDay =
+            $subtotalAfterFragile +
+            $distance['total'];
+
+        /*
+         * Step 5:
+         * Apply same-day multiplier only when service_type
+         * is same_day.
+         */
+        $sameDay = $this->sameDayCharge(
+            serviceCode: (string) $serviceType->code,
+
+            calculationBase: $subtotalBeforeSameDay,
+
+            isSameBranch: $isSameBranch,
+
+            settings: $settings
+        );
+
+        $subtotalAfterSameDay =
+            $subtotalBeforeSameDay +
+            $sameDay['total'];
+
+        /*
+         * Step 6:
+         * Charge Rs. 50 when pickup contains fewer than
+         * 3 packets.
+         */
+        $minimumPacketCharge =
+            $this->minimumPacketCharge(
+                packetCount: (int) (
+                    $data['packet_count']
+                    ?? 1
+                ),
+
+                settings: $settings
+            );
+
+        $finalPrice = round(
+            $subtotalAfterSameDay +
+                $minimumPacketCharge['total'],
+            2
+        );
+
+        $estimatedHours = max(
+            1,
+            (int) (
+                $serviceType->estimated_hours
+                ?? 24
+            )
+        );
 
         return [
-            'currency'     => 'NPR',
+            'currency' => 'NPR',
+
+            'vat' => [
+                'inclusive' =>
+                (bool) $settings->vat_inclusive,
+
+                'percentage' =>
+                (float) $settings->vat_percentage,
+
+                /*
+                 * The official rates already include VAT.
+                 */
+                'additional_vat_added' => false,
+            ],
+
             'service_type' => [
-                'id'   => (int) $serviceType->id,
-                'code' => (string) $serviceType->code,
-                'name' => (string) $serviceType->name,
+                'id' =>
+                (int) $serviceType->id,
+
+                'code' =>
+                (string) $serviceType->code,
+
+                'name' =>
+                (string) $serviceType->name,
             ],
+
             'pickup_branch' => [
-                'id'          => (int) $pickupBranch->id,
-                'name'        => (string) ($pickupBranch->name ?? "Branch {$pickupBranch->id}"),
-                'distance_km' => (float) $pickupBranch->resolved_distance_km,
+                'id' => $pickupBranchId,
+
+                'name' => (string) (
+                    $pickupBranch->name
+                    ?? "Branch {$pickupBranchId}"
+                ),
+
+                'distance_km' => round(
+                    $pickupDistanceKm,
+                    3
+                ),
             ],
+
             'delivery_branch' => [
-                'id'          => (int) $deliveryBranch->id,
-                'name'        => (string) ($deliveryBranch->name ?? "Branch {$deliveryBranch->id}"),
-                'distance_km' => (float) $deliveryBranch->resolved_distance_km,
+                'id' => $deliveryBranchId,
+
+                'name' => (string) (
+                    $deliveryBranch->name
+                    ?? "Branch {$deliveryBranchId}"
+                ),
+
+                'distance_km' => round(
+                    $deliveryDistanceKm,
+                    3
+                ),
             ],
-            'estimated_hours' => $estimatedHours,
-            'sla_due_at'      => now()->addHours($estimatedHours),
-            'valid_until'     => now()->addMinutes(30),
+
+            'route' => [
+                'route_rate_id' =>
+                (int) $routeRate->id,
+
+                'pickup_branch_id' =>
+                $pickupBranchId,
+
+                'delivery_branch_id' =>
+                $deliveryBranchId,
+
+                'same_branch' =>
+                $isSameBranch,
+
+                'base_rate' =>
+                round($baseRate, 2),
+            ],
+
+            'estimated_hours' =>
+            $estimatedHours,
+
+            'sla_due_at' =>
+            now()->addHours(
+                $estimatedHours
+            ),
+
+            'valid_until' =>
+            now()->addMinutes(30),
+
             'breakdown' => [
-                'base_price'       => $basePrice,
-                'included_weight'  => $includedWeight,
-                'extra_weight_kg'  => round($extraWeight, 3),
-                'extra_weight_fee' => $extraWeightFee,
-                'branch_transfer'  => $transfer,
-                'weight'           => $weight,
-                'handling'         => $handling,
-                'pod'              => $pod,
-                'final_price'      => $finalPrice,
+                'route_base_rate' => [
+                    'rule_id' =>
+                    (int) $routeRate->id,
+
+                    'amount' =>
+                    round($baseRate, 2),
+
+                    'total' =>
+                    round($baseRate, 2),
+                ],
+
+                'weight' =>
+                $weight,
+
+                'subtotal_before_fragile' =>
+                round(
+                    $subtotalBeforeFragile,
+                    2
+                ),
+
+                'fragile' =>
+                $fragile,
+
+                'subtotal_after_fragile' =>
+                round(
+                    $subtotalAfterFragile,
+                    2
+                ),
+
+                'extra_delivery_distance' =>
+                $distance,
+
+                'subtotal_before_same_day' =>
+                round(
+                    $subtotalBeforeSameDay,
+                    2
+                ),
+
+                'same_day' =>
+                $sameDay,
+
+                'subtotal_after_same_day' =>
+                round(
+                    $subtotalAfterSameDay,
+                    2
+                ),
+
+                'minimum_packet_charge' =>
+                $minimumPacketCharge,
+
+                'final_price' =>
+                $finalPrice,
             ],
-            'final_price' => $finalPrice,
+
+            'final_price' =>
+            $finalPrice,
         ];
     }
 
-    private function routeRule(int $pickupBranchId, int $deliveryBranchId, int $serviceTypeId): ?object
+    /**
+     * Retrieve the active global pricing configuration.
+     */
+    private function activeSettings(): object
     {
-        // exact route match
-        $rule = DB::table('branch_pricing_rules')
-            ->where('pickup_branch_id', $pickupBranchId)
-            ->where('delivery_branch_id', $deliveryBranchId)
-            ->where('service_type_id', $serviceTypeId)
+        $settings = DB::table('pricing_settings')
             ->where('is_active', true)
             ->orderByDesc('id')
             ->first();
 
-        if ($rule) return $rule;
+        if (!$settings) {
+            throw ValidationException::withMessages([
+                'pricing' => [
+                    'Pricing settings are not configured.',
+                ],
+            ]);
+        }
 
-        // bidirectional fallback
-        $rule = DB::table('branch_pricing_rules')
-            ->where('pickup_branch_id', $deliveryBranchId)
-            ->where('delivery_branch_id', $pickupBranchId)
-            ->where('service_type_id', $serviceTypeId)
-            ->where('bidirectional', true)
-            ->where('is_active', true)
-            ->orderByDesc('id')
-            ->first();
-
-        if ($rule) return $rule;
-
-        // any active rule for this service type as default
-        return DB::table('branch_pricing_rules')
-            ->where('service_type_id', $serviceTypeId)
-            ->where('is_active', true)
-            ->orderByDesc('id')
-            ->first();
+        return $settings;
     }
 
+    /**
+     * Resolve the requested service type.
+     */
     private function serviceType(
         string $code
     ): object {
+        $normalizedCode = strtolower(
+            trim($code)
+        );
+
         $service = DB::table('service_types')
-            ->where('code', strtolower($code))
+            ->where('code', $normalizedCode)
             ->where('is_active', true)
             ->first();
 
@@ -164,619 +370,428 @@ final class PricingEngineService
         return $service;
     }
 
-    private function localFee(
-        int $branchId,
-        int $serviceTypeId,
-        ?int $merchantId,
-        string $chargeType,
-        float $distanceKm
-    ): array {
-        $rule = $this->branchRule(
-            $branchId,
-            $serviceTypeId,
-            $merchantId,
-            $chargeType
-        );
-
-        if (!$rule) {
-            throw ValidationException::withMessages([
-                "{$chargeType}_address" => [
-                    ucfirst($chargeType) .
-                        ' pricing is not configured.',
-                ],
-            ]);
-        }
-
-        if (
-            $rule->maximum_radius_km !== null &&
-            $distanceKm >
-            (float) $rule->maximum_radius_km
-        ) {
-            throw ValidationException::withMessages([
-                "{$chargeType}_address" => [
-                    ucfirst($chargeType) .
-                        ' location is outside the service radius.',
-                ],
-            ]);
-        }
-
-        $baseRadius =
-            (float) $rule->base_radius_km;
-
-        $baseFee =
-            (float) $rule->base_fee;
-
-        $additionalDistance = max(
-            0,
-            $distanceKm - $baseRadius
-        );
-
-        $unit = max(
-            0.001,
-            (float) $rule
-                ->additional_distance_unit_km
-        );
-
-        $units = $additionalDistance > 0
-            ? (int) ceil(
-                $additionalDistance / $unit
+    /**
+     * Retrieve the official base rate for the resolved
+     * pickup and delivery branches.
+     */
+    private function routeBaseRate(
+        int $pickupBranchId,
+        int $deliveryBranchId
+    ): object {
+        $rule = DB::table('branch_route_rates')
+            ->where(
+                'pickup_branch_id',
+                $pickupBranchId
             )
-            : 0;
-
-        $additionalFee =
-            $units *
-            (float) $rule
-                ->additional_distance_fee;
-
-        return [
-            'rule_id' => (int) $rule->id,
-            'charge_type' => $chargeType,
-            'distance_km' => round(
-                $distanceKm,
-                3
-            ),
-            'base_radius_km' => $baseRadius,
-            'base_fee' => round($baseFee, 2),
-            'additional_distance_km' => round(
-                $additionalDistance,
-                3
-            ),
-            'additional_distance_unit_km' => $unit,
-            'additional_units' => $units,
-            'additional_unit_fee' => round(
-                (float) $rule
-                    ->additional_distance_fee,
-                2
-            ),
-            'additional_fee' => round(
-                $additionalFee,
-                2
-            ),
-            'total' => round(
-                $baseFee + $additionalFee,
-                2
-            ),
-        ];
-    }
-
-    // private function branchRule(
-    //     int $branchId,
-    //     int $serviceTypeId,
-    //     ?int $merchantId,
-    //     string $chargeType
-    // ): ?object {
-    //     if ($merchantId !== null) {
-    //         $merchantRule = DB::table(
-    //             'branch_pricing_rules'
-    //         )
-    //             ->where('branch_id', $branchId)
-    //             ->where(
-    //                 'service_type_id',
-    //                 $serviceTypeId
-    //             )
-    //             ->where(
-    //                 'merchant_id',
-    //                 $merchantId
-    //             )
-    //             ->where(
-    //                 'charge_type',
-    //                 $chargeType
-    //             )
-    //             ->where('is_active', true)
-    //             ->orderByDesc('id')
-    //             ->first();
-
-    //         if ($merchantRule) {
-    //             return $merchantRule;
-    //         }
-    //     }
-
-    //     return DB::table('branch_pricing_rules')
-    //         ->where('branch_id', $branchId)
-    //         ->where(
-    //             'service_type_id',
-    //             $serviceTypeId
-    //         )
-    //         ->whereNull('merchant_id')
-    //         ->where('charge_type', $chargeType)
-    //         ->where('is_active', true)
-    //         ->orderByDesc('id')
-    //         ->first();
-    // }
-
-    private function branchRule(
-        int $branchId,
-        int $serviceTypeId,
-        ?int $merchantId,
-        string $chargeType
-    ): ?object {
-        $branchColumn = match ($chargeType) {
-            'pickup' => 'pickup_branch_id',
-            'delivery' => 'delivery_branch_id',
-            default => throw ValidationException::withMessages([
-                'pricing' => [
-                    "Invalid charge type: {$chargeType}.",
-                ],
-            ]),
-        };
-
-        if ($merchantId !== null) {
-            $merchantRule = DB::table('branch_pricing_rules')
-                ->where($branchColumn, $branchId)
-                ->where('service_type_id', $serviceTypeId)
-                ->where('merchant_id', $merchantId)
-                ->where('charge_type', $chargeType)
-                ->where('is_active', true)
-                ->orderByDesc('id')
-                ->first();
-
-            if ($merchantRule) {
-                return $merchantRule;
-            }
-        }
-
-        return DB::table('branch_pricing_rules')
-            ->where($branchColumn, $branchId)
-            ->where('service_type_id', $serviceTypeId)
-            ->whereNull('merchant_id')
-            ->where('charge_type', $chargeType)
+            ->where(
+                'delivery_branch_id',
+                $deliveryBranchId
+            )
             ->where('is_active', true)
             ->orderByDesc('id')
             ->first();
+
+        /*
+         * Fallback to reverse route when a separate reverse
+         * route is not configured.
+         */
+        if (!$rule) {
+            $rule = DB::table('branch_route_rates')
+                ->where(
+                    'pickup_branch_id',
+                    $deliveryBranchId
+                )
+                ->where(
+                    'delivery_branch_id',
+                    $pickupBranchId
+                )
+                ->where('is_active', true)
+                ->orderByDesc('id')
+                ->first();
+        }
+
+        if (!$rule) {
+            throw ValidationException::withMessages([
+                'delivery_address' => [
+                    'Base rate is not configured for the selected branch route.',
+                ],
+            ]);
+        }
+
+        return $rule;
     }
 
-    private function weightFee(
-        int $serviceTypeId,
-        float $weightKg
+    /**
+     * Calculate excess-weight pricing.
+     *
+     * Base rate includes up to 1.5 KG.
+     * Same branch: Rs. 20 per excess KG.
+     * Other branch: Rs. 30 per excess KG.
+     */
+    private function weightCharge(
+        float $parcelWeightKg,
+        bool $isSameBranch,
+        object $settings
     ): array {
-        $rule = DB::table('weight_rate_rules')
-            ->where('service_type_id', $serviceTypeId)
-            ->where('is_active', true)
-            ->orderByDesc('id')
-            ->first();
-
-        if (!$rule) {
-            $rule = DB::table('weight_rate_rules')
-                ->whereNull('service_type_id')
-                ->where('is_active', true)
-                ->orderByDesc('id')
-                ->first();
-        }
-
-        if (!$rule) {
-            throw ValidationException::withMessages([
-                'parcel_weight' => [
-                    'Weight pricing is not configured.',
-                ],
-            ]);
-        }
-
-        if (
-            $rule->maximum_weight_kg !== null &&
-            $weightKg > (float) $rule->maximum_weight_kg
-        ) {
-            throw ValidationException::withMessages([
-                'parcel_weight' => [
-                    'Parcel exceeds maximum supported weight.',
-                ],
-            ]);
-        }
-
-        $baseWeight = (float) $rule->base_weight_kg;
-        $baseFee = (float) $rule->base_weight_fee;
-
-        $additionalWeight = max(
+        $includedWeightKg = max(
             0,
-            $weightKg - $baseWeight
+            (float)
+            $settings->included_weight_kg
         );
 
-        $unit = max(
-            0.001,
-            (float) $rule->additional_weight_unit_kg
+        $ratePerKg = $isSameBranch
+            ? (float)
+            $settings
+                ->same_branch_weight_rate
+            : (float)
+            $settings
+                ->other_branch_weight_rate;
+
+        $excessWeightKg = max(
+            0,
+            $parcelWeightKg -
+                $includedWeightKg
         );
 
-        $units = $additionalWeight > 0
-            ? (int) ceil($additionalWeight / $unit)
-            : 0;
-
-        $additionalFee =
-            $units *
-            (float) $rule->additional_weight_fee;
+        /*
+         * No ceil() is used.
+         * Decimal excess weight is charged directly.
+         */
+        $charge =
+            $excessWeightKg *
+            $ratePerKg;
 
         return [
-            'rule_id' => (int) $rule->id,
-            'parcel_weight_kg' => round($weightKg, 3),
-            'base_weight_kg' => $baseWeight,
-            'base_weight_fee' => round($baseFee, 2),
-            'additional_weight_kg' => round(
-                $additionalWeight,
-                3
-            ),
-            'additional_weight_unit_kg' => $unit,
-            'additional_units' => $units,
-            'additional_unit_fee' => round(
-                (float) $rule->additional_weight_fee,
-                2
-            ),
-            'additional_fee' => round(
-                $additionalFee,
-                2
-            ),
-            'total' => round(
-                $baseFee + $additionalFee,
-                2
-            ),
+            'parcel_weight_kg' =>
+            round($parcelWeightKg, 3),
+
+            'included_weight_kg' =>
+            round($includedWeightKg, 3),
+
+            'excess_weight_kg' =>
+            round($excessWeightKg, 3),
+
+            'route_type' =>
+            $isSameBranch
+                ? 'same_branch'
+                : 'other_branch',
+
+            'rate_per_kg' =>
+            round($ratePerKg, 2),
+
+            'total' =>
+            round($charge, 2),
         ];
     }
 
-    private function handlingFee(
-        string $handlingType,
-        int $serviceTypeId,
-        ?int $merchantId,
-        float $subtotal,
-        float $weightKg
+    /**
+     * Apply the fragile parcel multiplier.
+     */
+    private function fragileCharge(
+        string $parcelType,
+        float $calculationBase,
+        object $settings
     ): array {
-        if ($handlingType === 'non_fragile') {
+        $normalizedType = strtolower(
+            trim($parcelType)
+        );
+
+        if ($normalizedType !== 'fragile') {
             return [
-                'handling_type' =>
+                'applied' => false,
+
+                'parcel_type' =>
                 'non_fragile',
-                'calculation_type' =>
-                'none',
-                'total' => 0.0,
-            ];
-        }
 
-        $rule = $this->priorityRule(
-            'parcel_handling_rates',
-            [
-                'handling_type' =>
-                $handlingType,
-            ],
-            $serviceTypeId,
-            $merchantId
-        );
+                'multiplier' =>
+                1.0,
 
-        if (!$rule) {
-            throw ValidationException::withMessages([
-                'parcel_type' => [
-                    'Fragile pricing is not configured.',
-                ],
-            ]);
-        }
-
-        $type =
-            (string) $rule->calculation_type;
-
-        $fee = match ($type) {
-            'fixed' =>
-            (float) ($rule->fixed_fee ?? 0),
-
-            'percentage' =>
-            $subtotal *
-                (
-                    (float) (
-                        $rule->percentage ?? 0
-                    ) / 100
-                ),
-
-            'per_kg' =>
-            $weightKg *
-                (float) (
-                    $rule->per_kg_fee ?? 0
-                ),
-
-            'percentage_with_minimum' =>
-            max(
-                (float) (
-                    $rule->minimum_fee ?? 0
-                ),
-                $subtotal *
-                    (
-                        (float) (
-                            $rule->percentage ?? 0
-                        ) / 100
-                    )
-            ),
-
-            default =>
-            throw ValidationException::withMessages([
-                'parcel_type' => [
-                    'Invalid fragile pricing type.',
-                ],
-            ]),
-        };
-
-        return [
-            'rule_id' => (int) $rule->id,
-            'handling_type' => $handlingType,
-            'calculation_type' => $type,
-            'calculation_base' => round(
-                $subtotal,
-                2
-            ),
-            'total' => round($fee, 2),
-        ];
-    }
-
-    private function codFee(
-        string $paymentType,
-        float $codAmount,
-        int $serviceTypeId,
-        ?int $merchantId
-    ): array {
-        if ($paymentType !== 'pod') {
-            return [
-                'payment_type' => 'prepaid',
-                'calculation_type' => 'none',
-                'pod_amount' => 0.0,
-                'total' => 0.0,
-            ];
-        }
-
-        $rule = $this->priorityRule(
-            'pod_rate_rules',
-            [],
-            $serviceTypeId,
-            $merchantId
-        );
-
-        if (!$rule) {
-            return [
-                'payment_type' => 'pod',
-                'calculation_type' => 'none',
-                'pod_amount' => round(
-                    $codAmount,
+                'calculation_base' =>
+                round(
+                    $calculationBase,
                     2
                 ),
-                'total' => 0.0,
+
+                'total' =>
+                0.0,
             ];
         }
 
-        $type =
-            (string) $rule->calculation_type;
+        $multiplier = max(
+            1,
+            (float)
+            $settings
+                ->fragile_multiplier
+        );
 
-        $fee = match ($type) {
-            'fixed' =>
-            (float) ($rule->fixed_fee ?? 0),
+        $multipliedAmount =
+            $calculationBase *
+            $multiplier;
 
-            'percentage' =>
-            $codAmount *
-                (
-                    (float) (
-                        $rule->percentage ?? 0
-                    ) / 100
-                ),
-
-            'percentage_with_minimum' =>
-            max(
-                (float) (
-                    $rule->minimum_fee ?? 0
-                ),
-                $codAmount *
-                    (
-                        (float) (
-                            $rule->percentage ?? 0
-                        ) / 100
-                    )
-            ),
-
-            default => 0.0,
-        };
-
-        if ($rule->maximum_fee !== null) {
-            $fee = min(
-                $fee,
-                (float) $rule->maximum_fee
-            );
-        }
+        $charge =
+            $multipliedAmount -
+            $calculationBase;
 
         return [
-            'rule_id' => (int) $rule->id,
-            'payment_type' => 'pod',
-            'calculation_type' => $type,
-            'pod_amount' => round(
-                $codAmount,
+            'applied' => true,
+
+            'parcel_type' =>
+            'fragile',
+
+            'multiplier' =>
+            $multiplier,
+
+            'calculation_base' =>
+            round(
+                $calculationBase,
                 2
             ),
-            'total' => round($fee, 2),
+
+            'multiplied_amount' =>
+            round(
+                $multipliedAmount,
+                2
+            ),
+
+            'total' =>
+            round($charge, 2),
         ];
     }
 
-    private function priorityRule(
-        string $table,
-        array $required,
-        int $serviceTypeId,
-        ?int $merchantId
-    ): ?object {
-        $hasMerchantColumn = Schema::hasColumn(
-            $table,
-            'merchant_id'
+    /**
+     * Charge for delivery distance beyond the included
+     * destination radius.
+     */
+    private function extraDeliveryDistanceCharge(
+        float $deliveryDistanceKm,
+        object $settings
+    ): array {
+        $includedDistanceKm = max(
+            0,
+            (float)
+            $settings
+                ->included_delivery_distance_km
         );
 
-        $hasServiceTypeColumn = Schema::hasColumn(
-            $table,
-            'service_type_id'
+        $ratePerKm = max(
+            0,
+            (float)
+            $settings
+                ->extra_distance_rate_per_km
         );
 
-        $priorities = [];
+        $extraDistanceKm = max(
+            0,
+            $deliveryDistanceKm -
+                $includedDistanceKm
+        );
 
-        /*
-     * Merchant-specific priorities are only added when
-     * the table actually has a merchant_id column.
-     */
-        if ($hasMerchantColumn && $merchantId !== null) {
-            if ($hasServiceTypeColumn) {
-                $priorities[] = [
-                    'merchant_id' => $merchantId,
-                    'service_type_id' => $serviceTypeId,
-                ];
+        $charge =
+            $extraDistanceKm *
+            $ratePerKm;
 
-                $priorities[] = [
-                    'merchant_id' => $merchantId,
-                    'service_type_id' => null,
-                ];
-            } else {
-                $priorities[] = [
-                    'merchant_id' => $merchantId,
-                ];
-            }
-        }
+        return [
+            'delivery_distance_km' =>
+            round(
+                $deliveryDistanceKm,
+                3
+            ),
 
-        /*
-     * Global rules.
-     */
-        if ($hasServiceTypeColumn) {
-            $priorities[] = [
-                'merchant_id' => null,
-                'service_type_id' => $serviceTypeId,
-            ];
+            'included_distance_km' =>
+            round(
+                $includedDistanceKm,
+                3
+            ),
 
-            $priorities[] = [
-                'merchant_id' => null,
-                'service_type_id' => null,
-            ];
-        } else {
-            $priorities[] = [
-                'merchant_id' => null,
-            ];
-        }
+            'extra_distance_km' =>
+            round(
+                $extraDistanceKm,
+                3
+            ),
 
-        foreach ($priorities as $priority) {
-            $query = DB::table($table)
-                ->where($required)
-                ->where('is_active', true);
+            'rate_per_km' =>
+            round(
+                $ratePerKm,
+                2
+            ),
 
-            if ($hasMerchantColumn) {
-                if (
-                    array_key_exists(
-                        'merchant_id',
-                        $priority
-                    ) &&
-                    $priority['merchant_id'] !== null
-                ) {
-                    $query->where(
-                        'merchant_id',
-                        $priority['merchant_id']
-                    );
-                } else {
-                    $query->whereNull('merchant_id');
-                }
-            }
-
-            if ($hasServiceTypeColumn) {
-                if (
-                    array_key_exists(
-                        'service_type_id',
-                        $priority
-                    ) &&
-                    $priority['service_type_id'] !== null
-                ) {
-                    $query->where(
-                        'service_type_id',
-                        $priority['service_type_id']
-                    );
-                } else {
-                    $query->whereNull(
-                        'service_type_id'
-                    );
-                }
-            }
-
-            $result = $query
-                ->orderByDesc('id')
-                ->first();
-
-            if ($result) {
-                return $result;
-            }
-        }
-
-        return null;
+            'total' =>
+            round(
+                $charge,
+                2
+            ),
+        ];
     }
 
+    /**
+     * Apply same-day multiplier when the service type
+     * is same_day.
+     */
+    private function sameDayCharge(
+        string $serviceCode,
+        float $calculationBase,
+        bool $isSameBranch,
+        object $settings
+    ): array {
+        $normalizedCode = strtolower(
+            trim($serviceCode)
+        );
 
-    // private function priorityRule(
-    //     string $table,
-    //     array $required,
-    //     int $serviceTypeId,
-    //     ?int $merchantId
-    // ): ?object {
-    //     $priorities = [];
+        if ($normalizedCode !== 'same_day') {
+            return [
+                'applied' => false,
 
-    //     if ($merchantId !== null) {
-    //         $priorities[] = [
-    //             'merchant_id' => $merchantId,
-    //             'service_type_id' =>
-    //             $serviceTypeId,
-    //         ];
+                'route_type' =>
+                $isSameBranch
+                    ? 'same_branch'
+                    : 'other_branch',
 
-    //         $priorities[] = [
-    //             'merchant_id' => $merchantId,
-    //             'service_type_id' => null,
-    //         ];
-    //     }
+                'multiplier' =>
+                1.0,
 
-    //     $priorities[] = [
-    //         'merchant_id' => null,
-    //         'service_type_id' =>
-    //         $serviceTypeId,
-    //     ];
+                'calculation_base' =>
+                round(
+                    $calculationBase,
+                    2
+                ),
 
-    //     $priorities[] = [
-    //         'merchant_id' => null,
-    //         'service_type_id' => null,
-    //     ];
+                'total' =>
+                0.0,
+            ];
+        }
 
-    //     foreach ($priorities as $priority) {
-    //         $query = DB::table($table)
-    //             ->where($required)
-    //             ->where('is_active', true);
+        $this->validateSameDayCutoff(
+            (string)
+            $settings
+                ->same_day_cutoff_time
+        );
 
-    //         $priority['merchant_id'] === null
-    //             ? $query->whereNull('merchant_id')
-    //             : $query->where(
-    //                 'merchant_id',
-    //                 $priority['merchant_id']
-    //             );
+        $multiplier = $isSameBranch
+            ? (float)
+            $settings
+                ->same_branch_sdd_multiplier
+            : (float)
+            $settings
+                ->other_branch_sdd_multiplier;
 
-    //         $priority['service_type_id'] === null
-    //             ? $query->whereNull(
-    //                 'service_type_id'
-    //             )
-    //             : $query->where(
-    //                 'service_type_id',
-    //                 $priority['service_type_id']
-    //             );
+        $multipliedAmount =
+            $calculationBase *
+            $multiplier;
 
-    //         $result = $query
-    //             ->orderByDesc('id')
-    //             ->first();
+        $charge =
+            $multipliedAmount -
+            $calculationBase;
 
-    //         if ($result) {
-    //             return $result;
-    //         }
-    //     }
+        return [
+            'applied' => true,
 
-    //     return null;
-    // }
+            'route_type' =>
+            $isSameBranch
+                ? 'same_branch'
+                : 'other_branch',
+
+            'multiplier' =>
+            $multiplier,
+
+            'calculation_base' =>
+            round(
+                $calculationBase,
+                2
+            ),
+
+            'multiplied_amount' =>
+            round(
+                $multipliedAmount,
+                2
+            ),
+
+            'total' =>
+            round(
+                $charge,
+                2
+            ),
+        ];
+    }
+
+    /**
+     * Reject same-day delivery requests submitted at or
+     * after the configured cutoff time.
+     */
+    private function validateSameDayCutoff(
+        string $cutoffTime
+    ): void {
+        $timezone = config(
+            'app.timezone',
+            'Asia/Kathmandu'
+        );
+
+        $now = now($timezone);
+
+        $cutoff = Carbon::parse(
+            $now->format('Y-m-d') .
+                ' ' .
+                $cutoffTime,
+            $timezone
+        );
+
+        if (
+            $now->greaterThanOrEqualTo(
+                $cutoff
+            )
+        ) {
+            throw ValidationException::withMessages([
+                'service_type' => [
+                    'Same-day delivery requests must be submitted before the configured cutoff time.',
+                ],
+            ]);
+        }
+    }
+
+    /**
+     * Charge Rs. 50 when pickup has fewer than the
+     * minimum configured packet count.
+     */
+    private function minimumPacketCharge(
+        int $packetCount,
+        object $settings
+    ): array {
+        $packetCount = max(
+            1,
+            $packetCount
+        );
+
+        $minimumPackets = max(
+            1,
+            (int)
+            $settings
+                ->minimum_pickup_packets
+        );
+
+        $isApplied =
+            $packetCount <
+            $minimumPackets;
+
+        $charge = $isApplied
+            ? (float)
+            $settings
+                ->low_packet_pickup_charge
+            : 0.0;
+
+        return [
+            'packet_count' =>
+            $packetCount,
+
+            'minimum_packets' =>
+            $minimumPackets,
+
+            'applied' =>
+            $isApplied,
+
+            'total' =>
+            round(
+                $charge,
+                2
+            ),
+        ];
+    }
 }

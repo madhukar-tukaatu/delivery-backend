@@ -98,6 +98,53 @@ class RoleSeeder extends Seeder
 
             /*
             |--------------------------------------------------------------------------
+            | Pricing Manager
+            |--------------------------------------------------------------------------
+            | Manages pricing configuration, service types, customer-facing
+            | branch rates, the simulator and immutable quote inspection.
+            */
+            'pricing_manager' => [
+                'dashboard.view',
+                'branches.view',
+
+                /*
+                 * Legacy permissions retained for existing screens/routes.
+                 */
+                'rates.view',
+                'rates.calculate',
+                'rates.manage',
+                'rates.service_types',
+                'rates.branch_pricing',
+
+                'pricing.settings.view',
+                'pricing.settings.create',
+                'pricing.settings.update',
+                'pricing.settings.activate',
+                'pricing.settings.delete',
+
+                'pricing.service_types.view',
+                'pricing.service_types.create',
+                'pricing.service_types.update',
+                'pricing.service_types.status',
+                'pricing.service_types.delete',
+
+                'pricing.branch_rates.view',
+                'pricing.branch_rates.create',
+                'pricing.branch_rates.update',
+                'pricing.branch_rates.status',
+                'pricing.branch_rates.delete',
+
+                'pricing.simulator.use',
+
+                'pricing.quotes.view',
+
+                'audit_logs.view',
+                'reports.view',
+                'reports.revenue',
+            ],
+
+            /*
+            |--------------------------------------------------------------------------
             | Main Admin
             |--------------------------------------------------------------------------
             | Full operational access, but no system role/menu/settings/delete control.
@@ -191,6 +238,27 @@ class RoleSeeder extends Seeder
                 'rates.service_types',
                 'rates.branch_pricing',
                 'rates.transfer_lanes',
+
+                /*
+                 * Full pricing management except destructive delete actions.
+                 */
+                'pricing.settings.view',
+                'pricing.settings.create',
+                'pricing.settings.update',
+                'pricing.settings.activate',
+
+                'pricing.service_types.view',
+                'pricing.service_types.create',
+                'pricing.service_types.update',
+                'pricing.service_types.status',
+
+                'pricing.branch_rates.view',
+                'pricing.branch_rates.create',
+                'pricing.branch_rates.update',
+                'pricing.branch_rates.status',
+
+                'pricing.simulator.use',
+                'pricing.quotes.view',
 
                 'invoices.view',
                 'invoices.create',
@@ -303,6 +371,12 @@ class RoleSeeder extends Seeder
 
                 'rates.view',
                 'rates.calculate',
+                'rates.transfer_lanes',
+
+                'pricing.settings.view',
+                'pricing.service_types.view',
+                'pricing.branch_rates.view',
+                'pricing.simulator.use',
 
                 'notifications.view',
 
@@ -376,6 +450,10 @@ class RoleSeeder extends Seeder
 
                 'rates.calculate',
 
+                'pricing.service_types.view',
+                'pricing.branch_rates.view',
+                'pricing.simulator.use',
+
                 'notifications.view',
 
                 'staff.dashboard',
@@ -409,6 +487,10 @@ class RoleSeeder extends Seeder
 
                 'rates.view',
                 'rates.calculate',
+
+                'pricing.service_types.view',
+                'pricing.branch_rates.view',
+                'pricing.simulator.use',
 
                 'notifications.view',
             ],
@@ -444,6 +526,9 @@ class RoleSeeder extends Seeder
                 'dashboard.view',
 
                 'branches.view',
+
+                'pricing.branch_rates.view',
+                'rates.transfer_lanes',
 
                 'shipments.view',
                 'shipments.status',
@@ -517,6 +602,11 @@ class RoleSeeder extends Seeder
 
                 'shipments.view',
 
+                'pricing.settings.view',
+                'pricing.service_types.view',
+                'pricing.branch_rates.view',
+                'pricing.quotes.view',
+
                 'pod.view',
                 'pod.collect',
                 'pod.confirm',
@@ -560,6 +650,10 @@ class RoleSeeder extends Seeder
                 'dashboard.view',
 
                 'shipments.view',
+
+                'pricing.service_types.view',
+                'pricing.branch_rates.view',
+                'pricing.quotes.view',
 
                 'customers.view',
 

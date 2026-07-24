@@ -22,6 +22,22 @@ class MenuSeeder extends Seeder
 
     private function seedAdminMenus(string $table): void
     {
+        /*
+         * Remove the old pricing-settings URL because the page now lives at
+         * /admin/rates. Other pricing rows are updated by route, so reseeding
+         * changes their permission without creating duplicates.
+         */
+        foreach ([
+            '/admin/rate-cards',
+            '/admin/pricing-settings',
+        ] as $legacyPricingRoute) {
+            $this->deleteMenuByRoute(
+                table: $table,
+                section: 'admin',
+                route: $legacyPricingRoute
+            );
+        }
+
         $menus = [
             [
                 'section' => 'admin',
@@ -142,11 +158,11 @@ class MenuSeeder extends Seeder
             ],
             [
                 'section' => 'admin',
-                'title' => 'Rates',
-                'label' => 'Rates',
-                'route' => '/admin/rate-cards',
+                'title' => 'Pricing Settings',
+                'label' => 'Pricing Settings',
+                'route' => '/admin/rates',
                 'icon' => 'rates',
-                'permission' => 'rates.view',
+                'permission' => 'pricing.settings.view',
                 'sort_order' => 90,
             ],
             [
@@ -155,7 +171,7 @@ class MenuSeeder extends Seeder
                 'label' => 'Service Types',
                 'route' => '/admin/service-types',
                 'icon' => 'service-types',
-                'permission' => 'rates.service_types',
+                'permission' => 'pricing.service_types.view',
                 'sort_order' => 91,
             ],
             [
@@ -164,8 +180,26 @@ class MenuSeeder extends Seeder
                 'label' => 'Branch Pricing',
                 'route' => '/admin/branch-pricing',
                 'icon' => 'pricing',
-                'permission' => 'rates.branch_pricing',
+                'permission' => 'pricing.branch_rates.view',
                 'sort_order' => 92,
+            ],
+            [
+                'section' => 'admin',
+                'title' => 'Price Simulator',
+                'label' => 'Price Simulator',
+                'route' => '/admin/pricing-test',
+                'icon' => 'calculator',
+                'permission' => 'pricing.simulator.use',
+                'sort_order' => 93,
+            ],
+            [
+                'section' => 'admin',
+                'title' => 'Pricing Quotes',
+                'label' => 'Pricing Quotes',
+                'route' => '/admin/pricing-quotes',
+                'icon' => 'quotes',
+                'permission' => 'pricing.quotes.view',
+                'sort_order' => 94,
             ],
             [
                 'section' => 'admin',
@@ -174,7 +208,7 @@ class MenuSeeder extends Seeder
                 'route' => '/admin/branch-transfer-lanes',
                 'icon' => 'transfer',
                 'permission' => 'rates.transfer_lanes',
-                'sort_order' => 93,
+                'sort_order' => 95,
             ],
             [
                 'section' => 'admin',
@@ -564,10 +598,19 @@ class MenuSeeder extends Seeder
                 'updated_at' => now(),
             ]);
 
+            /*
+             * Match menus by section and URL, not by permission.
+             *
+             * Permissions may change over time. Including permission in the
+             * match would insert duplicate menu rows instead of updating the
+             * existing route.
+             */
             $match = $this->filterColumns($table, [
                 'section' => $menu['section'],
-                'permission' => $menu['permission'] ?? null,
                 'route' => $menu['route'],
+                'href' => $menu['route'],
+                'url' => $menu['route'],
+                'path' => $menu['route'],
             ]);
 
             if (empty($match)) {
@@ -576,6 +619,47 @@ class MenuSeeder extends Seeder
 
             DB::table($table)->updateOrInsert($match, $data);
         }
+    }
+
+    private function deleteMenuByRoute(
+        string $table,
+        string $section,
+        string $route
+    ): void {
+        $routeColumns = collect([
+            'route',
+            'href',
+            'url',
+            'path',
+        ])->filter(
+            fn(string $column): bool =>
+                Schema::hasColumn($table, $column)
+        )->values();
+
+        if ($routeColumns->isEmpty()) {
+            return;
+        }
+
+        $query = DB::table($table);
+
+        if (Schema::hasColumn($table, 'section')) {
+            $query->where('section', $section);
+        }
+
+        $query->where(
+            function ($routeQuery) use (
+                $routeColumns,
+                $route
+            ): void {
+                foreach ($routeColumns as $index => $column) {
+                    if ($index === 0) {
+                        $routeQuery->where($column, $route);
+                    } else {
+                        $routeQuery->orWhere($column, $route);
+                    }
+                }
+            }
+        )->delete();
     }
 
     private function filterColumns(string $table, array $data): array

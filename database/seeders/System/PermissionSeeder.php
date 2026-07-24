@@ -236,6 +236,37 @@ class PermissionSeeder extends Seeder
                 'rates.transfer_lanes' => 'Rates Transfer Lanes',
             ],
 
+            /*
+             * Granular pricing-administration permissions.
+             *
+             * The existing rates.* permissions remain available for
+             * backward compatibility with older pages and routes.
+             */
+            'Pricing Administration' => [
+                'pricing.settings.view' => 'Pricing Settings View',
+                'pricing.settings.create' => 'Pricing Settings Create',
+                'pricing.settings.update' => 'Pricing Settings Update',
+                'pricing.settings.activate' => 'Pricing Settings Activate',
+                'pricing.settings.delete' => 'Pricing Settings Delete',
+
+                'pricing.service_types.view' => 'Pricing Service Types View',
+                'pricing.service_types.create' => 'Pricing Service Types Create',
+                'pricing.service_types.update' => 'Pricing Service Types Update',
+                'pricing.service_types.status' => 'Pricing Service Types Status',
+                'pricing.service_types.delete' => 'Pricing Service Types Delete',
+
+                'pricing.branch_rates.view' => 'Pricing Branch Rates View',
+                'pricing.branch_rates.create' => 'Pricing Branch Rates Create',
+                'pricing.branch_rates.update' => 'Pricing Branch Rates Update',
+                'pricing.branch_rates.status' => 'Pricing Branch Rates Status',
+                'pricing.branch_rates.delete' => 'Pricing Branch Rates Delete',
+
+                'pricing.simulator.use' => 'Pricing Simulator Use',
+
+                'pricing.quotes.view' => 'Pricing Quotes View',
+                'pricing.quotes.delete' => 'Pricing Quotes Delete',
+            ],
+
             'Billing' => [
                 'invoices.view' => 'Invoices View',
                 'invoices.create' => 'Invoices Create',

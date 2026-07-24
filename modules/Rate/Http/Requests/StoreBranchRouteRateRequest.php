@@ -4,6 +4,7 @@ namespace Modules\Rate\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Validator;
 
 class StoreBranchRouteRateRequest extends FormRequest
 {
@@ -12,129 +13,57 @@ class StoreBranchRouteRateRequest extends FormRequest
         return true;
     }
 
+    protected function prepareForValidation(): void
+    {
+        $this->merge([
+            'is_active' => $this->boolean('is_active', true),
+            'create_reverse_route' => $this->boolean('create_reverse_route'),
+        ]);
+    }
+
     public function rules(): array
     {
-        $routeId = $this->route('routeRate');
-
         return [
-            'origin_branch_id' => [
+            'pickup_branch_id' => [
                 'required',
                 'integer',
-                'exists:branches,id',
+                Rule::exists('branches', 'id')->whereNull('parent_id'),
             ],
-
-            'destination_branch_id' => [
+            'delivery_branch_id' => [
                 'required',
                 'integer',
-                'exists:branches,id',
+                Rule::exists('branches', 'id')->whereNull('parent_id'),
             ],
+            'base_rate' => ['required', 'numeric', 'gte:0'],
+            'is_active' => ['required', 'boolean'],
 
-            'base_rate' => [
-                'required',
+            'create_reverse_route' => ['required', 'boolean'],
+            'reverse_base_rate' => [
+                'nullable',
+                'required_if:create_reverse_route,true',
                 'numeric',
-                'min:0',
-            ],
-
-            'included_weight_kg' => [
-                'nullable',
-                'numeric',
-                'gt:0',
-            ],
-
-            'included_distance_km' => [
-                'nullable',
-                'numeric',
-                'min:0',
-            ],
-
-            'extra_weight_rate' => [
-                'nullable',
-                'numeric',
-                'min:0',
-            ],
-
-            'extra_distance_rate' => [
-                'nullable',
-                'numeric',
-                'min:0',
-            ],
-
-            'same_day_multiplier' => [
-                'nullable',
-                'numeric',
-                'min:1',
-            ],
-
-            'effective_from' => [
-                'nullable',
-                'date',
-            ],
-
-            'effective_to' => [
-                'nullable',
-                'date',
-                'after_or_equal:effective_from',
-            ],
-
-            'bidirectional' => [
-                'nullable',
-                'boolean',
-            ],
-
-            'is_active' => [
-                'nullable',
-                'boolean',
-            ],
-
-            'notes' => [
-                'nullable',
-                'string',
-                'max:2000',
-            ],
-
-            'route_unique_check' => [
-                Rule::unique(
-                    'branch_route_rates',
-                    'origin_branch_id'
-                )
-                    ->ignore($routeId),
+                'gte:0',
             ],
         ];
     }
 
-    protected function prepareForValidation(): void
+    public function after(): array
     {
-        $this->merge([
-            'route_unique_check' =>
-                $this->input('origin_branch_id'),
-        ]);
-    }
+        return [
+            function (Validator $validator): void {
+                $pickup = (int) $this->input('pickup_branch_id');
+                $delivery = (int) $this->input('delivery_branch_id');
 
-    public function withValidator($validator): void
-    {
-        $validator->after(function ($validator) {
-            $exists = \Modules\Rate\Models\BranchRouteRate::query()
-                ->when(
-                    $this->route('routeRate'),
-                    fn ($query, $id) =>
-                        $query->whereKeyNot($id)
-                )
-                ->where(
-                    'origin_branch_id',
-                    $this->input('origin_branch_id')
-                )
-                ->where(
-                    'destination_branch_id',
-                    $this->input('destination_branch_id')
-                )
-                ->exists();
-
-            if ($exists) {
-                $validator->errors()->add(
-                    'destination_branch_id',
-                    'This branch route already has a pricing record.'
-                );
-            }
-        });
+                if (
+                    $pickup === $delivery &&
+                    $this->boolean('create_reverse_route')
+                ) {
+                    $validator->errors()->add(
+                        'create_reverse_route',
+                        'A same-branch rate cannot create a separate reverse route.'
+                    );
+                }
+            },
+        ];
     }
 }

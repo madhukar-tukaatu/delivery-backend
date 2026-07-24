@@ -1,13 +1,23 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\Rate\Http\Controllers\Api\Admin\AdminPricingSettingsController;
+use Modules\Rate\Http\Controllers\Api\Admin\AdminServiceTypeController;
+use Modules\Rate\Http\Controllers\Api\AdminBranchRouteRateController;
+use Modules\Rate\Http\Controllers\Api\AdminPricingQuoteController;
 use Modules\Rate\Http\Controllers\Api\AdminPricingTestController;
-use Modules\Rate\Http\Controllers\Api\AdminSetupCrudController;
 use Modules\Rate\Http\Controllers\Api\PublicPricingQuoteController;
 
 /*
 |--------------------------------------------------------------------------
-| Admin Pricing Configuration
+| Rate Module API Routes
+|--------------------------------------------------------------------------
+*/
+
+
+/*
+|--------------------------------------------------------------------------
+| Super Admin Pricing Management
 |--------------------------------------------------------------------------
 */
 
@@ -18,161 +28,158 @@ Route::prefix('v1/admin')
         'route.permission',
     ])
     ->group(function (): void {
-        /*
-         * Pricing simulator.
-         */
-        Route::post(
-            'pricing/test',
-            [AdminPricingTestController::class, 'test']
-        )->name('pricing.test');
 
         /*
-         * Service types.
-         */
-        Route::get(
-            'service-types',
-            [AdminSetupCrudController::class, 'serviceTypes']
-        )->name('service-types.index');
+        |--------------------------------------------------------------------------
+        | Pricing Simulator
+        |--------------------------------------------------------------------------
+        */
 
-        Route::post(
-            'service-types',
-            [AdminSetupCrudController::class, 'saveServiceType']
-        )->name('service-types.store');
+        Route::post('pricing-test', [AdminPricingTestController::class, 'test'])->name('pricing-test');
+
+        Route::post('pricing-simulator', [AdminPricingTestController::class, 'test'])->name('pricing-simulator');
+
 
         /*
-         * Branch pricing rules.
-         */
-        Route::get(
-            'branch-pricing-rules',
-            [AdminSetupCrudController::class, 'branchPricing']
-        )->name('branch-pricing-rules.index');
+        |--------------------------------------------------------------------------
+        | Pricing Settings
+        |--------------------------------------------------------------------------
+        */
 
-        Route::post(
-            'branch-pricing-rules',
-            [AdminSetupCrudController::class, 'saveBranchPricing']
-        )->name('branch-pricing-rules.store');
+        Route::prefix('pricing-settings')
+            ->name('pricing-settings.')
+            ->controller(AdminPricingSettingsController::class)
+            ->group(function (): void {
 
-        /*
-         * Inter-branch transfer counts.
-         */
-        Route::get(
-            'inter-branch-transfer-counts',
-            [AdminSetupCrudController::class, 'transferCounts']
-        )->name('inter-branch-transfer-counts.index');
+                Route::get('/', 'index')->name('index');
 
-        Route::post(
-            'inter-branch-transfer-counts',
-            [AdminSetupCrudController::class, 'saveTransferCount']
-        )->name('inter-branch-transfer-counts.store');
+                Route::post('/', 'store')->name('store');
 
-        /*
-         * Transfer count rates.
-         */
-        Route::get(
-            'transfer-count-rates',
-            [AdminSetupCrudController::class, 'transferCountRates']
-        )->name('transfer-count-rates.index');
+                Route::get('/{pricingSetting}', 'show')->name('show');
 
-        Route::post(
-            'transfer-count-rates',
-            [AdminSetupCrudController::class, 'saveTransferCountRate']
-        )->name('transfer-count-rates.store');
+                Route::put('/{pricingSetting}', 'update')->name('update');
+
+                Route::post('/{pricingSetting}/activate', 'activate')->name('activate');
+
+                Route::delete('/{pricingSetting}', 'destroy')->name('destroy');
+            });
+
 
         /*
-         * Weight pricing rules.
-         */
-        Route::get(
-            'weight-rate-rules',
-            [AdminSetupCrudController::class, 'weightRates']
-        )->name('weight-rate-rules.index');
+        |--------------------------------------------------------------------------
+        | Service Types
+        |--------------------------------------------------------------------------
+        */
 
-        Route::post(
-            'weight-rate-rules',
-            [AdminSetupCrudController::class, 'saveWeightRate']
-        )->name('weight-rate-rules.store');
+        Route::prefix('service-types')
+            ->name('service-types.')
+            ->controller(AdminServiceTypeController::class)
+            ->group(function (): void {
+
+                Route::get('/', 'index')->name('index');
+
+                Route::post('/', 'store')->name('store');
+
+                Route::get('/{serviceType}', 'show')->name('show');
+
+                Route::put('/{serviceType}', 'update')->name('update');
+
+                Route::patch('/{serviceType}/status', 'toggle')->name('status');
+
+                Route::delete('/{serviceType}', 'destroy')->name('destroy');
+            });
+
 
         /*
-         * Parcel handling rates.
-         */
-        Route::get(
-            'parcel-handling-rates',
-            [AdminSetupCrudController::class, 'handlingRates']
-        )->name('parcel-handling-rates.index');
+        |--------------------------------------------------------------------------
+        | Branch Route Pricing
+        |--------------------------------------------------------------------------
+        |
+        | These rates are customer-facing branch-to-branch prices.
+        | Only main branches should be returned by the branches endpoint.
+        |
+        */
 
-        Route::post(
-            'parcel-handling-rates',
-            [AdminSetupCrudController::class, 'saveHandlingRate']
-        )->name('parcel-handling-rates.store');
+        Route::prefix('branch-route-rates')
+            ->name('branch-route-rates.')
+            ->controller(AdminBranchRouteRateController::class)
+            ->group(function (): void {
+
+                /*
+                 * Fixed routes must remain above /{branchRouteRate}.
+                 */
+                Route::get('/branches', 'branches')->name('branches');
+
+                Route::get('/matrix', 'matrix')->name('matrix');
+
+                Route::get('/', 'index')->name('index');
+
+                Route::post('/', 'store')->name('store');
+
+                Route::get('/{branchRouteRate}', 'show')->name('show');
+
+                Route::put('/{branchRouteRate}', 'update')->name('update');
+
+                Route::patch('/{branchRouteRate}/status', 'toggle')->name('status');
+
+                Route::delete('/{branchRouteRate}', 'destroy')->name('destroy');
+            });
+
 
         /*
-         * POD / COD rate rules.
-         */
-        Route::get(
-            'pod-rate-rules',
-            [AdminSetupCrudController::class, 'codRates']
-        )->name('pod-rate-rules.index');
+        |--------------------------------------------------------------------------
+        | Stored Pricing Quotes
+        |--------------------------------------------------------------------------
+        */
 
-        Route::post(
-            'pod-rate-rules',
-            [AdminSetupCrudController::class, 'saveCodRate']
-        )->name('pod-rate-rules.store');
+        Route::prefix('pricing-quotes')
+            ->name('pricing-quotes.')
+            ->controller(AdminPricingQuoteController::class)
+            ->group(function (): void {
+
+                Route::get('/', 'index')->name('index');
+
+                Route::get('/{pricingQuote}', 'show')->name('show');
+
+                Route::delete('/{pricingQuote}', 'destroy')->name('destroy');
+            });
     });
+
 
 /*
 |--------------------------------------------------------------------------
-| Public Merchant Pricing
+| Public Merchant Pricing API
 |--------------------------------------------------------------------------
+|
+| Replace "merchant.api-key" below only when your existing middleware
+| alias uses a different name.
+|
 */
 
-Route::prefix('v1/public-merchant')
-    ->name('public-merchant.')
+Route::prefix('v1/public-merchant/pricing')
+    ->name('public-merchant.pricing.')
     ->middleware([
         'merchant.api-key',
-        'throttle:public-merchant',
     ])
+    ->controller(PublicPricingQuoteController::class)
     ->group(function (): void {
-        /*
-         * Calculate delivery charge only.
-         * Does not save a quote or create a shipment.
-         */
-        Route::post(
-            'pricing/check',
-            [PublicPricingQuoteController::class, 'checkPrice']
-        )->name('pricing.check');
 
         /*
-         * Create a quote for one store or pickup location.
+         * Calculate delivery price without storing a quote.
          */
-        Route::post(
-            'pricing/quotes',
-            [PublicPricingQuoteController::class, 'storeSingle']
-        )->name('pricing-quotes.store');
+        Route::post('/check-price', 'checkPrice')->name('check-price');
 
         /*
-         * Retrieve one single-store quote.
+         * Create and retrieve one single-store quote.
          */
-        Route::get(
-            'pricing/quotes/{quoteNumber}',
-            [PublicPricingQuoteController::class, 'showSingleQuote']
-        )
-            ->where('quoteNumber', '[A-Za-z0-9\-]+')
-            ->name('pricing-quotes.show');
+        Route::post('/quotes', 'storeSingle')->name('quotes.store');
+
+        Route::get('/quotes/{quoteNumber}', 'showSingleQuote')->name('quotes.show');
 
         /*
-         * Create a combined quote for multiple stores.
+         * Create and retrieve a multi-store checkout quote.
          */
-        Route::post(
-            'pricing/checkout-quotes',
-            [PublicPricingQuoteController::class, 'storeMultiStore']
-        )->name('checkout-quotes.store');
+        Route::post('/checkout-quotes', 'storeMultiStore')->name('checkout-quotes.store');
 
-        /*
-         * Retrieve a multi-store checkout quote.
-         */
-        Route::get(
-            'pricing/checkout-quotes/{quoteNumber}',
-            [PublicPricingQuoteController::class, 'showCheckoutQuote']
-        )
-            ->where('quoteNumber', '[A-Za-z0-9\-]+')
-            ->name('checkout-quotes.show');
+        Route::get('/checkout-quotes/{quoteNumber}', 'showCheckoutQuote')->name('checkout-quotes.show');
     });

@@ -3,9 +3,9 @@
 use Illuminate\Support\Facades\Route;
 use Modules\Rate\Http\Controllers\Api\Admin\AdminPricingSettingsController;
 use Modules\Rate\Http\Controllers\Api\Admin\AdminServiceTypeController;
-use Modules\Rate\Http\Controllers\Api\AdminBranchRouteRateController;
-use Modules\Rate\Http\Controllers\Api\AdminPricingQuoteController;
-use Modules\Rate\Http\Controllers\Api\AdminPricingTestController;
+use Modules\Rate\Http\Controllers\Api\Admin\AdminBranchRouteRateController;
+use Modules\Rate\Http\Controllers\Api\Admin\AdminPricingQuoteController;
+use Modules\Rate\Http\Controllers\Api\Admin\AdminPricingTestController;
 use Modules\Rate\Http\Controllers\Api\PublicPricingQuoteController;
 
 /*

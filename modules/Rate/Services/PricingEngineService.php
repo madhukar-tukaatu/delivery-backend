@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Modules\Rate\Services;
 
 use Carbon\Carbon;
@@ -17,32 +19,28 @@ final class PricingEngineService
         ?int $merchantId = null
     ): array {
         /*
-         * Official pricing is currently global rather than
-         * merchant-specific.
+         * Pricing is currently global rather than merchant-specific.
          */
         unset($merchantId);
 
         $settings = $this->activeSettings();
 
         $serviceType = $this->serviceType(
-            (string) $data['service_type']
+            (string) ($data['service_type'] ?? '')
         );
 
         /*
-         * Resolve the responsible main branch for the pickup
-         * and delivery coordinates.
-         *
-         * Subbranches may handle operations, but route pricing
-         * is calculated using the responsible main branches.
+         * Main branches control route pricing. Subbranches may handle
+         * operations, but they do not create separate route prices.
          */
         $pickupBranch = $this->branchResolver->resolve(
-            (float) $data['pickup_latitude'],
-            (float) $data['pickup_longitude']
+            (float) ($data['pickup_latitude'] ?? 0),
+            (float) ($data['pickup_longitude'] ?? 0)
         );
 
         $deliveryBranch = $this->branchResolver->resolve(
-            (float) $data['delivery_latitude'],
-            (float) $data['delivery_longitude']
+            (float) ($data['delivery_latitude'] ?? 0),
+            (float) ($data['delivery_longitude'] ?? 0)
         );
 
         $pickupBranchId = (int) $pickupBranch->id;
@@ -68,8 +66,7 @@ final class PricingEngineService
         );
 
         /*
-         * Step 1:
-         * Find the official branch-to-branch route rate.
+         * Step 1: One branch route base rate per shipment.
          */
         $routeRate = $this->routeBaseRate(
             $pickupBranchId,
@@ -82,82 +79,302 @@ final class PricingEngineService
         );
 
         /*
-         * Step 2:
-         * Calculate the parcel's chargeable weight.
+         * Step 2: Build one physical packet for every item.
          *
-         * When all dimensions are available:
-         * chargeable weight = higher of actual weight and
-         * volumetric weight.
-         *
-         * When dimensions are unavailable or incomplete:
-         * chargeable weight = actual weight.
+         * Supported input priority:
+         * 1. packets[] - already separated physical packets
+         * 2. products[] - quantity is expanded into individual packets
+         * 3. legacy top-level parcel fields - one physical packet only
          */
-        $weightMeasurement =
-            $this->calculateChargeableWeight(
-                data: $data,
-                settings: $settings
-            );
-
-        /*
-         * Apply additional-weight pricing above the weight
-         * included in the route base rate.
-         */
-        $weight = $this->weightCharge(
-            weightMeasurement: $weightMeasurement,
-            isSameBranch: $isSameBranch,
+        $packetResult = $this->calculatePackets(
+            data: $data,
             settings: $settings
         );
+
+        $packetInputSource =
+            $packetResult['input_source'];
+
+        $packets =
+            $packetResult['packets'];
+
+        $packetCount = count($packets);
+
+        if (
+            array_key_exists('packet_count', $data) &&
+            (int) $data['packet_count'] !== $packetCount
+        ) {
+            throw ValidationException::withMessages([
+                'packet_count' => [
+                    "The packet count must be {$packetCount} because every physical item is handled as a separate packet.",
+                ],
+            ]);
+        }
+
+        /*
+         * Step 3: Sum chargeable weights from all packets.
+         */
+        $totalActualWeightKg = array_sum(
+            array_column(
+                $packets,
+                'actual_weight_kg'
+            )
+        );
+
+        $totalVolumetricWeightKg = array_sum(
+            array_map(
+                static fn (array $packet): float =>
+                    (float) (
+                        $packet['volumetric_weight_kg']
+                        ?? 0
+                    ),
+                $packets
+            )
+        );
+
+        $totalChargeableWeightKg = array_sum(
+            array_column(
+                $packets,
+                'chargeable_weight_kg'
+            )
+        );
+
+        /*
+         * Step 4: The included base weight applies once to the
+         * shipment, not separately to every packet.
+         */
+        $weightSummary = $this->shipmentWeightCharge(
+            totalChargeableWeightKg:
+                $totalChargeableWeightKg,
+            isSameBranch:
+                $isSameBranch,
+            settings:
+                $settings
+        );
+
+        $totalWeightCharge =
+            (float) $weightSummary['total'];
+
+        /*
+         * Step 5: Allocate the shipment base rate and weight charge
+         * proportionally by packet chargeable weight. These allocations
+         * are used to apply fragile pricing only to fragile packets.
+         */
+        $allocationWeights = array_column(
+            $packets,
+            'chargeable_weight_kg'
+        );
+
+        $allocatedBaseRates = $this->allocateAmount(
+            amount: $baseRate,
+            weights: $allocationWeights
+        );
+
+        $allocatedWeightCharges = $this->allocateAmount(
+            amount: $totalWeightCharge,
+            weights: $allocationWeights
+        );
+
+        /*
+         * Step 6: Apply the fragile multiplier only to each fragile
+         * packet's allocated base-rate and weight-charge portion.
+         */
+        $fragileMultiplier = max(
+            1,
+            (float) (
+                $settings->fragile_multiplier
+                ?? 1.05
+            )
+        );
+
+        $packetBreakdown = [];
+        $totalFragileCharge = 0.0;
+        $fragilePacketCount = 0;
+
+        foreach ($packets as $index => $packet) {
+            $allocatedBaseRate =
+                (float) $allocatedBaseRates[$index];
+
+            $allocatedWeightCharge =
+                (float) $allocatedWeightCharges[$index];
+
+            $fragileCalculationBase =
+                $allocatedBaseRate +
+                $allocatedWeightCharge;
+
+            $isFragile =
+                $packet['parcel_type'] === 'fragile';
+
+            if ($isFragile) {
+                $fragilePacketCount++;
+            }
+
+            $fragileCharge = $isFragile
+                ? (
+                    $fragileCalculationBase *
+                    $fragileMultiplier
+                ) - $fragileCalculationBase
+                : 0.0;
+
+            $packetSubtotal =
+                $allocatedBaseRate +
+                $allocatedWeightCharge +
+                $fragileCharge;
+
+            $totalFragileCharge +=
+                $fragileCharge;
+
+            $packetBreakdown[] = [
+                'packet_reference' =>
+                    $packet['packet_reference'],
+
+                'source' =>
+                    $packet['source'],
+
+                'source_product_index' =>
+                    $packet['source_product_index'],
+
+                'source_unit_index' =>
+                    $packet['source_unit_index'],
+
+                'product_id' =>
+                    $packet['product_id'],
+
+                'name' =>
+                    $packet['name'],
+
+                'quantity' => 1,
+
+                'unit_price' =>
+                    $packet['unit_price'],
+
+                'parcel_type' =>
+                    $packet['parcel_type'],
+
+                'actual_weight_kg' =>
+                    round(
+                        $packet['actual_weight_kg'],
+                        3
+                    ),
+
+                'volumetric_weight_kg' =>
+                    $packet['volumetric_weight_kg'] !== null
+                        ? round(
+                            $packet['volumetric_weight_kg'],
+                            3
+                        )
+                        : null,
+
+                'chargeable_weight_kg' =>
+                    round(
+                        $packet['chargeable_weight_kg'],
+                        3
+                    ),
+
+                'weight_source' =>
+                    $packet['weight_source'],
+
+                'volumetric_applied' =>
+                    $packet['volumetric_applied'],
+
+                'volumetric_status' =>
+                    $packet['volumetric_status'],
+
+                'volumetric_divisor' =>
+                    round(
+                        $packet['volumetric_divisor'],
+                        2
+                    ),
+
+                'dimensions' =>
+                    $packet['dimensions'],
+
+                'allocation_share_percentage' =>
+                    $totalChargeableWeightKg > 0
+                        ? round(
+                            (
+                                $packet['chargeable_weight_kg'] /
+                                $totalChargeableWeightKg
+                            ) * 100,
+                            4
+                        )
+                        : 0.0,
+
+                'allocated_base_rate' =>
+                    round(
+                        $allocatedBaseRate,
+                        2
+                    ),
+
+                'allocated_weight_charge' =>
+                    round(
+                        $allocatedWeightCharge,
+                        2
+                    ),
+
+                'fragile' => [
+                    'applied' =>
+                        $isFragile,
+
+                    'multiplier' =>
+                        $isFragile
+                            ? $fragileMultiplier
+                            : 1.0,
+
+                    'calculation_base' =>
+                        round(
+                            $fragileCalculationBase,
+                            2
+                        ),
+
+                    'total' =>
+                        round(
+                            $fragileCharge,
+                            2
+                        ),
+                ],
+
+                'packet_subtotal' =>
+                    round(
+                        $packetSubtotal,
+                        2
+                    ),
+            ];
+        }
 
         $subtotalBeforeFragile =
             $baseRate +
-            $weight['total'];
-
-        /*
-         * Step 3:
-         * Fragile parcel:
-         *
-         * Above result × 1.05
-         */
-        $fragile = $this->fragileCharge(
-            parcelType: (string) (
-                $data['parcel_type']
-                ?? 'non_fragile'
-            ),
-            calculationBase: $subtotalBeforeFragile,
-            settings: $settings
-        );
+            $totalWeightCharge;
 
         $subtotalAfterFragile =
             $subtotalBeforeFragile +
-            $fragile['total'];
+            $totalFragileCharge;
 
         /*
-         * Step 4:
-         * First 5 KM from the destination branch is included.
-         * Additional distance is charged at Rs. 6 per KM.
+         * Step 7: Extra delivery distance applies once per shipment.
          */
-        $distance =
-            $this->extraDeliveryDistanceCharge(
-                deliveryDistanceKm: $deliveryDistanceKm,
-                settings: $settings
-            );
+        $distance = $this->extraDeliveryDistanceCharge(
+            deliveryDistanceKm:
+                $deliveryDistanceKm,
+            settings:
+                $settings
+        );
 
         $subtotalBeforeSameDay =
             $subtotalAfterFragile +
             $distance['total'];
 
         /*
-         * Step 5:
-         * Same-day delivery:
-         *
-         * Same branch: above result × 1.5
-         * Other branch: above result × 2
+         * Step 8: Same-day multiplier applies once to the shipment.
          */
         $sameDay = $this->sameDayCharge(
-            serviceCode: (string) $serviceType->code,
-            calculationBase: $subtotalBeforeSameDay,
-            isSameBranch: $isSameBranch,
-            settings: $settings
+            serviceCode:
+                (string) $serviceType->code,
+            calculationBase:
+                $subtotalBeforeSameDay,
+            isSameBranch:
+                $isSameBranch,
+            settings:
+                $settings
         );
 
         $subtotalAfterSameDay =
@@ -165,17 +382,14 @@ final class PricingEngineService
             $sameDay['total'];
 
         /*
-         * Step 6:
-         * Add Rs. 50 when the pickup contains fewer than
-         * three packets.
+         * Step 9: Low-packet pickup charge applies once.
          */
         $minimumPacketCharge =
             $this->minimumPacketCharge(
-                packetCount: (int) (
-                    $data['packet_count']
-                    ?? 1
-                ),
-                settings: $settings
+                packetCount:
+                    $packetCount,
+                settings:
+                    $settings
             );
 
         $finalPrice = round(
@@ -195,17 +409,27 @@ final class PricingEngineService
         return [
             'currency' => 'NPR',
 
+            'pricing_model' =>
+                'one_shipment_many_individual_packets',
+
+            'packet_input_source' =>
+                $packetInputSource,
+
             'vat' => [
                 'inclusive' =>
-                    (bool) $settings->vat_inclusive,
+                    (bool) (
+                        $settings->vat_inclusive
+                        ?? true
+                    ),
 
                 'percentage' =>
-                    (float) $settings->vat_percentage,
+                    (float) (
+                        $settings->vat_percentage
+                        ?? 13
+                    ),
 
-                /*
-                 * Official route rates already include VAT.
-                 */
-                'additional_vat_added' => false,
+                'additional_vat_added' =>
+                    false,
             ],
 
             'service_type' => [
@@ -273,6 +497,52 @@ final class PricingEngineService
                     ),
             ],
 
+            'packet_count' =>
+                $packetCount,
+
+            'weight_summary' => [
+                'total_actual_weight_kg' =>
+                    round(
+                        $totalActualWeightKg,
+                        3
+                    ),
+
+                'total_volumetric_weight_kg' =>
+                    round(
+                        $totalVolumetricWeightKg,
+                        3
+                    ),
+
+                'total_chargeable_weight_kg' =>
+                    round(
+                        $totalChargeableWeightKg,
+                        3
+                    ),
+
+                'included_weight_kg' =>
+                    $weightSummary['included_weight_kg'],
+
+                'excess_weight_kg' =>
+                    $weightSummary['excess_weight_kg'],
+
+                'additional_weight_applied' =>
+                    $weightSummary[
+                        'additional_weight_applied'
+                    ],
+
+                'route_type' =>
+                    $weightSummary['route_type'],
+
+                'rate_per_kg' =>
+                    $weightSummary['rate_per_kg'],
+
+                'total_weight_charge' =>
+                    $weightSummary['total'],
+            ],
+
+            'packets' =>
+                $packetBreakdown,
+
             'estimated_hours' =>
                 $estimatedHours,
 
@@ -302,8 +572,8 @@ final class PricingEngineService
                         ),
                 ],
 
-                'weight' =>
-                    $weight,
+                'additional_weight' =>
+                    $weightSummary,
 
                 'subtotal_before_fragile' =>
                     round(
@@ -311,8 +581,26 @@ final class PricingEngineService
                         2
                     ),
 
-                'fragile' =>
-                    $fragile,
+                'fragile' => [
+                    'applied' =>
+                        $totalFragileCharge > 0,
+
+                    'multiplier' =>
+                        $fragileMultiplier,
+
+                    'fragile_packet_count' =>
+                        $fragilePacketCount,
+
+                    'non_fragile_packet_count' =>
+                        $packetCount -
+                        $fragilePacketCount,
+
+                    'total' =>
+                        round(
+                            $totalFragileCharge,
+                            2
+                        ),
+                ],
 
                 'subtotal_after_fragile' =>
                     round(
@@ -351,7 +639,7 @@ final class PricingEngineService
     }
 
     /**
-     * Retrieve the active global pricing configuration.
+     * Retrieve active global pricing settings.
      */
     private function activeSettings(): object
     {
@@ -372,7 +660,7 @@ final class PricingEngineService
     }
 
     /**
-     * Resolve the requested service type.
+     * Resolve an active service type.
      */
     private function serviceType(
         string $code
@@ -380,6 +668,14 @@ final class PricingEngineService
         $normalizedCode = strtolower(
             trim($code)
         );
+
+        if ($normalizedCode === '') {
+            throw ValidationException::withMessages([
+                'service_type' => [
+                    'The service type is required.',
+                ],
+            ]);
+        }
 
         $service = DB::table('service_types')
             ->where(
@@ -404,8 +700,8 @@ final class PricingEngineService
     }
 
     /**
-     * Retrieve the official route base rate for the
-     * resolved pickup and delivery main branches.
+     * Retrieve the official route rate and use the reverse
+     * direction as a fallback when necessary.
      */
     private function routeBaseRate(
         int $pickupBranchId,
@@ -427,10 +723,6 @@ final class PricingEngineService
             ->orderByDesc('id')
             ->first();
 
-        /*
-         * Use the reverse route as a fallback when an
-         * individual reverse rate is not configured.
-         */
         if (!$rule) {
             $rule = DB::table('branch_route_rates')
                 ->where(
@@ -461,75 +753,348 @@ final class PricingEngineService
     }
 
     /**
-     * Calculate actual weight, optional volumetric weight
-     * and the final chargeable weight.
+     * Calculate physical packets.
      *
-     * Dimensions are optional.
-     *
-     * When all dimensions are provided:
-     *
-     * Volumetric weight =
-     * length × width × height ÷ volumetric divisor
-     *
-     * Chargeable weight =
-     * higher of actual and volumetric weight
-     *
-     * When dimensions are missing or incomplete:
-     *
-     * Chargeable weight = actual weight
+     * products[] is expanded so that quantity 3 becomes three
+     * individually handled packets.
      */
-    private function calculateChargeableWeight(
+    private function calculatePackets(
         array $data,
         object $settings
+    ): array {
+        if (
+            isset($data['packets']) &&
+            is_array($data['packets']) &&
+            count($data['packets']) > 0
+        ) {
+            return [
+                'input_source' => 'packets',
+                'packets' => $this->calculateDirectPackets(
+                    packets: $data['packets'],
+                    settings: $settings
+                ),
+            ];
+        }
+
+        if (
+            isset($data['products']) &&
+            is_array($data['products']) &&
+            count($data['products']) > 0
+        ) {
+            return [
+                'input_source' => 'products_expanded_to_packets',
+                'packets' => $this->calculateProductPackets(
+                    products: $data['products'],
+                    settings: $settings
+                ),
+            ];
+        }
+
+        if (
+            isset($data['parcel_weight']) &&
+            (float) $data['parcel_weight'] > 0
+        ) {
+            $legacyPacketCount = max(
+                1,
+                (int) ($data['packet_count'] ?? 1)
+            );
+
+            if ($legacyPacketCount !== 1) {
+                throw ValidationException::withMessages([
+                    'packets' => [
+                        'Individual packets or products are required when packet_count is greater than one.',
+                    ],
+                ]);
+            }
+
+            return [
+                'input_source' => 'legacy_single_packet',
+                'packets' => [
+                    $this->calculatePacket(
+                        packet: [
+                            'packet_reference' =>
+                                'PKT-001',
+                            'product_id' =>
+                                null,
+                            'name' =>
+                                $data['name']
+                                ?? 'Legacy parcel',
+                            'actual_weight_kg' =>
+                                $data['parcel_weight'],
+                            'parcel_type' =>
+                                $data['parcel_type']
+                                ?? 'non_fragile',
+                            'length_cm' =>
+                                $data['parcel_length_cm']
+                                ?? $data['length_cm']
+                                ?? null,
+                            'width_cm' =>
+                                $data['parcel_width_cm']
+                                ?? $data['width_cm']
+                                ?? null,
+                            'height_cm' =>
+                                $data['parcel_height_cm']
+                                ?? $data['height_cm']
+                                ?? null,
+                        ],
+                        settings: $settings,
+                        validationPath: 'parcel',
+                        packetReference: 'PKT-001',
+                        source: 'legacy',
+                        sourceProductIndex: null,
+                        sourceUnitIndex: null
+                    ),
+                ],
+            ];
+        }
+
+        throw ValidationException::withMessages([
+            'packets' => [
+                'Provide packets, products, or one legacy parcel with parcel_weight.',
+            ],
+        ]);
+    }
+
+    /**
+     * Calculate already-separated physical packets.
+     */
+    private function calculateDirectPackets(
+        array $packets,
+        object $settings
+    ): array {
+        $calculatedPackets = [];
+
+        foreach ($packets as $index => $packet) {
+            if (!is_array($packet)) {
+                throw ValidationException::withMessages([
+                    "packets.{$index}" => [
+                        'Each packet must be a valid object.',
+                    ],
+                ]);
+            }
+
+            $quantity = max(
+                1,
+                (int) ($packet['quantity'] ?? 1)
+            );
+
+            if ($quantity !== 1) {
+                throw ValidationException::withMessages([
+                    "packets.{$index}.quantity" => [
+                        'Each packets entry must represent exactly one physical packet. Use separate entries for multiple units.',
+                    ],
+                ]);
+            }
+
+            $packetReference = (string) (
+                $packet['packet_reference']
+                ?? $this->packetReference(
+                    count($calculatedPackets) + 1
+                )
+            );
+
+            $calculatedPackets[] =
+                $this->calculatePacket(
+                    packet: $packet,
+                    settings: $settings,
+                    validationPath: "packets.{$index}",
+                    packetReference: $packetReference,
+                    source: 'packets',
+                    sourceProductIndex: null,
+                    sourceUnitIndex: null
+                );
+        }
+
+        return $calculatedPackets;
+    }
+
+    /**
+     * Expand every product quantity into separate physical packets.
+     */
+    private function calculateProductPackets(
+        array $products,
+        object $settings
+    ): array {
+        $calculatedPackets = [];
+
+        foreach ($products as $productIndex => $product) {
+            if (!is_array($product)) {
+                throw ValidationException::withMessages([
+                    "products.{$productIndex}" => [
+                        'Each product must be a valid object.',
+                    ],
+                ]);
+            }
+
+            $quantity = (int) (
+                $product['quantity']
+                ?? 1
+            );
+
+            if ($quantity < 1) {
+                throw ValidationException::withMessages([
+                    "products.{$productIndex}.quantity" => [
+                        'Product quantity must be at least one.',
+                    ],
+                ]);
+            }
+
+            $unitWeightKg = max(
+                0,
+                (float) (
+                    $product['unit_weight']
+                    ?? $product['actual_weight_kg']
+                    ?? 0
+                )
+            );
+
+            if ($unitWeightKg <= 0) {
+                throw ValidationException::withMessages([
+                    "products.{$productIndex}.unit_weight" => [
+                        'The product unit weight must be greater than zero.',
+                    ],
+                ]);
+            }
+
+            for (
+                $unitIndex = 1;
+                $unitIndex <= $quantity;
+                $unitIndex++
+            ) {
+                $packetNumber =
+                    count($calculatedPackets) + 1;
+
+                $packetReference =
+                    $this->packetReference(
+                        $packetNumber
+                    );
+
+                $calculatedPackets[] =
+                    $this->calculatePacket(
+                        packet: [
+                            'packet_reference' =>
+                                $packetReference,
+                            'product_id' =>
+                                $product['product_id']
+                                ?? null,
+                            'name' =>
+                                $quantity > 1
+                                    ? sprintf(
+                                        '%s - Unit %d',
+                                        (string) (
+                                            $product['name']
+                                            ?? "Product {$productIndex}"
+                                        ),
+                                        $unitIndex
+                                    )
+                                    : (
+                                        $product['name']
+                                        ?? "Product {$productIndex}"
+                                    ),
+                            'actual_weight_kg' =>
+                                $unitWeightKg,
+                            'parcel_type' =>
+                                $product['parcel_type']
+                                ?? 'non_fragile',
+                            'unit_price' =>
+                                $product['unit_price']
+                                ?? null,
+                            'length_cm' =>
+                                $product['length_cm']
+                                ?? $product['parcel_length_cm']
+                                ?? null,
+                            'width_cm' =>
+                                $product['width_cm']
+                                ?? $product['parcel_width_cm']
+                                ?? null,
+                            'height_cm' =>
+                                $product['height_cm']
+                                ?? $product['parcel_height_cm']
+                                ?? null,
+                        ],
+                        settings: $settings,
+                        validationPath:
+                            "products.{$productIndex}",
+                        packetReference:
+                            $packetReference,
+                        source:
+                            'products',
+                        sourceProductIndex:
+                            $productIndex,
+                        sourceUnitIndex:
+                            $unitIndex
+                    );
+            }
+        }
+
+        return $calculatedPackets;
+    }
+
+    /**
+     * Calculate actual, volumetric and chargeable weight for one packet.
+     */
+    private function calculatePacket(
+        array $packet,
+        object $settings,
+        string $validationPath,
+        string $packetReference,
+        string $source,
+        ?int $sourceProductIndex,
+        ?int $sourceUnitIndex
     ): array {
         $actualWeightKg = max(
             0,
             (float) (
-                $data['parcel_weight']
+                $packet['actual_weight_kg']
+                ?? $packet['parcel_weight']
+                ?? $packet['unit_weight']
                 ?? 0
             )
         );
 
         if ($actualWeightKg <= 0) {
             throw ValidationException::withMessages([
-                'parcel_weight' => [
-                    'The parcel actual weight must be greater than zero.',
+                "{$validationPath}.actual_weight_kg" => [
+                    'The packet actual weight must be greater than zero.',
                 ],
             ]);
         }
 
-        /*
-         * Support more than one possible field name so that
-         * quotations from different products can use the
-         * same pricing service.
-         */
+        $parcelType = $this->normalizeParcelType(
+            (string) (
+                $packet['parcel_type']
+                ?? 'non_fragile'
+            ),
+            $validationPath
+        );
+
         $lengthCm = $this->optionalDimension(
-            data: $data,
+            data: $packet,
             possibleKeys: [
-                'parcel_length_cm',
                 'length_cm',
-                'parcel_length',
+                'parcel_length_cm',
                 'length',
+                'parcel_length',
             ]
         );
 
         $widthCm = $this->optionalDimension(
-            data: $data,
+            data: $packet,
             possibleKeys: [
-                'parcel_width_cm',
                 'width_cm',
-                'parcel_width',
+                'parcel_width_cm',
                 'width',
+                'parcel_width',
             ]
         );
 
         $heightCm = $this->optionalDimension(
-            data: $data,
+            data: $packet,
             possibleKeys: [
-                'parcel_height_cm',
                 'height_cm',
-                'parcel_height',
+                'parcel_height_cm',
                 'height',
+                'parcel_height',
             ]
         );
 
@@ -540,18 +1105,9 @@ final class PricingEngineService
 
         $hasCompleteDimensions =
             $lengthCm !== null &&
-            $lengthCm > 0 &&
             $widthCm !== null &&
-            $widthCm > 0 &&
-            $heightCm !== null &&
-            $heightCm > 0;
+            $heightCm !== null;
 
-        /*
-         * Keep the divisor configurable.
-         *
-         * When the database field has not yet been added,
-         * the service temporarily falls back to 5000.
-         */
         $volumetricDivisor = max(
             1,
             (float) (
@@ -588,26 +1144,48 @@ final class PricingEngineService
             }
         }
 
-        if ($hasCompleteDimensions) {
-            $volumetricStatus =
-                'calculated';
-        } elseif ($hasAnyDimension) {
-            /*
-             * One or two dimensions were sent, but the
-             * complete L × W × H measurement was unavailable.
-             */
-            $volumetricStatus =
-                'incomplete_dimensions';
-        } else {
-            $volumetricStatus =
-                'not_provided';
-        }
+        $volumetricStatus = match (true) {
+            $hasCompleteDimensions =>
+                'calculated',
+
+            $hasAnyDimension =>
+                'incomplete_dimensions',
+
+            default =>
+                'not_provided',
+        };
 
         return [
-            /*
-             * Raw values are retained internally so that the
-             * charge is not affected by premature rounding.
-             */
+            'packet_reference' =>
+                $packetReference,
+
+            'source' =>
+                $source,
+
+            'source_product_index' =>
+                $sourceProductIndex,
+
+            'source_unit_index' =>
+                $sourceUnitIndex,
+
+            'product_id' =>
+                isset($packet['product_id'])
+                    ? (string) $packet['product_id']
+                    : null,
+
+            'name' =>
+                isset($packet['name'])
+                    ? (string) $packet['name']
+                    : null,
+
+            'unit_price' =>
+                isset($packet['unit_price'])
+                    ? (float) $packet['unit_price']
+                    : null,
+
+            'parcel_type' =>
+                $parcelType,
+
             'actual_weight_kg' =>
                 $actualWeightKg,
 
@@ -631,22 +1209,66 @@ final class PricingEngineService
 
             'dimensions' => [
                 'length_cm' =>
-                    $lengthCm,
+                    $lengthCm !== null
+                        ? round($lengthCm, 2)
+                        : null,
 
                 'width_cm' =>
-                    $widthCm,
+                    $widthCm !== null
+                        ? round($widthCm, 2)
+                        : null,
 
                 'height_cm' =>
-                    $heightCm,
+                    $heightCm !== null
+                        ? round($heightCm, 2)
+                        : null,
             ],
         ];
     }
 
     /**
-     * Find an optional parcel dimension using the supported
-     * request-field names.
-     *
-     * Missing and empty values return null.
+     * Normalize accepted parcel-type spellings.
+     */
+    private function normalizeParcelType(
+        string $parcelType,
+        string $validationPath
+    ): string {
+        $normalizedType = strtolower(
+            trim($parcelType)
+        );
+
+        $normalizedType = str_replace(
+            ['-', ' '],
+            '_',
+            $normalizedType
+        );
+
+        if ($normalizedType === 'nonfragile') {
+            $normalizedType = 'non_fragile';
+        }
+
+        if (
+            !in_array(
+                $normalizedType,
+                [
+                    'fragile',
+                    'non_fragile',
+                ],
+                true
+            )
+        ) {
+            throw ValidationException::withMessages([
+                "{$validationPath}.parcel_type" => [
+                    'Parcel type must be fragile or non_fragile.',
+                ],
+            ]);
+        }
+
+        return $normalizedType;
+    }
+
+    /**
+     * Find an optional dimension. Missing or empty values return null.
      */
     private function optionalDimension(
         array $data,
@@ -679,168 +1301,69 @@ final class PricingEngineService
     }
 
     /**
-     * Apply the additional-weight charge using the final
-     * chargeable weight.
-     *
-     * Base rate includes up to the configured weight,
-     * normally 1.5 KG.
-     *
-     * Same branch:
-     * Rs. 20 per additional KG.
-     *
-     * Other branch:
-     * Rs. 30 per additional KG.
+     * Create a predictable packet reference.
      */
-    private function weightCharge(
-        array $weightMeasurement,
+    private function packetReference(
+        int $number
+    ): string {
+        return 'PKT-' . str_pad(
+            (string) $number,
+            3,
+            '0',
+            STR_PAD_LEFT
+        );
+    }
+
+    /**
+     * Apply the included weight once to the complete shipment.
+     */
+    private function shipmentWeightCharge(
+        float $totalChargeableWeightKg,
         bool $isSameBranch,
         object $settings
     ): array {
-        $actualWeightKg = max(
-            0,
-            (float)
-            $weightMeasurement['actual_weight_kg']
-        );
-
-        $volumetricWeightKg =
-            $weightMeasurement[
-                'volumetric_weight_kg'
-            ];
-
-        $chargeableWeightKg = max(
-            0,
-            (float)
-            $weightMeasurement[
-                'chargeable_weight_kg'
-            ]
-        );
-
         $includedWeightKg = max(
             0,
-            (float)
-            $settings->included_weight_kg
+            (float) (
+                $settings->included_weight_kg
+                ?? 1.5
+            )
         );
 
         $ratePerKg = $isSameBranch
             ? max(
                 0,
-                (float)
-                $settings
-                    ->same_branch_weight_rate
+                (float) (
+                    $settings->same_branch_weight_rate
+                    ?? 20
+                )
             )
             : max(
                 0,
-                (float)
-                $settings
-                    ->other_branch_weight_rate
+                (float) (
+                    $settings->other_branch_weight_rate
+                    ?? 30
+                )
             );
 
         $excessWeightKg = max(
             0,
-            $chargeableWeightKg -
+            $totalChargeableWeightKg -
             $includedWeightKg
         );
 
         /*
-         * The supplied pricing sheet charges decimal excess
-         * weight directly:
-         *
-         * Base rate + [(3.2 - 1.5) × weight rate]
-         *
-         * Therefore ceil() is not used.
+         * Decimal excess weight is charged directly. No ceil() is used.
          */
         $charge =
             $excessWeightKg *
             $ratePerKg;
 
         return [
-            'actual_weight_kg' =>
+            'total_chargeable_weight_kg' =>
                 round(
-                    $actualWeightKg,
+                    $totalChargeableWeightKg,
                     3
-                ),
-
-            'volumetric_weight_kg' =>
-                $volumetricWeightKg !== null
-                    ? round(
-                        (float)
-                        $volumetricWeightKg,
-                        3
-                    )
-                    : null,
-
-            'chargeable_weight_kg' =>
-                round(
-                    $chargeableWeightKg,
-                    3
-                ),
-
-            'weight_source' =>
-                (string)
-                $weightMeasurement[
-                    'weight_source'
-                ],
-
-            'volumetric_applied' =>
-                (bool)
-                $weightMeasurement[
-                    'volumetric_applied'
-                ],
-
-            'volumetric_status' =>
-                (string)
-                $weightMeasurement[
-                    'volumetric_status'
-                ],
-
-            'dimensions' => [
-                'length_cm' =>
-                    $weightMeasurement[
-                        'dimensions'
-                    ]['length_cm'] !== null
-                        ? round(
-                            (float)
-                            $weightMeasurement[
-                                'dimensions'
-                            ]['length_cm'],
-                            2
-                        )
-                        : null,
-
-                'width_cm' =>
-                    $weightMeasurement[
-                        'dimensions'
-                    ]['width_cm'] !== null
-                        ? round(
-                            (float)
-                            $weightMeasurement[
-                                'dimensions'
-                            ]['width_cm'],
-                            2
-                        )
-                        : null,
-
-                'height_cm' =>
-                    $weightMeasurement[
-                        'dimensions'
-                    ]['height_cm'] !== null
-                        ? round(
-                            (float)
-                            $weightMeasurement[
-                                'dimensions'
-                            ]['height_cm'],
-                            2
-                        )
-                        : null,
-            ],
-
-            'volumetric_divisor' =>
-                round(
-                    (float)
-                    $weightMeasurement[
-                        'volumetric_divisor'
-                    ],
-                    2
                 ),
 
             'included_weight_kg' =>
@@ -878,85 +1401,66 @@ final class PricingEngineService
     }
 
     /**
-     * Apply the fragile-item multiplier.
+     * Allocate an amount proportionally according to packet weights.
+     * The final packet receives the remaining amount so the raw
+     * allocations always add up to the original amount.
      */
-    private function fragileCharge(
-        string $parcelType,
-        float $calculationBase,
-        object $settings
+    private function allocateAmount(
+        float $amount,
+        array $weights
     ): array {
-        $normalizedType = strtolower(
-            trim($parcelType)
+        $weights = array_values(
+            array_map(
+                static fn ($weight): float =>
+                    max(0, (float) $weight),
+                $weights
+            )
         );
 
-        if ($normalizedType !== 'fragile') {
-            return [
-                'applied' => false,
+        $weightCount = count($weights);
 
-                'parcel_type' =>
-                    'non_fragile',
-
-                'multiplier' =>
-                    1.0,
-
-                'calculation_base' =>
-                    round(
-                        $calculationBase,
-                        2
-                    ),
-
-                'total' =>
-                    0.0,
-            ];
+        if ($weightCount === 0) {
+            return [];
         }
 
-        $multiplier = max(
-            1,
-            (float)
-            $settings->fragile_multiplier
-        );
+        $totalWeight = array_sum($weights);
 
-        $multipliedAmount =
-            $calculationBase *
-            $multiplier;
+        if ($totalWeight <= 0) {
+            return array_fill(
+                0,
+                $weightCount,
+                0.0
+            );
+        }
 
-        $charge =
-            $multipliedAmount -
-            $calculationBase;
+        $allocations = [];
+        $remainingAmount = $amount;
 
-        return [
-            'applied' =>
-                true,
+        foreach ($weights as $index => $weight) {
+            $isLast =
+                $index === $weightCount - 1;
 
-            'parcel_type' =>
-                'fragile',
+            if ($isLast) {
+                $allocation =
+                    $remainingAmount;
+            } else {
+                $allocation =
+                    $amount *
+                    ($weight / $totalWeight);
 
-            'multiplier' =>
-                $multiplier,
+                $remainingAmount -=
+                    $allocation;
+            }
 
-            'calculation_base' =>
-                round(
-                    $calculationBase,
-                    2
-                ),
+            $allocations[] =
+                $allocation;
+        }
 
-            'multiplied_amount' =>
-                round(
-                    $multipliedAmount,
-                    2
-                ),
-
-            'total' =>
-                round(
-                    $charge,
-                    2
-                ),
-        ];
+        return $allocations;
     }
 
     /**
-     * Charge for delivery distance beyond the included
-     * destination-branch radius.
+     * Charge for delivery distance beyond the included branch radius.
      */
     private function extraDeliveryDistanceCharge(
         float $deliveryDistanceKm,
@@ -964,16 +1468,18 @@ final class PricingEngineService
     ): array {
         $includedDistanceKm = max(
             0,
-            (float)
-            $settings
-                ->included_delivery_distance_km
+            (float) (
+                $settings->included_delivery_distance_km
+                ?? 5
+            )
         );
 
         $ratePerKm = max(
             0,
-            (float)
-            $settings
-                ->extra_distance_rate_per_km
+            (float) (
+                $settings->extra_distance_rate_per_km
+                ?? 6
+            )
         );
 
         $extraDistanceKm = max(
@@ -1023,7 +1529,7 @@ final class PricingEngineService
     }
 
     /**
-     * Apply the same-day delivery multiplier.
+     * Apply the same-day multiplier once to the shipment.
      */
     private function sameDayCharge(
         string $serviceCode,
@@ -1060,22 +1566,26 @@ final class PricingEngineService
         }
 
         $this->validateSameDayCutoff(
-            (string)
-            $settings->same_day_cutoff_time
+            (string) (
+                $settings->same_day_cutoff_time
+                ?? '12:00:00'
+            )
         );
 
         $multiplier = $isSameBranch
             ? max(
                 1,
-                (float)
-                $settings
-                    ->same_branch_sdd_multiplier
+                (float) (
+                    $settings->same_branch_sdd_multiplier
+                    ?? 1.5
+                )
             )
             : max(
                 1,
-                (float)
-                $settings
-                    ->other_branch_sdd_multiplier
+                (float) (
+                    $settings->other_branch_sdd_multiplier
+                    ?? 2
+                )
             );
 
         $multipliedAmount =
@@ -1119,8 +1629,7 @@ final class PricingEngineService
     }
 
     /**
-     * Reject same-day requests submitted at or after the
-     * configured cutoff time.
+     * Reject same-day requests submitted at or after the cutoff.
      */
     private function validateSameDayCutoff(
         string $cutoffTime
@@ -1153,8 +1662,7 @@ final class PricingEngineService
     }
 
     /**
-     * Charge Rs. 50 when a pickup contains fewer than the
-     * configured minimum packet count.
+     * Apply the low-packet pickup charge once.
      */
     private function minimumPacketCharge(
         int $packetCount,
@@ -1167,9 +1675,10 @@ final class PricingEngineService
 
         $minimumPackets = max(
             1,
-            (int)
-            $settings
-                ->minimum_pickup_packets
+            (int) (
+                $settings->minimum_pickup_packets
+                ?? 3
+            )
         );
 
         $isApplied =
@@ -1179,9 +1688,10 @@ final class PricingEngineService
         $charge = $isApplied
             ? max(
                 0,
-                (float)
-                $settings
-                    ->low_packet_pickup_charge
+                (float) (
+                    $settings->low_packet_pickup_charge
+                    ?? 50
+                )
             )
             : 0.0;
 

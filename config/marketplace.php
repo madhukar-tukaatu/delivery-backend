@@ -15,4 +15,10 @@ return [
         'MARKETPLACE_PRICING_RATE_LIMIT',
         300
     ),
+
+    // 'store_packet_mode' => env(
+    //     'MARKETPLACE_STORE_PACKET_MODE',
+    //     'single_per_store'
+    // ),
+     'store_packet_mode' => 'single_per_store',
 ];

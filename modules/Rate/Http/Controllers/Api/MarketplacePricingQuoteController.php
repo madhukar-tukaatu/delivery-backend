@@ -156,6 +156,14 @@ final class MarketplacePricingQuoteController extends Controller
             $quote->snapshot_json ?? null
         );
 
+        /*
+         * New snapshots store pricing output under the quote key. Keep the
+         * fallback for older flat snapshots.
+         */
+        $quoteSnapshot = is_array($snapshot['quote'] ?? null)
+            ? $snapshot['quote']
+            : $snapshot;
+
         return [
             'pricing_quote_id' => (int) $quote->id,
             'quote_number' => $quote->quote_number,
@@ -164,30 +172,36 @@ final class MarketplacePricingQuoteController extends Controller
                 : null,
             'external_store_id' =>
                 $quote->external_store_id ?? null,
+            'packing_policy' =>
+                $snapshot['packing_policy'] ?? 'single_per_store',
+            'products' => $snapshot['products'] ?? [],
+            'contains_fragile_product' =>
+                (bool) ($quoteSnapshot['contains_fragile_product']
+                    ?? ($quote->parcel_type === 'fragile')),
             'packet_count' => isset($quote->packet_count)
                 ? (int) $quote->packet_count
-                : (int) ($snapshot['packet_count'] ?? 0),
+                : (int) ($quoteSnapshot['packet_count'] ?? 0),
             'parcel_weight' => (float) $quote->parcel_weight,
             'parcel_value' => (float) ($quote->parcel_value ?? 0),
             'parcel_type' => $quote->parcel_type,
             'payment_type' => $quote->payment_type,
             'pod_amount' => (float) ($quote->pod_amount ?? 0),
-            'pickup_branch' => $snapshot['pickup_branch'] ?? null,
-            'delivery_branch' => $snapshot['delivery_branch'] ?? null,
-            'customer_pricing_route' => $snapshot['route'] ?? null,
-            'transfer_route' => $snapshot['transfer_route'] ?? null,
+            'pickup_branch' => $quoteSnapshot['pickup_branch'] ?? null,
+            'delivery_branch' => $quoteSnapshot['delivery_branch'] ?? null,
+            'customer_pricing_route' => $quoteSnapshot['route'] ?? null,
+            'transfer_route' => $quoteSnapshot['transfer_route'] ?? null,
             'service_type' =>
-                $snapshot['service_type'] ?? $quote->service_type,
-            'packets' => $snapshot['packets'] ?? [],
-            'weight_summary' => $snapshot['weight_summary'] ?? [],
-            'breakdown' => $snapshot['breakdown'] ?? [],
+                $quoteSnapshot['service_type'] ?? $quote->service_type,
+            'packets' => $quoteSnapshot['packets'] ?? [],
+            'weight_summary' => $quoteSnapshot['weight_summary'] ?? [],
+            'breakdown' => $quoteSnapshot['breakdown'] ?? [],
             'delivery_charge' => (float) $quote->final_price,
             'currency' => $quote->currency ?? 'NPR',
             'status' => $quote->status,
             'pricing_estimated_hours' =>
-                (int) ($snapshot['pricing_estimated_hours'] ?? 0),
+                (int) ($quoteSnapshot['pricing_estimated_hours'] ?? 0),
             'operational_estimated_hours' =>
-                (int) ($snapshot['operational_estimated_hours'] ?? 0),
+                (int) ($quoteSnapshot['operational_estimated_hours'] ?? 0),
             'estimated_hours' => $quote->estimated_hours !== null
                 ? (int) $quote->estimated_hours
                 : null,

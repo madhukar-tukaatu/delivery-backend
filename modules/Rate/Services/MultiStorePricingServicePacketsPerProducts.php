@@ -9,7 +9,7 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use JsonException;
 
-class MultiStorePricingService
+class MultiStorePricingServicePacketsPerProducts
 {
     public function __construct(
         private readonly PricingEngineService $pricingEngine,
@@ -194,6 +194,8 @@ class MultiStorePricingService
                 'delivery_address' => $delivery['address'],
                 'delivery_latitude' => $delivery['latitude'],
                 'delivery_longitude' => $delivery['longitude'],
+                'products' => $summary['products'],
+                'packets' => $summary['packets'],
                 'parcel_weight' => $summary['parcel_weight'],
                 'parcel_value' => $summary['parcel_value'],
                 'parcel_type' => $summary['parcel_type'],
@@ -202,21 +204,6 @@ class MultiStorePricingService
                 'pod_amount' => $podAmount,
                 'service_type' => $serviceType,
             ];
-
-            /*
-             * Only one pricing input type is sent to PricingEngineService.
-             *
-             * Current CEO policy:
-             *   one marketplace store = one combined physical packet.
-             *
-             * Future policies can switch through configuration without
-             * changing this service contract.
-             */
-            if ($summary['pricing_packets'] !== []) {
-                $payload['packets'] = $summary['pricing_packets'];
-            } elseif ($summary['pricing_products'] !== []) {
-                $payload['products'] = $summary['pricing_products'];
-            }
 
             /*
              * Customer price comes from the direct branch_route_rates record
@@ -316,9 +303,8 @@ class MultiStorePricingService
                 'pickup_longitude' =>
                     (float) $store['pickup_longitude'],
                 'products' => $summary['products'],
-                'packets_input' => $summary['packets_input'],
+                'packets_input' => $summary['packets'],
                 'input_mode' => $summary['input_mode'],
-                'packing_policy' => $summary['packing_policy'],
                 'product_count' => $summary['product_count'],
                 'packet_count' => (int) (
                     $quote['packet_count'] ?? $summary['packet_count']
@@ -326,8 +312,6 @@ class MultiStorePricingService
                 'parcel_weight' => $summary['parcel_weight'],
                 'parcel_value' => $summary['parcel_value'],
                 'parcel_type' => $summary['parcel_type'],
-                'contains_fragile_product' =>
-                    $summary['contains_fragile_product'],
                 'payment_type' => $paymentType,
                 'pod_amount' => round($podAmount, 2),
                 'service_type_requested' => $serviceType,
@@ -373,12 +357,11 @@ class MultiStorePricingService
         $products = is_array($store['products'] ?? null)
             ? array_values($store['products'])
             : [];
-
-        $packetsInput = is_array($store['packets'] ?? null)
+        $packets = is_array($store['packets'] ?? null)
             ? array_values($store['packets'])
             : [];
 
-        if ($products !== [] && $packetsInput !== []) {
+        if ($products !== [] && $packets !== []) {
             throw ValidationException::withMessages([
                 "stores.{$index}" => [
                     'Products and packets cannot be used together for one store.',
@@ -389,29 +372,20 @@ class MultiStorePricingService
         $inputMode = (string) (
             $store['input_mode'] ?? match (true) {
                 $products !== [] => 'products',
-                $packetsInput !== [] => 'packets',
+                $packets !== [] => 'packets',
                 default => 'legacy_single_parcel',
             }
         );
 
-        $packingPolicy = $this->packingPolicy();
-
         $parcelWeight = 0.0;
         $parcelValue = 0.0;
+        $packetCount = 0;
         $productCount = 0;
         $containsFragile =
             ($store['parcel_type'] ?? null) === 'fragile';
 
         if ($products !== []) {
             foreach ($products as $key => $product) {
-                if (!is_array($product)) {
-                    throw ValidationException::withMessages([
-                        "stores.{$index}.products.{$key}" => [
-                            'Each product must be a valid object.',
-                        ],
-                    ]);
-                }
-
                 $quantity = max(
                     1,
                     (int) ($product['quantity'] ?? 1)
@@ -428,34 +402,18 @@ class MultiStorePricingService
                     $product['parcel_type'] ?? 'non_fragile'
                 );
 
-                $products[$key]['quantity'] = $quantity;
-                $products[$key]['unit_weight'] = $unitWeight;
-                $products[$key]['unit_price'] = $unitPrice;
                 $products[$key]['parcel_type'] = $type;
-
                 $parcelWeight += $quantity * $unitWeight;
                 $parcelValue += $quantity * $unitPrice;
+                $packetCount += $quantity;
                 $productCount += $quantity;
-                $containsFragile =
-                    $containsFragile || $type === 'fragile';
+                $containsFragile = $containsFragile || $type === 'fragile';
             }
-        } elseif ($packetsInput !== []) {
-            foreach ($packetsInput as $key => $packet) {
-                if (!is_array($packet)) {
-                    throw ValidationException::withMessages([
-                        "stores.{$index}.packets.{$key}" => [
-                            'Each packet must be a valid object.',
-                        ],
-                    ]);
-                }
-
+        } elseif ($packets !== []) {
+            foreach ($packets as $key => $packet) {
                 $actualWeight = max(
                     0,
-                    (float) (
-                        $packet['actual_weight']
-                        ?? $packet['actual_weight_kg']
-                        ?? 0
-                    )
+                    (float) ($packet['actual_weight'] ?? 0)
                 );
                 $declaredValue = max(
                     0,
@@ -465,13 +423,13 @@ class MultiStorePricingService
                     $packet['parcel_type'] ?? 'non_fragile'
                 );
 
-                $packetsInput[$key]['quantity'] = 1;
-                $packetsInput[$key]['parcel_type'] = $type;
+                $packets[$key]['quantity'] = 1;
+                $packets[$key]['parcel_type'] = $type;
                 $parcelWeight += $actualWeight;
                 $parcelValue += $declaredValue;
+                $packetCount++;
                 $productCount++;
-                $containsFragile =
-                    $containsFragile || $type === 'fragile';
+                $containsFragile = $containsFragile || $type === 'fragile';
             }
         } else {
             $parcelWeight = max(
@@ -482,10 +440,11 @@ class MultiStorePricingService
                 0,
                 (float) ($store['parcel_value'] ?? 0)
             );
-            $productCount = max(
+            $packetCount = max(
                 1,
-                (int) ($store['product_count'] ?? 1)
+                (int) ($store['packet_count'] ?? 1)
             );
+            $productCount = $packetCount;
         }
 
         if ($parcelWeight <= 0) {
@@ -501,148 +460,29 @@ class MultiStorePricingService
             : 'non_fragile';
 
         /*
-         * Fragility is evaluated only for this store. Individual product
-         * types remain unchanged; only the combined physical packet uses
-         * the effective store-level parcel type.
+         * Whole-store fragile rule.
          */
-
-        $pricingProducts = [];
-        $pricingPackets = [];
-        $packetCount = 1;
-
-        if ($packingPolicy === 'single_per_store') {
-            /*
-             * All products from this marketplace store are consolidated
-             * into one physical packet for pricing and later shipment creation.
-             */
-            $pricingPackets[] = [
-                'packet_reference' => sprintf(
-                    'STORE-%d-PKT-001',
-                    $index + 1
-                ),
-                'name' => sprintf(
-                    'Combined store order: %s',
-                    (string) (
-                        $store['external_store_id']
-                        ?? $store['store_id']
-                        ?? ($index + 1)
-                    )
-                ),
-                'quantity' => 1,
-                'actual_weight_kg' => round($parcelWeight, 3),
-                'unit_price' => round($parcelValue, 2),
-                'declared_value' => round($parcelValue, 2),
-                'parcel_type' => $parcelType,
-                'length_cm' => $store['package_length_cm'] ?? null,
-                'width_cm' => $store['package_width_cm'] ?? null,
-                'height_cm' => $store['package_height_cm'] ?? null,
-            ];
-
-            $packetCount = 1;
-        } elseif ($packingPolicy === 'per_product_quantity') {
-            if ($products !== []) {
-                $pricingProducts = $products;
-                $packetCount = max(1, $productCount);
-            } elseif ($packetsInput !== []) {
-                $pricingPackets = $this->normalisePricingPackets(
-                    $packetsInput
-                );
-                $packetCount = count($pricingPackets);
-            } else {
-                $pricingPackets[] = [
-                    'packet_reference' => 'PKT-001',
-                    'name' => 'Store parcel',
-                    'quantity' => 1,
-                    'actual_weight_kg' => round($parcelWeight, 3),
-                    'unit_price' => round($parcelValue, 2),
-                    'parcel_type' => $parcelType,
-                    'length_cm' => $store['package_length_cm'] ?? null,
-                    'width_cm' => $store['package_width_cm'] ?? null,
-                    'height_cm' => $store['package_height_cm'] ?? null,
-                ];
-                $packetCount = 1;
-            }
-        } elseif ($packingPolicy === 'explicit_packets') {
-            if ($packetsInput === []) {
-                throw ValidationException::withMessages([
-                    "stores.{$index}.packets" => [
-                        'Explicit packets are required by the current marketplace packing policy.',
-                    ],
-                ]);
+        if ($containsFragile) {
+            foreach ($products as $key => $product) {
+                $products[$key]['parcel_type'] = 'fragile';
             }
 
-            $pricingPackets = $this->normalisePricingPackets(
-                $packetsInput
-            );
-            $packetCount = count($pricingPackets);
+            foreach ($packets as $key => $packet) {
+                $packets[$key]['parcel_type'] = 'fragile';
+                $packets[$key]['is_fragile'] = true;
+            }
         }
 
         return [
             'products' => $products,
-            'packets_input' => $packetsInput,
-            'pricing_products' => $pricingProducts,
-            'pricing_packets' => $pricingPackets,
+            'packets' => $packets,
             'input_mode' => $inputMode,
-            'packing_policy' => $packingPolicy,
-            'product_count' => max(1, $productCount),
+            'product_count' => $productCount,
             'packet_count' => max(1, $packetCount),
             'parcel_weight' => round($parcelWeight, 3),
             'parcel_value' => round($parcelValue, 2),
             'parcel_type' => $parcelType,
-            'contains_fragile_product' => $containsFragile,
         ];
-    }
-
-    private function normalisePricingPackets(array $packets): array
-    {
-        return array_values(array_map(
-            function (array $packet, int $index): array {
-                return [
-                    ...$packet,
-                    'packet_reference' => (string) (
-                        $packet['packet_reference']
-                        ?? $packet['packet_id']
-                        ?? sprintf('PKT-%03d', $index + 1)
-                    ),
-                    'quantity' => 1,
-                    'actual_weight_kg' => (float) (
-                        $packet['actual_weight_kg']
-                        ?? $packet['actual_weight']
-                        ?? 0
-                    ),
-                    'unit_price' => (float) (
-                        $packet['unit_price']
-                        ?? $packet['declared_value']
-                        ?? 0
-                    ),
-                    'parcel_type' => $this->normaliseParcelType(
-                        $packet['parcel_type'] ?? 'non_fragile'
-                    ),
-                ];
-            },
-            $packets,
-            array_keys($packets)
-        ));
-    }
-
-    private function packingPolicy(): string
-    {
-        $policy = strtolower(trim((string) config(
-            'marketplace.store_packet_mode',
-            'single_per_store'
-        )));
-
-        return in_array(
-            $policy,
-            [
-                'single_per_store',
-                'per_product_quantity',
-                'explicit_packets',
-            ],
-            true
-        )
-            ? $policy
-            : 'single_per_store';
     }
 
     private function validateQuote(array $quote, int $storeIndex): void
@@ -709,7 +549,6 @@ class MultiStorePricingService
             'store_id' => $store['store_id'],
             'external_store_id' => $store['external_store_id'],
             'input_mode' => $store['input_mode'],
-            'packing_policy' => $store['packing_policy'],
             'products' => $store['products'],
             'packets' => $quote['packets'] ?? [],
             'product_count' => $store['product_count'],
@@ -717,8 +556,6 @@ class MultiStorePricingService
             'parcel_weight' => $store['parcel_weight'],
             'parcel_value' => $store['parcel_value'],
             'parcel_type' => $store['parcel_type'],
-            'contains_fragile_product' =>
-                $store['contains_fragile_product'],
             'payment_type' => $store['payment_type'],
             'pod_amount' => $store['pod_amount'],
             'pickup_branch' => $quote['pickup_branch'],
@@ -798,20 +635,8 @@ class MultiStorePricingService
             'expires_at' => $this->toDatabaseDateTime(
                 $quote['valid_until'] ?? null
             ),
-            /*
-             * Preserve the packing policy used at quote time. Existing quotes
-             * must not change when the configured policy changes later.
-             */
             'snapshot_json' => $this->encodeJson(
-                $this->serialiseDates([
-                    'packing_policy' =>
-                        $storeCalculation['packing_policy'],
-                    'products' =>
-                        $storeCalculation['products'],
-                    'packets_input' =>
-                        $storeCalculation['packets_input'],
-                    'quote' => $quote,
-                ])
+                $this->serialiseDates($quote)
             ),
             'status' => 'pending',
             'created_at' => now(),
@@ -853,6 +678,7 @@ class MultiStorePricingService
         }
 
         $rows = [];
+        $effectiveParcelType = $storeCalculation['parcel_type'];
 
         foreach ($storeCalculation['products'] as $product) {
             $quantity = max(
@@ -881,9 +707,7 @@ class MultiStorePricingService
                         $unitPrice * $quantity,
                         2
                     ),
-                    'parcel_type' => $this->normaliseParcelType(
-                        $product['parcel_type'] ?? 'non_fragile'
-                    ),
+                    'parcel_type' => $effectiveParcelType,
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]
@@ -907,9 +731,7 @@ class MultiStorePricingService
                         (float) ($packet['declared_value'] ?? 0),
                     'total_price' =>
                         (float) ($packet['declared_value'] ?? 0),
-                    'parcel_type' => $this->normaliseParcelType(
-                        $packet['parcel_type'] ?? 'non_fragile'
-                    ),
+                    'parcel_type' => $effectiveParcelType,
                     'created_at' => now(),
                     'updated_at' => now(),
                 ]

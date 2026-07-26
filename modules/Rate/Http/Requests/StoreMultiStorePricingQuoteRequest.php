@@ -15,548 +15,65 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
 
     protected function prepareForValidation(): void
     {
-        $delivery = $this->input('delivery', []);
-
-        if (!is_array($delivery)) {
-            $delivery = [];
-        }
-
         $serviceType = $this->normalizeServiceType(
-            $this->input(
-                'service_type',
-                'standard'
-            )
+            $this->input('service_type', 'standard')
         );
 
         $paymentType = $this->normalizePaymentType(
-            $this->input(
-                'payment_type',
-                'prepaid'
-            )
+            $this->input('payment_type', 'prepaid')
         );
 
-        /*
-         * Support either:
-         *
-         * "store": {...}
-         *
-         * or:
-         *
-         * "stores": [{...}, {...}]
-         */
-        $stores = $this->input('stores');
+        $delivery = $this->input('delivery');
 
-        if (!is_array($stores)) {
-            $singleStore = $this->input('store');
+        $deliveryAddress = $this->input(
+            'delivery_address',
+            is_array($delivery) ? ($delivery['address'] ?? null) : null
+        );
 
-            $stores = is_array($singleStore)
-                ? [$singleStore]
-                : [];
-        }
+        $deliveryLatitude = $this->input(
+            'delivery_latitude',
+            is_array($delivery) ? ($delivery['latitude'] ?? null) : null
+        );
+
+        $deliveryLongitude = $this->input(
+            'delivery_longitude',
+            is_array($delivery) ? ($delivery['longitude'] ?? null) : null
+        );
+
+        $stores = $this->input('stores', []);
+        $stores = is_array($stores) ? $stores : [];
 
         $normalizedStores = [];
 
         foreach ($stores as $store) {
             if (!is_array($store)) {
                 $normalizedStores[] = $store;
-
                 continue;
             }
 
-            $normalizedStores[] =
-                $this->normalizeStore(
-                    store: $store,
-                    defaultServiceType: $serviceType,
-                    defaultPaymentType: $paymentType
-                );
+            if (
+                empty($store['products']) &&
+                !empty($store['items']) &&
+                is_array($store['items'])
+            ) {
+                $store['products'] = $store['items'];
+            }
+
+            $normalizedStores[] = $this->normalizeStore(
+                $store,
+                $serviceType,
+                $paymentType
+            );
         }
 
-        /*
-         * Replace the original payload with a consistent
-         * marketplace pricing structure.
-         */
-        $this->replace([
-            'external_checkout_id' =>
-                $this->input(
-                    'external_checkout_id'
-                ),
-
-            'delivery_address' =>
-                $this->input(
-                    'delivery_address',
-                    $delivery['address'] ?? null
-                ),
-
-            'delivery_latitude' =>
-                $this->input(
-                    'delivery_latitude',
-                    $delivery['latitude'] ?? null
-                ),
-
-            'delivery_longitude' =>
-                $this->input(
-                    'delivery_longitude',
-                    $delivery['longitude'] ?? null
-                ),
-
-            'service_type' =>
-                $serviceType,
-
-            'payment_type' =>
-                $paymentType,
-
-            'stores' =>
-                $normalizedStores,
+        $this->merge([
+            'delivery_address' => $deliveryAddress,
+            'delivery_latitude' => $deliveryLatitude,
+            'delivery_longitude' => $deliveryLongitude,
+            'service_type' => $serviceType,
+            'payment_type' => $paymentType,
+            'stores' => $normalizedStores,
         ]);
-    }
-
-    private function normalizeStore(
-        array $store,
-        string $defaultServiceType,
-        string $defaultPaymentType
-    ): array {
-        $pickup = $store['pickup'] ?? [];
-
-        if (!is_array($pickup)) {
-            $pickup = [];
-        }
-
-        $serviceType =
-            $this->normalizeServiceType(
-                $store['service_type']
-                    ?? $defaultServiceType
-            );
-
-        $paymentType =
-            $this->normalizePaymentType(
-                $store['payment_type']
-                    ?? $defaultPaymentType
-            );
-
-        /*
-         * Support older "items" payloads as products.
-         */
-        $products =
-            $store['products']
-            ?? $store['items']
-            ?? null;
-
-        $packets =
-            $store['packets']
-            ?? null;
-
-        /*
-         * Empty arrays must be treated as absent.
-         *
-         * This prevents:
-         *
-         * stores.0.packets must have at least 1 items
-         */
-        $hasProducts =
-            is_array($products) &&
-            count($products) > 0;
-
-        $hasPackets =
-            is_array($packets) &&
-            count($packets) > 0;
-
-        $normalized = [
-            'store_id' =>
-                isset($store['store_id'])
-                    ? (int) $store['store_id']
-                    : null,
-
-            'external_store_id' =>
-                $store['external_store_id']
-                    ?? null,
-
-            'pickup_address' =>
-                $store['pickup_address']
-                    ?? $pickup['address']
-                    ?? null,
-
-            'pickup_latitude' =>
-                $store['pickup_latitude']
-                    ?? $pickup['latitude']
-                    ?? null,
-
-            'pickup_longitude' =>
-                $store['pickup_longitude']
-                    ?? $pickup['longitude']
-                    ?? null,
-
-            'service_type' =>
-                $serviceType,
-
-            'payment_type' =>
-                $paymentType,
-
-            'pod_amount' =>
-                isset($store['pod_amount'])
-                    ? (float) $store['pod_amount']
-                    : null,
-        ];
-
-        /*
-         * Product-based marketplace shipment.
-         */
-        if ($hasProducts) {
-            $productResult =
-                $this->normalizeProducts(
-                    $products
-                );
-
-            $normalized['pricing_input_mode'] =
-                'products';
-
-            $normalized['products'] =
-                $productResult['products'];
-
-            $normalized['packet_count'] =
-                $productResult['packet_count'];
-
-            $normalized['parcel_weight'] =
-                $productResult['parcel_weight'];
-
-            $normalized['parcel_value'] =
-                $productResult['parcel_value'];
-
-            $normalized['parcel_type'] =
-                $productResult['parcel_type'];
-
-            /*
-             * Do not add:
-             *
-             * 'packets' => []
-             */
-            return $normalized;
-        }
-
-        /*
-         * Direct physical-packet shipment.
-         */
-        if ($hasPackets) {
-            $packetResult =
-                $this->normalizePackets(
-                    $packets
-                );
-
-            $normalized['pricing_input_mode'] =
-                'packets';
-
-            $normalized['packets'] =
-                $packetResult['packets'];
-
-            $normalized['packet_count'] =
-                $packetResult['packet_count'];
-
-            $normalized['parcel_weight'] =
-                $packetResult['parcel_weight'];
-
-            $normalized['parcel_value'] =
-                $packetResult['parcel_value'];
-
-            $normalized['parcel_type'] =
-                $packetResult['parcel_type'];
-
-            /*
-             * Do not add:
-             *
-             * 'products' => []
-             */
-            return $normalized;
-        }
-
-        /*
-         * Legacy aggregate parcel mode.
-         */
-        $hasLegacyParcel =
-            array_key_exists(
-                'parcel_weight',
-                $store
-            ) &&
-            $store['parcel_weight'] !== null &&
-            $store['parcel_weight'] !== '';
-
-        if ($hasLegacyParcel) {
-            $normalized['pricing_input_mode'] =
-                'legacy_single_parcel';
-
-            $normalized['parcel_weight'] =
-                max(
-                    0,
-                    (float) $store['parcel_weight']
-                );
-
-            $normalized['parcel_value'] =
-                max(
-                    0,
-                    (float) (
-                        $store['parcel_value']
-                        ?? 0
-                    )
-                );
-
-            $normalized['parcel_type'] =
-                $this->normalizeParcelType(
-                    $store['parcel_type']
-                        ?? 'non_fragile'
-                );
-
-            $normalized['packet_count'] =
-                max(
-                    1,
-                    (int) (
-                        $store['packet_count']
-                        ?? 1
-                    )
-                );
-
-            return $normalized;
-        }
-
-        /*
-         * Validation will return a proper error because
-         * no products, packets or parcel weight exists.
-         */
-        $normalized['pricing_input_mode'] =
-            'missing';
-
-        return $normalized;
-    }
-
-    private function normalizeProducts(
-        array $products
-    ): array {
-        $normalizedProducts = [];
-
-        $totalWeight = 0.0;
-        $totalValue = 0.0;
-        $packetCount = 0;
-        $containsFragile = false;
-
-        foreach ($products as $product) {
-            if (!is_array($product)) {
-                continue;
-            }
-
-            $quantity = max(
-                1,
-                (int) (
-                    $product['quantity']
-                    ?? 1
-                )
-            );
-
-            $unitWeight = max(
-                0,
-                (float) (
-                    $product['unit_weight']
-                    ?? 0
-                )
-            );
-
-            $unitPrice = max(
-                0,
-                (float) (
-                    $product['unit_price']
-                    ?? 0
-                )
-            );
-
-            $parcelType =
-                $this->normalizeParcelType(
-                    $product['parcel_type']
-                        ?? 'non_fragile'
-                );
-
-            if ($parcelType === 'fragile') {
-                $containsFragile = true;
-            }
-
-            $packetCount += $quantity;
-
-            $totalWeight +=
-                $quantity * $unitWeight;
-
-            $totalValue +=
-                $quantity * $unitPrice;
-
-            $normalizedProducts[] = [
-                ...$product,
-
-                'quantity' =>
-                    $quantity,
-
-                'unit_weight' =>
-                    $unitWeight,
-
-                'unit_price' =>
-                    $unitPrice,
-
-                'parcel_type' =>
-                    $parcelType,
-            ];
-        }
-
-        /*
-         * Whole-store fragile rule:
-         *
-         * If one product is fragile, all products and
-         * all resulting packets become fragile.
-         */
-        if ($containsFragile) {
-            $normalizedProducts = array_map(
-                static function (
-                    array $product
-                ): array {
-                    $product['parcel_type'] =
-                        'fragile';
-
-                    return $product;
-                },
-                $normalizedProducts
-            );
-        }
-
-        return [
-            'products' =>
-                $normalizedProducts,
-
-            'packet_count' =>
-                max(1, $packetCount),
-
-            'parcel_weight' =>
-                round($totalWeight, 3),
-
-            'parcel_value' =>
-                round($totalValue, 2),
-
-            'parcel_type' =>
-                $containsFragile
-                    ? 'fragile'
-                    : 'non_fragile',
-        ];
-    }
-
-    private function normalizePackets(
-        array $packets
-    ): array {
-        $normalizedPackets = [];
-
-        $totalWeight = 0.0;
-        $totalValue = 0.0;
-        $containsFragile = false;
-
-        foreach ($packets as $packet) {
-            if (!is_array($packet)) {
-                continue;
-            }
-
-            $actualWeight = max(
-                0,
-                (float) (
-                    $packet['actual_weight']
-                    ?? $packet['weight']
-                    ?? 0
-                )
-            );
-
-            $declaredValue = max(
-                0,
-                (float) (
-                    $packet['declared_value']
-                    ?? $packet['unit_price']
-                    ?? 0
-                )
-            );
-
-            $parcelType =
-                $this->normalizeParcelType(
-                    $packet['parcel_type']
-                        ?? 'non_fragile'
-                );
-
-            $isFragile =
-                $parcelType === 'fragile' ||
-                (bool) (
-                    $packet['is_fragile']
-                    ?? false
-                );
-
-            if ($isFragile) {
-                $containsFragile = true;
-            }
-
-            $totalWeight +=
-                $actualWeight;
-
-            $totalValue +=
-                $declaredValue;
-
-            $normalizedPackets[] = [
-                ...$packet,
-
-                'actual_weight' =>
-                    $actualWeight,
-
-                'declared_value' =>
-                    $declaredValue,
-
-                'quantity' => 1,
-
-                'parcel_type' =>
-                    $isFragile
-                        ? 'fragile'
-                        : 'non_fragile',
-
-                'is_fragile' =>
-                    $isFragile,
-            ];
-        }
-
-        /*
-         * If one physical packet is fragile, mark all
-         * packets from this store as fragile.
-         */
-        if ($containsFragile) {
-            $normalizedPackets = array_map(
-                static function (
-                    array $packet
-                ): array {
-                    $packet['parcel_type'] =
-                        'fragile';
-
-                    $packet['is_fragile'] =
-                        true;
-
-                    return $packet;
-                },
-                $normalizedPackets
-            );
-        }
-
-        return [
-            'packets' =>
-                $normalizedPackets,
-
-            'packet_count' =>
-                max(
-                    1,
-                    count($normalizedPackets)
-                ),
-
-            'parcel_weight' =>
-                round($totalWeight, 3),
-
-            'parcel_value' =>
-                round($totalValue, 2),
-
-            'parcel_type' =>
-                $containsFragile
-                    ? 'fragile'
-                    : 'non_fragile',
-        ];
     }
 
     public function rules(): array
@@ -588,19 +105,12 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
 
             'service_type' => [
                 'required',
-                Rule::in([
-                    'standard',
-                    'express',
-                    'same_day',
-                ]),
+                Rule::in(['standard', 'express', 'same_day']),
             ],
 
             'payment_type' => [
                 'required',
-                Rule::in([
-                    'prepaid',
-                    'pod',
-                ]),
+                Rule::in(['prepaid', 'pod']),
             ],
 
             'stores' => [
@@ -610,6 +120,10 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
                 'max:50',
             ],
 
+            /*
+             * Marketplace stores may be identified either by Tukaatu's
+             * internal store_id or the marketplace's external_store_id.
+             */
             'stores.*.store_id' => [
                 'nullable',
                 'integer',
@@ -641,21 +155,26 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
                 'between:-180,180',
             ],
 
-            'stores.*.pricing_input_mode' => [
+            'stores.*.input_mode' => [
                 'required',
                 Rule::in([
                     'products',
                     'packets',
                     'legacy_single_parcel',
+                    'mixed',
+                    'missing',
                 ]),
             ],
 
-            /*
-             * "sometimes" means validation only runs when
-             * the field exists.
-             *
-             * Empty arrays are removed during normalization.
-             */
+            'stores.*.packing_policy' => [
+                'required',
+                Rule::in([
+                    'single_per_store',
+                    'per_product_quantity',
+                    'explicit_packets',
+                ]),
+            ],
+
             'stores.*.products' => [
                 'sometimes',
                 'array',
@@ -669,35 +188,38 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
             ],
 
             'stores.*.products.*.name' => [
-                'required',
+                'required_with:stores.*.products',
                 'string',
                 'max:255',
             ],
 
+            'stores.*.products.*.sku' => [
+                'nullable',
+                'string',
+                'max:100',
+            ],
+
             'stores.*.products.*.quantity' => [
-                'required',
+                'required_with:stores.*.products',
                 'integer',
                 'min:1',
             ],
 
             'stores.*.products.*.unit_weight' => [
-                'required',
+                'required_with:stores.*.products',
                 'numeric',
                 'min:0.001',
             ],
 
             'stores.*.products.*.unit_price' => [
-                'required',
+                'required_with:stores.*.products',
                 'numeric',
                 'min:0',
             ],
 
             'stores.*.products.*.parcel_type' => [
-                'required',
-                Rule::in([
-                    'fragile',
-                    'non_fragile',
-                ]),
+                'nullable',
+                Rule::in(['fragile', 'non_fragile']),
             ],
 
             'stores.*.products.*.length_cm' => [
@@ -736,8 +258,20 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
                 'max:255',
             ],
 
+            'stores.*.packets.*.quantity' => [
+                'nullable',
+                'integer',
+                Rule::in([1]),
+            ],
+
             'stores.*.packets.*.actual_weight' => [
-                'required',
+                'nullable',
+                'numeric',
+                'min:0.001',
+            ],
+
+            'stores.*.packets.*.actual_weight_kg' => [
+                'nullable',
                 'numeric',
                 'min:0.001',
             ],
@@ -749,16 +283,8 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
             ],
 
             'stores.*.packets.*.parcel_type' => [
-                'required',
-                Rule::in([
-                    'fragile',
-                    'non_fragile',
-                ]),
-            ],
-
-            'stores.*.packets.*.is_fragile' => [
                 'nullable',
-                'boolean',
+                Rule::in(['fragile', 'non_fragile']),
             ],
 
             'stores.*.packets.*.length_cm' => [
@@ -779,6 +305,28 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
                 'min:0.1',
             ],
 
+            /*
+             * Final combined package dimensions. These should describe the
+             * actual packed parcel, not the sum of product dimensions.
+             */
+            'stores.*.package_length_cm' => [
+                'nullable',
+                'numeric',
+                'min:0.1',
+            ],
+
+            'stores.*.package_width_cm' => [
+                'nullable',
+                'numeric',
+                'min:0.1',
+            ],
+
+            'stores.*.package_height_cm' => [
+                'nullable',
+                'numeric',
+                'min:0.1',
+            ],
+
             'stores.*.parcel_weight' => [
                 'required',
                 'numeric',
@@ -793,10 +341,7 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
 
             'stores.*.parcel_type' => [
                 'required',
-                Rule::in([
-                    'fragile',
-                    'non_fragile',
-                ]),
+                Rule::in(['fragile', 'non_fragile']),
             ],
 
             'stores.*.packet_count' => [
@@ -807,19 +352,12 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
 
             'stores.*.service_type' => [
                 'required',
-                Rule::in([
-                    'standard',
-                    'express',
-                    'same_day',
-                ]),
+                Rule::in(['standard', 'express', 'same_day']),
             ],
 
             'stores.*.payment_type' => [
                 'required',
-                Rule::in([
-                    'prepaid',
-                    'pod',
-                ]),
+                Rule::in(['prepaid', 'pod']),
             ],
 
             'stores.*.pod_amount' => [
@@ -830,168 +368,348 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
         ];
     }
 
-    public function withValidator(
-        Validator $validator
-    ): void {
-        $validator->after(
-            function (
-                Validator $validator
-            ): void {
-                $stores = $this->input(
-                    'stores',
-                    []
-                );
+    public function withValidator(Validator $validator): void
+    {
+        $validator->after(function (Validator $validator): void {
+            $stores = $this->input('stores', []);
 
-                if (!is_array($stores)) {
-                    return;
+            if (!is_array($stores)) {
+                return;
+            }
+
+            foreach ($stores as $index => $store) {
+                if (!is_array($store)) {
+                    continue;
                 }
 
-                foreach (
-                    $stores as $index => $store
+                $inputMode = $store['input_mode'] ?? 'missing';
+                $packingPolicy = $store['packing_policy']
+                    ?? $this->packingPolicy();
+
+                if (
+                    empty($store['store_id']) &&
+                    empty($store['external_store_id'])
                 ) {
-                    if (!is_array($store)) {
-                        continue;
-                    }
+                    $validator->errors()->add(
+                        "stores.{$index}.external_store_id",
+                        'Provide store_id or external_store_id for this store.'
+                    );
+                }
 
-                    /*
-                     * Marketplace must provide either its
-                     * external store ID or Tukaatu store ID.
-                     */
-                    $hasStoreId =
-                        !empty($store['store_id']);
+                if ($inputMode === 'mixed') {
+                    $validator->errors()->add(
+                        "stores.{$index}.products",
+                        'Provide products or packets for one store, not both.'
+                    );
+                }
 
-                    $hasExternalStoreId =
-                        !empty(
-                            $store[
-                                'external_store_id'
-                            ]
-                        );
+                if ($inputMode === 'missing') {
+                    $validator->errors()->add(
+                        "stores.{$index}.products",
+                        'Provide products, packets or parcel_weight for this store.'
+                    );
+                }
 
-                    if (
-                        !$hasStoreId &&
-                        !$hasExternalStoreId
-                    ) {
-                        $validator
-                            ->errors()
-                            ->add(
-                                "stores.{$index}.external_store_id",
-                                'Each marketplace store must provide store_id or external_store_id.'
-                            );
-                    }
+                if (
+                    $packingPolicy === 'explicit_packets' &&
+                    empty($store['packets'])
+                ) {
+                    $validator->errors()->add(
+                        "stores.{$index}.packets",
+                        'Packets are required while the marketplace packing policy is explicit_packets.'
+                    );
+                }
 
-                    if (
-                        ($store['pricing_input_mode']
-                            ?? null) === 'missing'
-                    ) {
-                        $validator
-                            ->errors()
-                            ->add(
-                                "stores.{$index}.products",
-                                'Each store must provide products, packets or parcel_weight.'
-                            );
-                    }
+                if (
+                    ($store['payment_type'] ?? null) === 'pod' &&
+                    !array_key_exists('pod_amount', $store)
+                ) {
+                    $validator->errors()->add(
+                        "stores.{$index}.pod_amount",
+                        'POD amount is required for this store.'
+                    );
+                }
 
-                    if (
-                        ($store['payment_type']
-                            ?? null) === 'pod' &&
-                        (
-                            !array_key_exists(
-                                'pod_amount',
-                                $store
-                            ) ||
-                            $store['pod_amount']
-                                === null ||
-                            $store['pod_amount']
-                                === ''
-                        )
-                    ) {
-                        $validator
-                            ->errors()
-                            ->add(
-                                "stores.{$index}.pod_amount",
-                                'The POD amount is required for this store.'
-                            );
-                    }
+                $dimensionKeys = [
+                    'package_length_cm',
+                    'package_width_cm',
+                    'package_height_cm',
+                ];
+
+                $providedDimensions = collect($dimensionKeys)
+                    ->filter(
+                        static fn (string $key): bool =>
+                            isset($store[$key]) && $store[$key] !== ''
+                    )
+                    ->count();
+
+                if ($providedDimensions > 0 && $providedDimensions < 3) {
+                    $validator->errors()->add(
+                        "stores.{$index}.package",
+                        'Provide all three final package dimensions or none of them.'
+                    );
                 }
             }
-        );
-    }
-
-    private function normalizeParcelType(
-        mixed $value
-    ): string {
-        $value = strtolower(
-            trim((string) $value)
-        );
-
-        return match ($value) {
-            'fragile' =>
-                'fragile',
-
-            'non-fragile',
-            'non fragile',
-            'normal',
-            'regular' =>
-                'non_fragile',
-
-            default =>
-                $value,
-        };
-    }
-
-    private function normalizePaymentType(
-        mixed $value
-    ): string {
-        $value = strtolower(
-            trim((string) $value)
-        );
-
-        return match ($value) {
-            'cod',
-            'cash_on_delivery',
-            'cash-on-delivery' =>
-                'pod',
-
-            default =>
-                $value,
-        };
-    }
-
-    private function normalizeServiceType(
-        mixed $value
-    ): string {
-        $value = strtolower(
-            trim((string) $value)
-        );
-
-        return match ($value) {
-            'same-day',
-            'same day',
-            'sameday' =>
-                'same_day',
-
-            default =>
-                $value,
-        };
+        });
     }
 
     public function messages(): array
     {
         return [
-            'stores.required' =>
-                'At least one marketplace store is required.',
-
-            'stores.min' =>
-                'At least one marketplace store is required.',
-
-            'stores.*.products.min' =>
-                'Products cannot be an empty array.',
-
-            'stores.*.packets.min' =>
-                'Packets cannot be an empty array.',
-
-            'stores.*.parcel_weight.required' =>
-                'Each store must provide products, packets or parcel weight.',
+            'stores.required' => 'At least one marketplace store is required.',
+            'stores.max' => 'A maximum of 50 stores can be priced per request.',
+            'stores.*.store_id.distinct' => 'The same internal store cannot appear more than once.',
+            'stores.*.external_store_id.distinct' => 'The same marketplace store cannot appear more than once.',
+            'stores.*.packets.*.quantity.in' => 'Each packet entry must represent exactly one physical packet.',
         ];
+    }
+
+    private function normalizeStore(
+        array $store,
+        string $defaultServiceType,
+        string $defaultPaymentType
+    ): array {
+        $products = is_array($store['products'] ?? null)
+            ? array_values($store['products'])
+            : [];
+
+        $packets = is_array($store['packets'] ?? null)
+            ? array_values($store['packets'])
+            : [];
+
+        $hasProducts = count($products) > 0;
+        $hasPackets = count($packets) > 0;
+
+        $inputMode = match (true) {
+            $hasProducts && $hasPackets => 'mixed',
+            $hasProducts => 'products',
+            $hasPackets => 'packets',
+            isset($store['parcel_weight']) &&
+                $store['parcel_weight'] !== '' =>
+                'legacy_single_parcel',
+            default => 'missing',
+        };
+
+        $packingPolicy = $this->packingPolicy();
+
+        $parcelWeight = $store['parcel_weight'] ?? null;
+        $parcelValue = $store['parcel_value'] ?? null;
+        $parcelType = $this->normalizeParcelType(
+            $store['parcel_type'] ?? 'non_fragile'
+        );
+        $packetCount = max(
+            1,
+            (int) ($store['packet_count'] ?? 1)
+        );
+
+        if ($hasProducts) {
+            $parcelWeight = 0.0;
+            $parcelValue = 0.0;
+            $productUnitCount = 0;
+            $containsFragile = false;
+
+            foreach ($products as $key => $product) {
+                $quantity = max(
+                    0,
+                    (int) ($product['quantity'] ?? 0)
+                );
+                $unitWeight = max(
+                    0,
+                    (float) ($product['unit_weight'] ?? 0)
+                );
+                $unitPrice = max(
+                    0,
+                    (float) ($product['unit_price'] ?? 0)
+                );
+                $productType = $this->normalizeParcelType(
+                    $product['parcel_type'] ?? 'non_fragile'
+                );
+
+                $products[$key]['quantity'] = $quantity;
+                $products[$key]['unit_weight'] = $unitWeight;
+                $products[$key]['unit_price'] = $unitPrice;
+                $products[$key]['parcel_type'] = $productType;
+
+                $parcelWeight += $quantity * $unitWeight;
+                $parcelValue += $quantity * $unitPrice;
+                $productUnitCount += $quantity;
+                $containsFragile =
+                    $containsFragile || $productType === 'fragile';
+            }
+
+            $parcelType = $containsFragile
+                ? 'fragile'
+                : 'non_fragile';
+
+            /*
+             * Current policy forces one combined packet per store.
+             * Future per-product mode uses the product quantity count.
+             */
+            $packetCount = $packingPolicy === 'single_per_store'
+                ? 1
+                : max(1, $productUnitCount);
+        }
+
+        if ($hasPackets) {
+            $parcelWeight = 0.0;
+            $parcelValue = 0.0;
+            $containsFragile = false;
+
+            foreach ($packets as $key => $packet) {
+                $actualWeight = max(
+                    0,
+                    (float) (
+                        $packet['actual_weight']
+                        ?? $packet['actual_weight_kg']
+                        ?? 0
+                    )
+                );
+                $declaredValue = max(
+                    0,
+                    (float) ($packet['declared_value'] ?? 0)
+                );
+                $packetType = $this->normalizeParcelType(
+                    $packet['parcel_type'] ?? 'non_fragile'
+                );
+
+                $packets[$key]['quantity'] = 1;
+                $packets[$key]['actual_weight'] = $actualWeight;
+                $packets[$key]['parcel_type'] = $packetType;
+                $parcelWeight += $actualWeight;
+                $parcelValue += $declaredValue;
+                $containsFragile =
+                    $containsFragile || $packetType === 'fragile';
+            }
+
+            $parcelType = $containsFragile
+                ? 'fragile'
+                : 'non_fragile';
+
+            $packetCount = $packingPolicy === 'single_per_store'
+                ? 1
+                : max(1, count($packets));
+        }
+
+        $paymentType = $this->normalizePaymentType(
+            $store['payment_type'] ?? $defaultPaymentType
+        );
+
+        $serviceType = $this->normalizeServiceType(
+            $store['service_type'] ?? $defaultServiceType
+        );
+
+        if (
+            $paymentType === 'pod' &&
+            !array_key_exists('pod_amount', $store)
+        ) {
+            $store['pod_amount'] = round(
+                (float) ($parcelValue ?? 0),
+                2
+            );
+        }
+
+        $package = is_array($store['package'] ?? null)
+            ? $store['package']
+            : [];
+
+        $normalized = [
+            ...$store,
+            'input_mode' => $inputMode,
+            'packing_policy' => $packingPolicy,
+            'parcel_weight' => $parcelWeight !== null
+                ? round((float) $parcelWeight, 3)
+                : null,
+            'parcel_value' => $parcelValue !== null
+                ? round((float) $parcelValue, 2)
+                : null,
+            'parcel_type' => $parcelType,
+            'packet_count' => max(1, $packetCount),
+            'payment_type' => $paymentType,
+            'service_type' => $serviceType,
+            'package_length_cm' => $store['package_length_cm']
+                ?? $package['length_cm']
+                ?? null,
+            'package_width_cm' => $store['package_width_cm']
+                ?? $package['width_cm']
+                ?? null,
+            'package_height_cm' => $store['package_height_cm']
+                ?? $package['height_cm']
+                ?? null,
+        ];
+
+        unset($normalized['items'], $normalized['package']);
+
+        if ($products !== []) {
+            $normalized['products'] = $products;
+        } else {
+            unset($normalized['products']);
+        }
+
+        if ($packets !== []) {
+            $normalized['packets'] = $packets;
+        } else {
+            unset($normalized['packets']);
+        }
+
+        return $normalized;
+    }
+
+    private function packingPolicy(): string
+    {
+        $policy = strtolower(trim((string) config(
+            'marketplace.store_packet_mode',
+            'single_per_store'
+        )));
+
+        return in_array(
+            $policy,
+            [
+                'single_per_store',
+                'per_product_quantity',
+                'explicit_packets',
+            ],
+            true
+        )
+            ? $policy
+            : 'single_per_store';
+    }
+
+    private function normalizeParcelType(mixed $value): string
+    {
+        $value = strtolower(trim((string) $value));
+        $value = str_replace(['-', ' '], '_', $value);
+
+        return match ($value) {
+            'fragile' => 'fragile',
+            'nonfragile',
+            'non_fragile',
+            'normal',
+            'regular' => 'non_fragile',
+            default => $value,
+        };
+    }
+
+    private function normalizePaymentType(mixed $value): string
+    {
+        $value = strtolower(trim((string) $value));
+
+        return match ($value) {
+            'cod',
+            'cash_on_delivery',
+            'cash-on-delivery' => 'pod',
+            default => $value,
+        };
+    }
+
+    private function normalizeServiceType(mixed $value): string
+    {
+        $value = strtolower(trim((string) $value));
+
+        return match ($value) {
+            'same-day',
+            'same day',
+            'sameday' => 'same_day',
+            default => $value,
+        };
     }
 }

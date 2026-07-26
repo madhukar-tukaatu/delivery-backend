@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\AuthenticateMarketplaceApiKey;
 use App\Http\Middleware\BranchScopeMiddleware;
 use App\Http\Middleware\CheckRoutePermission;
 use App\Http\Middleware\GatewayAuthMiddleware;
@@ -28,6 +29,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'branch.scope' => BranchScopeMiddleware::class,
             'route.permission' => CheckRoutePermission::class,
             'merchant.api-key' => AuthenticateMerchantApiKey::class,
+            'marketplace.api-key' =>AuthenticateMarketplaceApiKey::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {

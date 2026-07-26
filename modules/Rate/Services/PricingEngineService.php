@@ -1,14 +1,11 @@
 <?php
-
-declare(strict_types=1);
-
 namespace Modules\Rate\Services;
 
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
-final class PricingEngineService
+class PricingEngineService
 {
     public function __construct(
         private readonly MainBranchResolverService $branchResolver
@@ -69,8 +66,16 @@ final class PricingEngineService
          * Step 1: One branch route base rate per shipment.
          */
         $routeRate = $this->routeBaseRate(
-            $pickupBranchId,
-            $deliveryBranchId
+            pickupBranchId: $pickupBranchId,
+            deliveryBranchId: $deliveryBranchId,
+            pickupBranchName: (string) (
+                $pickupBranch->name
+                ?? "Branch {$pickupBranchId}"
+            ),
+            deliveryBranchName: (string) (
+                $deliveryBranch->name
+                ?? "Branch {$deliveryBranchId}"
+            )
         );
 
         $baseRate = max(
@@ -458,6 +463,19 @@ final class PricingEngineService
                         $pickupDistanceKm,
                         3
                     ),
+
+                'coverage_location_id' =>
+                    isset($pickupBranch->coverage_location_id)
+                        ? (int) $pickupBranch->coverage_location_id
+                        : null,
+
+                'coverage_code' =>
+                    $pickupBranch->coverage_code
+                    ?? null,
+
+                'matched_coverage_code' =>
+                    $pickupBranch->matched_coverage_code
+                    ?? null,
             ],
 
             'delivery_branch' => [
@@ -475,6 +493,19 @@ final class PricingEngineService
                         $deliveryDistanceKm,
                         3
                     ),
+
+                'coverage_location_id' =>
+                    isset($deliveryBranch->coverage_location_id)
+                        ? (int) $deliveryBranch->coverage_location_id
+                        : null,
+
+                'coverage_code' =>
+                    $deliveryBranch->coverage_code
+                    ?? null,
+
+                'matched_coverage_code' =>
+                    $deliveryBranch->matched_coverage_code
+                    ?? null,
             ],
 
             'route' => [
@@ -705,7 +736,9 @@ final class PricingEngineService
      */
     private function routeBaseRate(
         int $pickupBranchId,
-        int $deliveryBranchId
+        int $deliveryBranchId,
+        string $pickupBranchName,
+        string $deliveryBranchName
     ): object {
         $rule = DB::table('branch_route_rates')
             ->where(
@@ -744,7 +777,20 @@ final class PricingEngineService
         if (!$rule) {
             throw ValidationException::withMessages([
                 'delivery_address' => [
-                    'Base rate is not configured for the selected branch route.',
+                    sprintf(
+                        'Base rate is not configured from %s (branch ID %d) to %s (branch ID %d).',
+                        $pickupBranchName,
+                        $pickupBranchId,
+                        $deliveryBranchName,
+                        $deliveryBranchId
+                    ),
+                ],
+                'resolved_route' => [
+                    sprintf(
+                        '%d:%d',
+                        $pickupBranchId,
+                        $deliveryBranchId
+                    ),
                 ],
             ]);
         }

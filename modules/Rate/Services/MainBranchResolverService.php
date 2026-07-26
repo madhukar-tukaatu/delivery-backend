@@ -1,195 +1,313 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Modules\Rate\Services;
 
-use Illuminate\Database\Query\Builder;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
-
-final class MainBranchResolverService
+use stdClass;
+class MainBranchResolverService
 {
-    public function resolve(
-        float $latitude,
-        float $longitude
-    ): object {
-        $latitudeColumn = $this->latitudeColumn();
-        $longitudeColumn = $this->longitudeColumn();
+    /**
+     * Resolve pickup/delivery coordinates to the responsible MAIN branch.
+     *
+     * Rules:
+     * - A point inside a main_branch_zone resolves to that zone's branch_id.
+     * - A point inside a sub_branch_zone resolves through parent_id to the
+     *   parent main_branch_zone's branch_id.
+     * - Pricing never uses the operational sub-branch ID directly.
+     * - resolved_distance_km is measured from the responsible main zone,
+     *   because local distance pricing is based on the responsible branch.
+     */
+    public function resolve(float $latitude, float $longitude): object
+    {
+        $this->validateCoordinates($latitude, $longitude);
 
-        if (!$latitudeColumn || !$longitudeColumn) {
+        $zones = $this->activeZones();
+
+        if ($zones->isEmpty()) {
             throw ValidationException::withMessages([
-                'branch' => [
-                    'Branch coordinate columns are not configured.',
+                'address' => [
+                    'No active coverage locations are configured.',
                 ],
             ]);
         }
 
-        $query = DB::table('branches')
-            ->whereNotNull($latitudeColumn)
-            ->whereNotNull($longitudeColumn);
+        $zonesById = $zones->keyBy(
+            static fn (object $zone): int => (int) $zone->id
+        );
 
-        $this->applyMainBranchFilter($query);
-
-        $branches = $query->get();
-
-        if ($branches->isEmpty()) {
-            throw ValidationException::withMessages([
-                'branch' => [
-                    'No active main branches with coordinates were found.',
-                ],
-            ]);
-        }
-
+        $matches = [];
         $nearest = null;
-        $nearestDistance = PHP_FLOAT_MAX;
 
-        foreach ($branches as $branch) {
-            $distance = $this->distanceKm(
+        foreach ($zones as $zone) {
+            $distanceKm = $this->distanceKm(
                 $latitude,
                 $longitude,
-                (float) $branch->{$latitudeColumn},
-                (float) $branch->{$longitudeColumn}
+                (float) $zone->latitude,
+                (float) $zone->longitude
             );
 
-            if ($distance < $nearestDistance) {
-                $nearest = $branch;
-                $nearestDistance = $distance;
+            $radiusKm = max(
+                0.0,
+                (float) $zone->coverage_radius_km
+            );
+
+            $nearestCandidate = [
+                'zone' => $zone,
+                'distance_km' => $distanceKm,
+            ];
+
+            if (
+                $nearest === null ||
+                $distanceKm < $nearest['distance_km']
+            ) {
+                $nearest = $nearestCandidate;
             }
+
+            if ($distanceKm > $radiusKm) {
+                continue;
+            }
+
+            $mainZone = $this->responsibleMainZone(
+                $zone,
+                $zonesById
+            );
+
+            if (!$mainZone || !$mainZone->branch_id) {
+                continue;
+            }
+
+            $matches[] = [
+                'matched_zone' => $zone,
+                'matched_distance_km' => $distanceKm,
+                'main_zone' => $mainZone,
+                'specificity' => $zone->type === 'sub_branch_zone'
+                    ? 0
+                    : 1,
+            ];
         }
 
-        if (!$nearest) {
+        if ($matches === []) {
+            $nearestZone = $nearest['zone'] ?? null;
+            $nearestDistance = $nearest['distance_km'] ?? null;
+
             throw ValidationException::withMessages([
-                'branch' => [
-                    'Unable to resolve the nearest branch.',
+                'address' => [
+                    $nearestZone
+                        ? sprintf(
+                            'The location is outside active delivery coverage. Nearest zone is %s (%s), %.2f km away with a %.2f km radius.',
+                            (string) $nearestZone->name,
+                            (string) $nearestZone->code,
+                            (float) $nearestDistance,
+                            (float) $nearestZone->coverage_radius_km
+                        )
+                        : 'The location is outside active delivery coverage.',
                 ],
             ]);
         }
 
-        $nearest->resolved_distance_km = round(
-            $nearestDistance,
+        usort(
+            $matches,
+            static function (array $first, array $second): int {
+                $distanceComparison =
+                    $first['matched_distance_km']
+                    <=> $second['matched_distance_km'];
+
+                if ($distanceComparison !== 0) {
+                    return $distanceComparison;
+                }
+
+                return $first['specificity']
+                    <=> $second['specificity'];
+            }
+        );
+
+        $selected = $matches[0];
+        $matchedZone = $selected['matched_zone'];
+        $mainZone = $selected['main_zone'];
+
+        $branch = DB::table('branches')
+            ->where('id', (int) $mainZone->branch_id)
+            ->first();
+
+        if (!$branch) {
+            throw ValidationException::withMessages([
+                'address' => [
+                    sprintf(
+                        'The responsible main coverage zone %s is not assigned to a valid branch.',
+                        (string) $mainZone->code
+                    ),
+                ],
+            ]);
+        }
+
+        $responsibleDistanceKm = $this->distanceKm(
+            $latitude,
+            $longitude,
+            (float) $mainZone->latitude,
+            (float) $mainZone->longitude
+        );
+
+        $result = new stdClass();
+
+        $result->id = (int) $branch->id;
+        $result->name = (string) $branch->name;
+        $result->code = (string) ($branch->code ?? '');
+        $result->parent_id = isset($branch->parent_id)
+            ? (int) $branch->parent_id
+            : null;
+
+        $result->coverage_location_id = (int) $mainZone->id;
+        $result->coverage_name = (string) $mainZone->name;
+        $result->coverage_code = (string) $mainZone->code;
+        $result->coverage_type = (string) $mainZone->type;
+        $result->coverage_radius_km =
+            (float) $mainZone->coverage_radius_km;
+
+        $result->matched_coverage_location_id =
+            (int) $matchedZone->id;
+        $result->matched_coverage_name =
+            (string) $matchedZone->name;
+        $result->matched_coverage_code =
+            (string) $matchedZone->code;
+        $result->matched_coverage_type =
+            (string) $matchedZone->type;
+        $result->matched_distance_km = round(
+            (float) $selected['matched_distance_km'],
             3
         );
 
-        return $nearest;
+        $result->resolved_distance_km = round(
+            $responsibleDistanceKm,
+            3
+        );
+
+        return $result;
     }
 
-    public function distanceKm(
+    private function activeZones(): Collection
+    {
+        return DB::table('coverage_locations')
+            ->where('status', 'active')
+            ->whereNotNull('latitude')
+            ->whereNotNull('longitude')
+            ->whereIn('type', [
+                'main_branch_zone',
+                'sub_branch_zone',
+            ])
+            ->orderBy('id')
+            ->get([
+                'id',
+                'name',
+                'code',
+                'type',
+                'parent_id',
+                'branch_id',
+                'latitude',
+                'longitude',
+                'coverage_radius_km',
+                'status',
+            ]);
+    }
+
+    private function responsibleMainZone(
+        object $zone,
+        Collection $zonesById
+    ): ?object {
+        if ($zone->type === 'main_branch_zone') {
+            return $zone;
+        }
+
+        if (
+            $zone->type === 'sub_branch_zone' &&
+            $zone->parent_id
+        ) {
+            $parentZone = $zonesById->get(
+                (int) $zone->parent_id
+            );
+
+            if (
+                $parentZone &&
+                $parentZone->type === 'main_branch_zone'
+            ) {
+                return $parentZone;
+            }
+        }
+
+        /*
+         * Compatibility fallback: when a sub-zone has a branch allocation
+         * but no parent coverage zone, use the branch's parent main branch.
+         */
+        if ($zone->branch_id) {
+            $allocatedBranch = DB::table('branches')
+                ->where('id', (int) $zone->branch_id)
+                ->first(['id', 'parent_id']);
+
+            if ($allocatedBranch?->parent_id) {
+                $parentBranchId = (int) $allocatedBranch->parent_id;
+
+                return $zonesById->first(
+                    static fn (object $candidate): bool =>
+                        $candidate->type === 'main_branch_zone' &&
+                        (int) $candidate->branch_id === $parentBranchId
+                );
+            }
+        }
+
+        return null;
+    }
+
+    private function validateCoordinates(
+        float $latitude,
+        float $longitude
+    ): void {
+        if ($latitude < -90 || $latitude > 90) {
+            throw ValidationException::withMessages([
+                'latitude' => [
+                    'Latitude must be between -90 and 90.',
+                ],
+            ]);
+        }
+
+        if ($longitude < -180 || $longitude > 180) {
+            throw ValidationException::withMessages([
+                'longitude' => [
+                    'Longitude must be between -180 and 180.',
+                ],
+            ]);
+        }
+    }
+
+    private function distanceKm(
         float $latitudeOne,
         float $longitudeOne,
         float $latitudeTwo,
         float $longitudeTwo
     ): float {
-        $earthRadius = 6371.0088;
+        $earthRadiusKm = 6371.0088;
 
         $latitudeDelta = deg2rad(
             $latitudeTwo - $latitudeOne
         );
-
         $longitudeDelta = deg2rad(
             $longitudeTwo - $longitudeOne
         );
 
-        $a =
-            sin($latitudeDelta / 2) ** 2 +
-            cos(deg2rad($latitudeOne)) *
-            cos(deg2rad($latitudeTwo)) *
-            sin($longitudeDelta / 2) ** 2;
+        $firstLatitude = deg2rad($latitudeOne);
+        $secondLatitude = deg2rad($latitudeTwo);
 
-        return $earthRadius * (
-            2 * atan2(
-                sqrt($a),
-                sqrt(1 - $a)
-            )
-        );
-    }
+        $a = sin($latitudeDelta / 2) ** 2
+            + cos($firstLatitude)
+            * cos($secondLatitude)
+            * sin($longitudeDelta / 2) ** 2;
 
-    // private function applyMainBranchFilter(
-    //     Builder $query
-    // ): void {
-    //     if (Schema::hasColumn('branches', 'status')) {
-    //         $query->where('status', true);
-    //     }
+        $a = min(1.0, max(0.0, $a));
 
-    //     if (Schema::hasColumn('branches', 'is_main')) {
-    //         $query->where('is_main', true);
-
-    //         return;
-    //     }
-
-    //     if (Schema::hasColumn('branches', 'branch_type')) {
-    //         $query->where('branch_type', 'main');
-
-    //         return;
-    //     }
-
-    //     if (Schema::hasColumn('branches', 'type')) {
-    //         $query->where('type', 'main');
-
-    //         return;
-    //     }
-
-    //     if (Schema::hasColumn('branches', 'parent_id')) {
-    //         $query->whereNull('parent_id');
-    //     }
-    // }
-
-    private function applyMainBranchFilter(Builder $query): void
-    {
-        // use status column, not is_active boolean
-        if (Schema::hasColumn('branches', 'status')) {
-            $query->where('status', 'active');
-        } elseif (Schema::hasColumn('branches', 'is_active')) {
-            $query->where('is_active', true);
-        }
-
-        // match the actual types used in this system
-        if (Schema::hasColumn('branches', 'type')) {
-            $query->whereIn('type', [
-                'head_branch',
-                'franchise_branch',
-                'main_branch',
-                'branch',
-            ]);
-            return;
-        }
-
-        if (Schema::hasColumn('branches', 'parent_id')) {
-            $query->whereNull('parent_id');
-        }
-    }
-
-    private function latitudeColumn(): ?string
-    {
-        foreach (
-            [
-                'latitude',
-                'lat',
-                'branch_latitude',
-            ] as $column
-        ) {
-            if (Schema::hasColumn('branches', $column)) {
-                return $column;
-            }
-        }
-
-        return null;
-    }
-
-    private function longitudeColumn(): ?string
-    {
-        foreach (
-            [
-                'longitude',
-                'lng',
-                'lon',
-                'branch_longitude',
-            ] as $column
-        ) {
-            if (Schema::hasColumn('branches', $column)) {
-                return $column;
-            }
-        }
-
-        return null;
+        return $earthRadiusKm
+            * 2
+            * atan2(sqrt($a), sqrt(1 - $a));
     }
 }

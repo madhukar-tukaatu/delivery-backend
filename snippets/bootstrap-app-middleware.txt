@@ -1,0 +1,11 @@
+<?php
+
+use App\Http\Middleware\AuthenticateMarketplaceApiKey;
+use Illuminate\Foundation\Configuration\Middleware;
+
+// Merge this alias into the existing ->withMiddleware(...) block.
+->withMiddleware(function (Middleware $middleware): void {
+    $middleware->alias([
+        'marketplace.api-key' => AuthenticateMarketplaceApiKey::class,
+    ]);
+})

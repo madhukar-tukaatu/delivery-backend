@@ -17,6 +17,23 @@ final class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         RateLimiter::for(
+            'marketplace-pricing',
+            function (Request $request): Limit {
+                $marketplaceId =
+                    $request->attributes->get(
+                        'marketplace_id'
+                    );
+
+                return Limit::perMinute(300)
+                    ->by(
+                        $marketplaceId
+                            ? "marketplace:{$marketplaceId}"
+                            : $request->ip()
+                    );
+            }
+        );
+
+        RateLimiter::for(
             'public-merchant',
             function (Request $request): Limit {
                 $merchantId = $request->attributes->get(
@@ -45,7 +62,7 @@ final class AppServiceProvider extends ServiceProvider
                             return response()->json([
                                 'success' => false,
                                 'message' =>
-                                    'Too many pricing requests. Please try again shortly.',
+                                'Too many pricing requests. Please try again shortly.',
                             ], 429, $headers);
                         }
                     );

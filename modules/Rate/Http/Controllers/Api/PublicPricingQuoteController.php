@@ -48,8 +48,8 @@ final class PublicPricingQuoteController extends Controller
                 $productCount = collect(
                     $validated['products']
                 )->sum(
-                    static fn (array $product): int =>
-                        (int) ($product['quantity'] ?? 0)
+                    static fn(array $product): int =>
+                    (int) ($product['quantity'] ?? 0)
                 );
             } elseif (!empty($validated['packets'])) {
                 $productCount = count(
@@ -67,23 +67,23 @@ final class PublicPricingQuoteController extends Controller
 
                 'data' => [
                     'store_id' =>
-                        isset($validated['store_id'])
-                            ? (int) $validated['store_id']
-                            : null,
+                    isset($validated['store_id'])
+                        ? (int) $validated['store_id']
+                        : null,
 
                     'input_mode' => match (true) {
                         !empty($validated['packets']) =>
-                            'packets',
+                        'packets',
 
                         !empty($validated['products']) =>
-                            'products',
+                        'products',
 
                         default =>
-                            'legacy_single_parcel',
+                        'legacy_single_parcel',
                     },
 
                     'products' =>
-                        $validated['products'] ?? [],
+                    $validated['products'] ?? [],
 
                     /*
                      * The final packet breakdown comes from the
@@ -91,81 +91,81 @@ final class PublicPricingQuoteController extends Controller
                      * expanded into individual physical packets.
                      */
                     'packets' =>
-                        $quote['packets'] ?? [],
+                    $quote['packets'] ?? [],
 
                     'product_count' =>
-                        $productCount,
+                    $productCount,
 
                     'packet_count' =>
-                        (int) (
-                            $quote['packet_count']
-                            ?? $validated['packet_count']
-                        ),
+                    (int) (
+                        $quote['packet_count']
+                        ?? $validated['packet_count']
+                    ),
 
                     /*
                      * Aggregate compatibility fields. Packet-level
                      * weights and types remain available in packets.
                      */
                     'parcel_weight' =>
-                        (float) $validated['parcel_weight'],
+                    (float) $validated['parcel_weight'],
 
                     'parcel_value' =>
-                        (float) (
-                            $validated['parcel_value']
-                            ?? 0
-                        ),
+                    (float) (
+                        $validated['parcel_value']
+                        ?? 0
+                    ),
 
                     'parcel_type' =>
-                        $validated['parcel_type'],
+                    $validated['parcel_type'],
 
                     'payment_type' =>
-                        $validated['payment_type'],
+                    $validated['payment_type'],
 
                     'pod_amount' =>
-                        (float) (
-                            $validated['pod_amount']
-                            ?? 0
-                        ),
+                    (float) (
+                        $validated['pod_amount']
+                        ?? 0
+                    ),
 
                     'pickup_branch' =>
-                        $quote['pickup_branch'],
+                    $quote['pickup_branch'],
 
                     'delivery_branch' =>
-                        $quote['delivery_branch'],
+                    $quote['delivery_branch'],
 
                     'route' =>
-                        $quote['route'],
+                    $quote['route'],
 
                     'service_type' =>
-                        $quote['service_type'],
+                    $quote['service_type'],
 
                     'weight_summary' =>
-                        $quote['weight_summary'] ?? [],
+                    $quote['weight_summary'] ?? [],
 
                     'breakdown' =>
-                        $quote['breakdown'],
+                    $quote['breakdown'],
 
                     'delivery_charge' =>
-                        (float) $quote['final_price'],
+                    (float) $quote['final_price'],
 
                     'currency' =>
-                        $quote['currency'],
+                    $quote['currency'],
 
                     'vat' =>
-                        $quote['vat'],
+                    $quote['vat'],
 
                     'estimated_hours' =>
-                        $quote['estimated_hours'],
+                    $quote['estimated_hours'],
 
                     'sla_due_at' =>
-                        $this->toIso8601(
-                            $quote['sla_due_at'] ?? null
-                        ),
+                    $this->toIso8601(
+                        $quote['sla_due_at'] ?? null
+                    ),
 
                     'valid_until' =>
-                        $this->toIso8601(
-                            $quote['valid_until'] ?? null
-                        ),
+                    $this->toIso8601(
+                        $quote['valid_until'] ?? null
+                    ),
 
                     'quote_stored' => false,
                     'shipment_created' => false,
@@ -364,6 +364,48 @@ final class PublicPricingQuoteController extends Controller
 
             return $this->errorResponse(
                 message: 'Unable to calculate the price.',
+                exception: $exception,
+                status: 422
+            );
+        }
+    }
+
+    /**
+     * Calculate marketplace delivery charges for multiple stores
+     * without saving quotes and without creating shipments.
+     */
+    public function checkMultiStore(
+        StoreMultiStorePricingQuoteRequest $request,
+        MultiStorePricingService $pricingService
+    ): JsonResponse {
+        $merchantId = $this->resolveMerchantId($request);
+
+        try {
+            $result = $pricingService->calculateOnly(
+                $request->validated(),
+                $merchantId
+            );
+
+            return response()->json([
+                'success' => true,
+
+                'message' =>
+                'Multi-store delivery pricing calculated successfully.',
+
+                'data' => [
+                    ...$this->serializeDateValues($result),
+
+                    'quote_stored' => false,
+                    'shipment_created' => false,
+                ],
+            ]);
+        } catch (ValidationException $exception) {
+            throw $exception;
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return $this->errorResponse(
+                message: 'Unable to calculate multi-store delivery pricing.',
                 exception: $exception,
                 status: 422
             );
@@ -621,6 +663,281 @@ final class PublicPricingQuoteController extends Controller
         ]);
     }
 
+
+    /**
+     * Calculate all marketplace store delivery charges
+     * without storing checkout_quotes or pricing_quotes.
+     */
+    public function calculateOnly(
+        array $validated,
+        ?int $merchantId = null
+    ): array {
+        $stores = $validated['stores'] ?? [];
+
+        if (empty($stores)) {
+            throw ValidationException::withMessages([
+                'stores' => [
+                    'At least one marketplace store is required.',
+                ],
+            ]);
+        }
+
+        $storeQuotes = [];
+
+        $productsTotal = 0.0;
+        $deliveryTotal = 0.0;
+        $podTotal = 0.0;
+        $estimatedHours = 0;
+        $earliestValidUntil = null;
+
+        foreach ($stores as $storeIndex => $store) {
+            $payload = [
+                /*
+             * Store-specific pickup information.
+             */
+                'store_id' =>
+                isset($store['store_id'])
+                    ? (int) $store['store_id']
+                    : null,
+
+                'pickup_address' =>
+                $store['pickup_address'],
+
+                'pickup_latitude' =>
+                (float) $store['pickup_latitude'],
+
+                'pickup_longitude' =>
+                (float) $store['pickup_longitude'],
+
+                /*
+             * All marketplace stores deliver to the same
+             * customer checkout destination.
+             */
+                'delivery_address' =>
+                $validated['delivery_address'],
+
+                'delivery_latitude' =>
+                (float) $validated['delivery_latitude'],
+
+                'delivery_longitude' =>
+                (float) $validated['delivery_longitude'],
+
+                /*
+             * Store products or direct packets.
+             */
+                'products' =>
+                $store['products'] ?? [],
+
+                'packets' =>
+                $store['packets'] ?? [],
+
+                /*
+             * These aggregate values should be prepared by
+             * StoreMultiStorePricingQuoteRequest.
+             */
+                'packet_count' =>
+                (int) ($store['packet_count'] ?? 0),
+
+                'parcel_weight' =>
+                (float) ($store['parcel_weight'] ?? 0),
+
+                'parcel_value' =>
+                (float) ($store['parcel_value'] ?? 0),
+
+                'parcel_type' =>
+                $store['parcel_type'] ?? 'non_fragile',
+
+                /*
+             * Store-level values override checkout defaults.
+             */
+                'service_type' =>
+                $store['service_type']
+                    ?? $validated['service_type']
+                    ?? 'standard',
+
+                'payment_type' =>
+                $store['payment_type']
+                    ?? $validated['payment_type']
+                    ?? 'prepaid',
+
+                'pod_amount' =>
+                (float) ($store['pod_amount'] ?? 0),
+            ];
+
+            $quote = $this->pricingEngine->calculate(
+                $payload,
+                $merchantId
+            );
+
+            $productCount = 0;
+
+            if (!empty($payload['products'])) {
+                $productCount = collect($payload['products'])
+                    ->sum(
+                        static fn(array $product): int =>
+                        (int) ($product['quantity'] ?? 0)
+                    );
+            } elseif (!empty($payload['packets'])) {
+                $productCount = count($payload['packets']);
+            }
+
+            $productsTotal +=
+                (float) $payload['parcel_value'];
+
+            $deliveryTotal +=
+                (float) $quote['final_price'];
+
+            $podTotal +=
+                (float) $payload['pod_amount'];
+
+            $estimatedHours = max(
+                $estimatedHours,
+                (int) ($quote['estimated_hours'] ?? 0)
+            );
+
+            if (!empty($quote['valid_until'])) {
+                $quoteValidUntil = Carbon::parse(
+                    $quote['valid_until']
+                );
+
+                if (
+                    $earliestValidUntil === null ||
+                    $quoteValidUntil->lt($earliestValidUntil)
+                ) {
+                    $earliestValidUntil =
+                        $quoteValidUntil;
+                }
+            }
+
+            $storeQuotes[] = [
+                'store_index' =>
+                (int) $storeIndex,
+
+                'store_id' =>
+                $payload['store_id'],
+
+                'input_mode' => match (true) {
+                    !empty($payload['packets']) =>
+                    'packets',
+
+                    !empty($payload['products']) =>
+                    'products',
+
+                    default =>
+                    'legacy_single_parcel',
+                },
+
+                'products' =>
+                $payload['products'],
+
+                'packets' =>
+                $quote['packets'] ?? [],
+
+                'product_count' =>
+                $productCount,
+
+                'packet_count' =>
+                (int) (
+                    $quote['packet_count']
+                    ?? $payload['packet_count']
+                ),
+
+                'parcel_weight' =>
+                (float) $payload['parcel_weight'],
+
+                'parcel_value' =>
+                (float) $payload['parcel_value'],
+
+                'parcel_type' =>
+                $payload['parcel_type'],
+
+                'payment_type' =>
+                $payload['payment_type'],
+
+                'pod_amount' =>
+                (float) $payload['pod_amount'],
+
+                'pickup_branch' =>
+                $quote['pickup_branch'],
+
+                'delivery_branch' =>
+                $quote['delivery_branch'],
+
+                'route' =>
+                $quote['route'],
+
+                'service_type' =>
+                $quote['service_type'],
+
+                'weight_summary' =>
+                $quote['weight_summary'] ?? [],
+
+                'breakdown' =>
+                $quote['breakdown'],
+
+                'delivery_charge' =>
+                (float) $quote['final_price'],
+
+                'currency' =>
+                $quote['currency'] ?? 'NPR',
+
+                'vat' =>
+                $quote['vat'] ?? null,
+
+                'estimated_hours' =>
+                (int) ($quote['estimated_hours'] ?? 0),
+
+                'sla_due_at' =>
+                $quote['sla_due_at'] ?? null,
+
+                'valid_until' =>
+                $quote['valid_until'] ?? null,
+            ];
+        }
+
+        return [
+            'currency' => 'NPR',
+
+            'store_count' =>
+            count($storeQuotes),
+
+            'products_total' =>
+            round($productsTotal, 2),
+
+            'delivery_total' =>
+            round($deliveryTotal, 2),
+
+            /*
+         * POD is returned separately because it is an amount
+         * to collect, not an extra delivery charge.
+         */
+            'pod_total' =>
+            round($podTotal, 2),
+
+            'grand_total' =>
+            round(
+                $productsTotal + $deliveryTotal,
+                2
+            ),
+
+            /*
+         * Checkout delivery time is based on the slowest
+         * participating store shipment.
+         */
+            'estimated_hours' =>
+            $estimatedHours,
+
+            /*
+         * The combined calculation expires when the earliest
+         * store pricing result expires.
+         */
+            'valid_until' =>
+            $earliestValidUntil,
+
+            'store_quotes' =>
+            $storeQuotes,
+        ];
+    }
     /**
      * Resolve merchant ID provided by public API middleware.
      */
@@ -786,78 +1103,78 @@ final class PublicPricingQuoteController extends Controller
 
         return [
             'pricing_quote_id' =>
-                (int) $quote->id,
+            (int) $quote->id,
 
             'quote_number' =>
-                $quote->quote_number,
+            $quote->quote_number,
 
             'store_id' =>
-                $quote->store_id !== null
-                    ? (int) $quote->store_id
-                    : null,
+            $quote->store_id !== null
+                ? (int) $quote->store_id
+                : null,
 
             /*
              * Aggregate compatibility fields stored in the
              * pricing_quotes table.
              */
             'parcel_weight' =>
-                (float) $quote->parcel_weight,
+            (float) $quote->parcel_weight,
 
             'parcel_value' =>
-                (float) ($quote->parcel_value ?? 0),
+            (float) ($quote->parcel_value ?? 0),
 
             'parcel_type' =>
-                $quote->parcel_type,
+            $quote->parcel_type,
 
             'payment_type' =>
-                $quote->payment_type ?? null,
+            $quote->payment_type ?? null,
 
             'pod_amount' =>
-                (float) ($quote->pod_amount ?? 0),
+            (float) ($quote->pod_amount ?? 0),
 
             /*
              * Packet-level immutable calculation restored from
              * snapshot_json.
              */
             'packet_count' =>
-                isset($snapshot['packet_count'])
-                    ? (int) $snapshot['packet_count']
-                    : count($packets),
+            isset($snapshot['packet_count'])
+                ? (int) $snapshot['packet_count']
+                : count($packets),
 
             'packets' =>
-                $packets,
+            $packets,
 
             'weight_summary' =>
-                $snapshot['weight_summary'] ?? [],
+            $snapshot['weight_summary'] ?? [],
 
             'pickup_branch' =>
-                $snapshot['pickup_branch'] ?? null,
+            $snapshot['pickup_branch'] ?? null,
 
             'delivery_branch' =>
-                $snapshot['delivery_branch'] ?? null,
+            $snapshot['delivery_branch'] ?? null,
 
             'route' =>
-                $snapshot['route'] ?? null,
+            $snapshot['route'] ?? null,
 
             'service_type_details' =>
-                $snapshot['service_type'] ?? null,
+            $snapshot['service_type'] ?? null,
 
             'delivery_fee' =>
-                (float) $quote->final_price,
+            (float) $quote->final_price,
 
             'currency' =>
-                $quote->currency ?? 'NPR',
+            $quote->currency ?? 'NPR',
 
             'status' =>
-                $quote->status,
+            $quote->status,
 
             'valid_until' =>
-                $this->toIso8601(
-                    $quote->expires_at ?? null
-                ),
+            $this->toIso8601(
+                $quote->expires_at ?? null
+            ),
 
             'breakdown' =>
-                $snapshot['breakdown'] ?? [],
+            $snapshot['breakdown'] ?? [],
         ];
     }
 

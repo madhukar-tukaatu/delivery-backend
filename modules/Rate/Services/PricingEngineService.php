@@ -1,14 +1,18 @@
 <?php
+
+declare(strict_types=1);
+
 namespace Modules\Rate\Services;
 
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
-class PricingEngineService
+final class PricingEngineService
 {
     public function __construct(
-        private readonly MainBranchResolverService $branchResolver
+        private readonly MainBranchResolverService $branchResolver,
+        private readonly ConfiguredTransferRouteService $configuredTransferRouteService
     ) {}
 
     public function calculate(
@@ -63,25 +67,46 @@ class PricingEngineService
         );
 
         /*
-         * Step 1: One branch route base rate per shipment.
+         * Step 1: Select the base-rate source.
+         *
+         * Marketplace multi-store pricing uses a complete configured route,
+         * for example Kathmandu -> Pokhara -> Mustang. Existing merchant and
+         * single-store calls remain compatible with branch_route_rates.
          */
-        $routeRate = $this->routeBaseRate(
-            pickupBranchId: $pickupBranchId,
-            deliveryBranchId: $deliveryBranchId,
-            pickupBranchName: (string) (
-                $pickupBranch->name
-                ?? "Branch {$pickupBranchId}"
-            ),
-            deliveryBranchName: (string) (
-                $deliveryBranch->name
-                ?? "Branch {$deliveryBranchId}"
-            )
-        );
+        $baseRateMode = strtolower(trim((string) (
+            $data['base_rate_mode'] ?? 'branch_route'
+        )));
 
-        $baseRate = max(
-            0,
-            (float) $routeRate->base_rate
-        );
+        $routeRate = null;
+        $transferRoute = null;
+
+        if (
+            !$isSameBranch &&
+            $baseRateMode === 'configured_transfer_route'
+        ) {
+            $transferRoute = $this->configuredTransferRouteService->resolve(
+                originBranchId: $pickupBranchId,
+                destinationBranchId: $deliveryBranchId,
+                serviceType: (string) $serviceType->code
+            );
+
+            $baseRate = max(
+                0,
+                (float) $transferRoute['base_rate']
+            );
+        } else {
+            $baseRateMode = 'branch_route';
+
+            $routeRate = $this->routeBaseRate(
+                $pickupBranchId,
+                $deliveryBranchId
+            );
+
+            $baseRate = max(
+                0,
+                (float) $routeRate->base_rate
+            );
+        }
 
         /*
          * Step 2: Build one physical packet for every item.
@@ -403,13 +428,21 @@ class PricingEngineService
             2
         );
 
-        $estimatedHours = max(
-            1,
-            (int) (
-                $serviceType->estimated_hours
-                ?? 24
+        $estimatedHours = $transferRoute !== null
+            ? max(
+                1,
+                (int) (
+                    $transferRoute['total_estimated_hours']
+                    ?? 0
+                )
             )
-        );
+            : max(
+                1,
+                (int) (
+                    $serviceType->estimated_hours
+                    ?? 24
+                )
+            );
 
         return [
             'currency' => 'NPR',
@@ -463,19 +496,6 @@ class PricingEngineService
                         $pickupDistanceKm,
                         3
                     ),
-
-                'coverage_location_id' =>
-                    isset($pickupBranch->coverage_location_id)
-                        ? (int) $pickupBranch->coverage_location_id
-                        : null,
-
-                'coverage_code' =>
-                    $pickupBranch->coverage_code
-                    ?? null,
-
-                'matched_coverage_code' =>
-                    $pickupBranch->matched_coverage_code
-                    ?? null,
             ],
 
             'delivery_branch' => [
@@ -493,40 +513,77 @@ class PricingEngineService
                         $deliveryDistanceKm,
                         3
                     ),
-
-                'coverage_location_id' =>
-                    isset($deliveryBranch->coverage_location_id)
-                        ? (int) $deliveryBranch->coverage_location_id
-                        : null,
-
-                'coverage_code' =>
-                    $deliveryBranch->coverage_code
-                    ?? null,
-
-                'matched_coverage_code' =>
-                    $deliveryBranch->matched_coverage_code
-                    ?? null,
             ],
 
-            'route' => [
-                'route_rate_id' =>
-                    (int) $routeRate->id,
+            'base_rate_mode' =>
+                $baseRateMode,
 
-                'pickup_branch_id' =>
-                    $pickupBranchId,
+            'transfer_route' =>
+                $transferRoute,
 
-                'delivery_branch_id' =>
-                    $deliveryBranchId,
+            'route' => $transferRoute !== null
+                ? [
+                    'route_id' =>
+                        (int) $transferRoute['route_id'],
 
-                'same_branch' =>
-                    $isSameBranch,
+                    'route_code' =>
+                        $transferRoute['route_code'],
 
-                'base_rate' =>
-                    round(
-                        $baseRate,
-                        2
-                    ),
-            ],
+                    'route_name' =>
+                        $transferRoute['route_name'],
+
+                    'pickup_branch_id' =>
+                        $pickupBranchId,
+
+                    'delivery_branch_id' =>
+                        $deliveryBranchId,
+
+                    'same_branch' =>
+                        false,
+
+                    'base_rate' =>
+                        round($baseRate, 2),
+
+                    'transfer_count' =>
+                        (int) $transferRoute['transfer_count'],
+
+                    'lane_count' =>
+                        (int) $transferRoute['lane_count'],
+
+                    'transit_count' =>
+                        (int) $transferRoute['transit_count'],
+
+                    'path' =>
+                        $transferRoute['path'],
+
+                    'path_text' =>
+                        $transferRoute['path_text'],
+
+                    'transit_branches' =>
+                        $transferRoute['transit_branches'],
+
+                    'total_distance_km' =>
+                        (float) $transferRoute['total_distance_km'],
+
+                    'total_estimated_hours' =>
+                        (int) $transferRoute['total_estimated_hours'],
+                ]
+                : [
+                    'route_rate_id' =>
+                        (int) $routeRate->id,
+
+                    'pickup_branch_id' =>
+                        $pickupBranchId,
+
+                    'delivery_branch_id' =>
+                        $deliveryBranchId,
+
+                    'same_branch' =>
+                        $isSameBranch,
+
+                    'base_rate' =>
+                        round($baseRate, 2),
+                ],
 
             'packet_count' =>
                 $packetCount,
@@ -587,8 +644,15 @@ class PricingEngineService
 
             'breakdown' => [
                 'route_base_rate' => [
+                    'source' =>
+                        $transferRoute !== null
+                            ? 'branch_transfer_routes'
+                            : 'branch_route_rates',
+
                     'rule_id' =>
-                        (int) $routeRate->id,
+                        $transferRoute !== null
+                            ? (int) $transferRoute['route_id']
+                            : (int) $routeRate->id,
 
                     'amount' =>
                         round(
@@ -736,9 +800,7 @@ class PricingEngineService
      */
     private function routeBaseRate(
         int $pickupBranchId,
-        int $deliveryBranchId,
-        string $pickupBranchName,
-        string $deliveryBranchName
+        int $deliveryBranchId
     ): object {
         $rule = DB::table('branch_route_rates')
             ->where(
@@ -777,20 +839,7 @@ class PricingEngineService
         if (!$rule) {
             throw ValidationException::withMessages([
                 'delivery_address' => [
-                    sprintf(
-                        'Base rate is not configured from %s (branch ID %d) to %s (branch ID %d).',
-                        $pickupBranchName,
-                        $pickupBranchId,
-                        $deliveryBranchName,
-                        $deliveryBranchId
-                    ),
-                ],
-                'resolved_route' => [
-                    sprintf(
-                        '%d:%d',
-                        $pickupBranchId,
-                        $deliveryBranchId
-                    ),
+                    'Base rate is not configured for the selected branch route.',
                 ],
             ]);
         }

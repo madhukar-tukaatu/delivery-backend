@@ -20,5 +20,21 @@ return [
     //     'MARKETPLACE_STORE_PACKET_MODE',
     //     'single_per_store'
     // ),
-     'store_packet_mode' => 'single_per_store',
+    'store_packet_mode' => 'single_per_store',
+    // 'store_packet_mode' => 'explicit_packets',
+    // 'store_packet_mode' => 'per_product_quantity',
+    /*
+     * Marketplace pricing uses physical transfer-lane count
+     * instead of direct branch_route_rates.
+     */
+    'use_transfer_count_pricing' =>
+    true,
+
+    /*
+    |--------------------------------------------------------------------------
+    | Marketplace route pricing
+    |--------------------------------------------------------------------------
+    */
+
+    'base_rate_mode' => 'configured_transfer_route',
 ];

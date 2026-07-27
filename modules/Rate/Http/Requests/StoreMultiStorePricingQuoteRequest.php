@@ -5,6 +5,7 @@ namespace Modules\Rate\Http\Requests;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
+use Modules\Rate\Enums\MarketplacePackingMode;
 
 class StoreMultiStorePricingQuoteRequest extends FormRequest
 {
@@ -166,13 +167,20 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
                 ]),
             ],
 
+            // 'stores.*.packing_policy' => [
+            //     'required',
+            //     Rule::in([
+            //         'single_per_store',
+            //         'per_product_quantity',
+            //         'explicit_packets',
+            //     ]),
+            // ],
+
             'stores.*.packing_policy' => [
                 'required',
-                Rule::in([
-                    'single_per_store',
-                    'per_product_quantity',
-                    'explicit_packets',
-                ]),
+                Rule::in(
+                    MarketplacePackingMode::values()
+                ),
             ],
 
             'stores.*.products' => [
@@ -438,8 +446,8 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
 
                 $providedDimensions = collect($dimensionKeys)
                     ->filter(
-                        static fn (string $key): bool =>
-                            isset($store[$key]) && $store[$key] !== ''
+                        static fn(string $key): bool =>
+                        isset($store[$key]) && $store[$key] !== ''
                     )
                     ->count();
 
@@ -486,7 +494,7 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
             $hasPackets => 'packets',
             isset($store['parcel_weight']) &&
                 $store['parcel_weight'] !== '' =>
-                'legacy_single_parcel',
+            'legacy_single_parcel',
             default => 'missing',
         };
 

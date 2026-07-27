@@ -8,18 +8,17 @@ use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use stdClass;
-class MainBranchResolverService
+
+final class MainBranchResolverService
 {
     /**
-     * Resolve pickup/delivery coordinates to the responsible MAIN branch.
+     * Resolve coordinates to the main branch responsible for pricing.
      *
-     * Rules:
-     * - A point inside a main_branch_zone resolves to that zone's branch_id.
-     * - A point inside a sub_branch_zone resolves through parent_id to the
-     *   parent main_branch_zone's branch_id.
-     * - Pricing never uses the operational sub-branch ID directly.
-     * - resolved_distance_km is measured from the responsible main zone,
-     *   because local distance pricing is based on the responsible branch.
+     * Supported ownership layouts:
+     * 1. coverage_locations.branch_id -> branches.id
+     * 2. branches.coverage_location_id -> coverage_locations.id
+     * 3. sub-branch branch.parent_id -> main branch
+     * 4. sub-zone coverage_locations.parent_id -> main coverage zone
      */
     public function resolve(float $latitude, float $longitude): object
     {
@@ -35,11 +34,28 @@ class MainBranchResolverService
             ]);
         }
 
+        $branches = $this->branches();
+
         $zonesById = $zones->keyBy(
             static fn (object $zone): int => (int) $zone->id
         );
 
+        $branchesById = $branches->keyBy(
+            static fn (object $branch): int => (int) $branch->id
+        );
+
+        $branchesByCoverageLocationId = $branches
+            ->filter(
+                static fn (object $branch): bool =>
+                    $branch->coverage_location_id !== null
+            )
+            ->keyBy(
+                static fn (object $branch): int =>
+                    (int) $branch->coverage_location_id
+            );
+
         $matches = [];
+        $insideButUnmapped = [];
         $nearest = null;
 
         foreach ($zones as $zone) {
@@ -55,39 +71,72 @@ class MainBranchResolverService
                 (float) $zone->coverage_radius_km
             );
 
-            $nearestCandidate = [
-                'zone' => $zone,
-                'distance_km' => $distanceKm,
-            ];
-
             if (
                 $nearest === null ||
                 $distanceKm < $nearest['distance_km']
             ) {
-                $nearest = $nearestCandidate;
+                $nearest = [
+                    'zone' => $zone,
+                    'distance_km' => $distanceKm,
+                ];
             }
 
             if ($distanceKm > $radiusKm) {
                 continue;
             }
 
-            $mainZone = $this->responsibleMainZone(
-                $zone,
-                $zonesById
+            $responsibility = $this->resolveResponsibility(
+                zone: $zone,
+                zones: $zones,
+                zonesById: $zonesById,
+                branchesById: $branchesById,
+                branchesByCoverageLocationId: $branchesByCoverageLocationId
             );
 
-            if (!$mainZone || !$mainZone->branch_id) {
+            if ($responsibility === null) {
+                $insideButUnmapped[] = [
+                    'zone' => $zone,
+                    'distance_km' => $distanceKm,
+                ];
+
                 continue;
             }
 
             $matches[] = [
                 'matched_zone' => $zone,
                 'matched_distance_km' => $distanceKm,
-                'main_zone' => $mainZone,
-                'specificity' => $zone->type === 'sub_branch_zone'
-                    ? 0
-                    : 1,
+                'main_zone' => $responsibility['main_zone'],
+                'main_branch' => $responsibility['main_branch'],
+                'specificity' =>
+                    $zone->type === 'sub_branch_zone' ? 0 : 1,
             ];
+        }
+
+        /*
+         * A point inside a radius must not be reported as outside coverage.
+         * Report the actual configuration problem instead.
+         */
+        if ($matches === [] && $insideButUnmapped !== []) {
+            usort(
+                $insideButUnmapped,
+                static fn (array $first, array $second): int =>
+                    $first['distance_km'] <=> $second['distance_km']
+            );
+
+            $unmapped = $insideButUnmapped[0];
+            $zone = $unmapped['zone'];
+
+            throw ValidationException::withMessages([
+                'address' => [
+                    sprintf(
+                        'The location is inside %s (%s), %.2f km away within its %.2f km radius, but that coverage zone is not linked to a valid main pricing branch.',
+                        (string) $zone->name,
+                        (string) $zone->code,
+                        (float) $unmapped['distance_km'],
+                        (float) $zone->coverage_radius_km
+                    ),
+                ],
+            ]);
         }
 
         if ($matches === []) {
@@ -128,44 +177,45 @@ class MainBranchResolverService
         $selected = $matches[0];
         $matchedZone = $selected['matched_zone'];
         $mainZone = $selected['main_zone'];
+        $mainBranch = $selected['main_branch'];
 
-        $branch = DB::table('branches')
-            ->where('id', (int) $mainZone->branch_id)
-            ->first();
-
-        if (!$branch) {
-            throw ValidationException::withMessages([
-                'address' => [
-                    sprintf(
-                        'The responsible main coverage zone %s is not assigned to a valid branch.',
-                        (string) $mainZone->code
-                    ),
-                ],
-            ]);
-        }
-
-        $responsibleDistanceKm = $this->distanceKm(
-            $latitude,
-            $longitude,
-            (float) $mainZone->latitude,
-            (float) $mainZone->longitude
-        );
+        $responsibleDistanceKm = $mainZone
+            ? $this->distanceKm(
+                $latitude,
+                $longitude,
+                (float) $mainZone->latitude,
+                (float) $mainZone->longitude
+            )
+            : (float) $selected['matched_distance_km'];
 
         $result = new stdClass();
 
-        $result->id = (int) $branch->id;
-        $result->name = (string) $branch->name;
-        $result->code = (string) ($branch->code ?? '');
-        $result->parent_id = isset($branch->parent_id)
-            ? (int) $branch->parent_id
+        $result->id = (int) $mainBranch->id;
+        $result->name = (string) $mainBranch->name;
+        $result->code = (string) ($mainBranch->code ?? '');
+        $result->parent_id = $mainBranch->parent_id !== null
+            ? (int) $mainBranch->parent_id
             : null;
 
-        $result->coverage_location_id = (int) $mainZone->id;
-        $result->coverage_name = (string) $mainZone->name;
-        $result->coverage_code = (string) $mainZone->code;
-        $result->coverage_type = (string) $mainZone->type;
-        $result->coverage_radius_km =
-            (float) $mainZone->coverage_radius_km;
+        $result->coverage_location_id = $mainZone
+            ? (int) $mainZone->id
+            : (int) $matchedZone->id;
+
+        $result->coverage_name = $mainZone
+            ? (string) $mainZone->name
+            : (string) $matchedZone->name;
+
+        $result->coverage_code = $mainZone
+            ? (string) $mainZone->code
+            : (string) $matchedZone->code;
+
+        $result->coverage_type = $mainZone
+            ? (string) $mainZone->type
+            : (string) $matchedZone->type;
+
+        $result->coverage_radius_km = $mainZone
+            ? (float) $mainZone->coverage_radius_km
+            : (float) $matchedZone->coverage_radius_km;
 
         $result->matched_coverage_location_id =
             (int) $matchedZone->id;
@@ -213,51 +263,193 @@ class MainBranchResolverService
             ]);
     }
 
-    private function responsibleMainZone(
-        object $zone,
-        Collection $zonesById
-    ): ?object {
-        if ($zone->type === 'main_branch_zone') {
-            return $zone;
-        }
+    private function branches(): Collection
+    {
+        return DB::table('branches')
+            ->get([
+                'id',
+                'name',
+                'code',
+                'parent_id',
+                'coverage_location_id',
+                'status',
+            ]);
+    }
 
-        if (
-            $zone->type === 'sub_branch_zone' &&
-            $zone->parent_id
-        ) {
-            $parentZone = $zonesById->get(
-                (int) $zone->parent_id
+    /**
+     * @return array{main_branch: object, main_zone: object|null}|null
+     */
+    private function resolveResponsibility(
+        object $zone,
+        Collection $zones,
+        Collection $zonesById,
+        Collection $branchesById,
+        Collection $branchesByCoverageLocationId
+    ): ?array {
+        $allocatedBranch = $this->branchForZone(
+            zone: $zone,
+            branchesById: $branchesById,
+            branchesByCoverageLocationId: $branchesByCoverageLocationId
+        );
+
+        /*
+         * First choice: resolve through the branch allocated to this zone.
+         */
+        if ($allocatedBranch !== null) {
+            $mainBranch = $this->rootBranch(
+                $allocatedBranch,
+                $branchesById
             );
 
-            if (
-                $parentZone &&
-                $parentZone->type === 'main_branch_zone'
-            ) {
-                return $parentZone;
+            if ($mainBranch !== null) {
+                return [
+                    'main_branch' => $mainBranch,
+                    'main_zone' => $this->mainZoneForBranch(
+                        branch: $mainBranch,
+                        zones: $zones,
+                        zonesById: $zonesById
+                    ),
+                ];
             }
         }
 
         /*
-         * Compatibility fallback: when a sub-zone has a branch allocation
-         * but no parent coverage zone, use the branch's parent main branch.
+         * Second choice: parent_id may reference a parent coverage zone.
          */
-        if ($zone->branch_id) {
-            $allocatedBranch = DB::table('branches')
-                ->where('id', (int) $zone->branch_id)
-                ->first(['id', 'parent_id']);
+        if ($zone->parent_id !== null) {
+            $parentZone = $zonesById->get(
+                (int) $zone->parent_id
+            );
 
-            if ($allocatedBranch?->parent_id) {
-                $parentBranchId = (int) $allocatedBranch->parent_id;
-
-                return $zonesById->first(
-                    static fn (object $candidate): bool =>
-                        $candidate->type === 'main_branch_zone' &&
-                        (int) $candidate->branch_id === $parentBranchId
+            if ($parentZone !== null) {
+                $parentZoneBranch = $this->branchForZone(
+                    zone: $parentZone,
+                    branchesById: $branchesById,
+                    branchesByCoverageLocationId: $branchesByCoverageLocationId
                 );
+
+                if ($parentZoneBranch !== null) {
+                    $mainBranch = $this->rootBranch(
+                        $parentZoneBranch,
+                        $branchesById
+                    );
+
+                    if ($mainBranch !== null) {
+                        return [
+                            'main_branch' => $mainBranch,
+                            'main_zone' => $parentZone,
+                        ];
+                    }
+                }
+            }
+
+            /*
+             * Compatibility: parent_id may reference a parent branch.
+             */
+            $parentBranch = $branchesById->get(
+                (int) $zone->parent_id
+            );
+
+            if ($parentBranch !== null) {
+                $mainBranch = $this->rootBranch(
+                    $parentBranch,
+                    $branchesById
+                );
+
+                if ($mainBranch !== null) {
+                    return [
+                        'main_branch' => $mainBranch,
+                        'main_zone' => $this->mainZoneForBranch(
+                            branch: $mainBranch,
+                            zones: $zones,
+                            zonesById: $zonesById
+                        ),
+                    ];
+                }
             }
         }
 
         return null;
+    }
+
+    private function branchForZone(
+        object $zone,
+        Collection $branchesById,
+        Collection $branchesByCoverageLocationId
+    ): ?object {
+        if ($zone->branch_id !== null) {
+            $branch = $branchesById->get(
+                (int) $zone->branch_id
+            );
+
+            if ($branch !== null) {
+                return $branch;
+            }
+        }
+
+        return $branchesByCoverageLocationId->get(
+            (int) $zone->id
+        );
+    }
+
+    private function rootBranch(
+        object $branch,
+        Collection $branchesById
+    ): ?object {
+        $current = $branch;
+        $visited = [];
+
+        for ($depth = 0; $depth < 20; $depth++) {
+            $currentId = (int) $current->id;
+
+            if (isset($visited[$currentId])) {
+                return null;
+            }
+
+            $visited[$currentId] = true;
+
+            if ($current->parent_id === null) {
+                return $current;
+            }
+
+            $parent = $branchesById->get(
+                (int) $current->parent_id
+            );
+
+            if ($parent === null) {
+                return null;
+            }
+
+            $current = $parent;
+        }
+
+        return null;
+    }
+
+    private function mainZoneForBranch(
+        object $branch,
+        Collection $zones,
+        Collection $zonesById
+    ): ?object {
+        if ($branch->coverage_location_id !== null) {
+            $zone = $zonesById->get(
+                (int) $branch->coverage_location_id
+            );
+
+            if (
+                $zone !== null &&
+                $zone->type === 'main_branch_zone'
+            ) {
+                return $zone;
+            }
+        }
+
+        return $zones->first(
+            static fn (object $candidate): bool =>
+                $candidate->type === 'main_branch_zone' &&
+                $candidate->branch_id !== null &&
+                (int) $candidate->branch_id === (int) $branch->id
+        );
     }
 
     private function validateCoordinates(
@@ -292,6 +484,7 @@ class MainBranchResolverService
         $latitudeDelta = deg2rad(
             $latitudeTwo - $latitudeOne
         );
+
         $longitudeDelta = deg2rad(
             $longitudeTwo - $longitudeOne
         );

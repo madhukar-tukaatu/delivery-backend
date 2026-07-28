@@ -2,34 +2,23 @@
 
 namespace Modules\Rate\Services\Pricing;
 
-use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
-use stdClass;
+use Modules\Rate\Models\PricingSetting;
 
 final class ActivePricingSettingsService
 {
-    public function active(): stdClass
+    public function active(): PricingSetting
     {
-        $settings = DB::table('pricing_settings')
-            ->where('is_active', true)
-            ->where(function ($query): void {
-                $query
-                    ->whereNull('effective_from')
-                    ->orWhere('effective_from', '<=', now());
-            })
-            ->where(function ($query): void {
-                $query
-                    ->whereNull('effective_until')
-                    ->orWhere('effective_until', '>', now());
-            })
-            ->orderByDesc('effective_from')
-            ->orderByDesc('id')
+        $settings = PricingSetting::query()
+            ->global()
+            ->active()
+            ->latest('id')
             ->first();
 
         if (!$settings) {
             throw ValidationException::withMessages([
                 'pricing_settings' => [
-                    'No active pricing-settings version is configured.',
+                    'No active global pricing-settings version is configured.',
                 ],
             ]);
         }

@@ -10,6 +10,8 @@ use Modules\Rate\Http\Controllers\Api\Admin\AdminPricingReturnRuleController;
 use Modules\Rate\Http\Controllers\Api\Admin\AdminPricingSettingsController;
 use Modules\Rate\Http\Controllers\Api\Admin\AdminPricingTestController;
 use Modules\Rate\Http\Controllers\Api\Admin\AdminServiceTypeController;
+use Modules\Rate\Http\Controllers\Api\Admin\AdminTransferRoutePricingProfileController;
+use Modules\Rate\Http\Controllers\Api\Admin\AdminTransferRoutePricingSettingsController;
 use Modules\Rate\Http\Controllers\Api\MarketplacePricingQuoteController;
 use Modules\Rate\Http\Controllers\Api\PublicPricingQuoteController;
 
@@ -199,12 +201,76 @@ Route::middleware('auth:sanctum')
             ->name(
                 'admin.pricing.transfer-routes.destroy'
             );
+
+        Route::get(
+            '/branch-transfer-routes/{branchTransferRoute}/pricing-settings',
+            [
+                AdminTransferRoutePricingSettingsController::class,
+                'index',
+            ]
+        )->whereNumber('branchTransferRoute');
+
+        Route::post(
+            '/branch-transfer-routes/{branchTransferRoute}/pricing-settings',
+            [
+                AdminTransferRoutePricingSettingsController::class,
+                'store',
+            ]
+        )->whereNumber('branchTransferRoute');
+
+        Route::get(
+            '/branch-transfer-routes/{branchTransferRoute}/pricing-profile',
+            [
+                AdminTransferRoutePricingProfileController::class,
+                'show',
+            ]
+        )->whereNumber('branchTransferRoute');
+
+        Route::put(
+            '/branch-transfer-routes/{branchTransferRoute}/pricing-profile',
+            [
+                AdminTransferRoutePricingProfileController::class,
+                'update',
+            ]
+        )->whereNumber('branchTransferRoute');
+
+        /*
+ * Keep use-global before routes containing {pricingSetting}.
+ */
+        Route::post(
+            '/branch-transfer-routes/{branchTransferRoute}/pricing-settings/use-global',
+            [
+                AdminTransferRoutePricingSettingsController::class,
+                'useGlobal',
+            ]
+        )->whereNumber('branchTransferRoute');
+
+        Route::post(
+            '/branch-transfer-routes/{branchTransferRoute}/pricing-settings/{pricingSetting}/activate',
+            [
+                AdminTransferRoutePricingSettingsController::class,
+                'activate',
+            ]
+        )
+            ->whereNumber('branchTransferRoute')
+            ->whereNumber('pricingSetting');
+
+        Route::delete(
+            '/branch-transfer-routes/{branchTransferRoute}/pricing-settings/{pricingSetting}',
+            [
+                AdminTransferRoutePricingSettingsController::class,
+                'destroy',
+            ]
+        )
+            ->whereNumber('branchTransferRoute')
+            ->whereNumber('pricingSetting');
     });
 
 Route::prefix('v1/admin')
     ->name('admin.')
     ->middleware(['auth:sanctum', 'route.permission'])
     ->group(function (): void {
+        Route::get('pricing-settings/defaults', [AdminPricingSettingsController::class, 'defaults',]);
         Route::get('pricing-settings', [AdminPricingSettingsController::class, 'index'])->name('pricing-settings.index');
         Route::post('pricing-settings', [AdminPricingSettingsController::class, 'store'])->name('pricing-settings.store');
         Route::get('pricing-settings/{pricingSetting}', [AdminPricingSettingsController::class, 'show'])->name('pricing-settings.show');

@@ -7,12 +7,14 @@ namespace Modules\Rate\Services;
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
+use Modules\Rate\Services\Pricing\DirectionalDeliveryPricingService;
 
 final class PricingEngineService
 {
     public function __construct(
         private readonly MainBranchResolverService $branchResolver,
-        private readonly ConfiguredTransferRouteService $configuredTransferRouteService
+        private readonly ConfiguredTransferRouteService $configuredTransferRouteService,
+        private readonly DirectionalDeliveryPricingService $directionalDeliveryPricingService
     ) {}
 
     public function calculate(

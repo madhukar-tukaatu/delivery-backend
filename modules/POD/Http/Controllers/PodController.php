@@ -5,20 +5,20 @@ namespace Modules\POD\Http\Controllers;
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
-use Modules\POD\Models\CodDeposit;
-use Modules\POD\Models\CodRecord;
+use Modules\POD\Models\PodDeposit;
+use Modules\POD\Models\PodRecord;
 
-class CodController extends Controller
+class PodController extends Controller
 {
     public function index(Request $request)
     {
-        $query = CodRecord::with('shipment')->latest();
+        $query = PodRecord::with('shipment')->latest();
         if ($request->user()->role === 'merchant') $query->where('merchant_id', $request->user()->merchant_id);
         if ($request->filled('status')) $query->where('status', $request->status);
         return ApiResponse::success($query->paginate((int) $request->get('per_page', 20)));
     }
 
-    public function collect(Request $request, CodRecord $pod)
+    public function collect(Request $request, PodRecord $pod)
     {
         $data = $request->validate([
             'collected_amount' => ['required', 'numeric', 'min:0'],
@@ -40,16 +40,16 @@ class CodController extends Controller
             'branch_id' => ['nullable', 'exists:branches,id'],
             'remarks' => ['nullable', 'string'],
         ]);
-        $records = CodRecord::whereIn('id', $data['pod_record_ids'])->get();
+        $records = PodRecord::whereIn('id', $data['pod_record_ids'])->get();
         $amount = $records->sum('collected_amount');
-        $deposit = CodDeposit::create([
+        $deposit = PodDeposit::create([
             'branch_id' => $data['branch_id'] ?? $request->user()->branch_id,
             'staff_id' => $request->user()->id,
             'amount' => $amount,
             'status' => 'confirmed',
             'remarks' => $data['remarks'] ?? null,
         ]);
-        CodRecord::whereIn('id', $data['pod_record_ids'])->update([
+        PodRecord::whereIn('id', $data['pod_record_ids'])->update([
             'status' => 'deposited',
             'deposited_to_branch_id' => $data['branch_id'] ?? $request->user()->branch_id,
             'deposited_at' => now(),

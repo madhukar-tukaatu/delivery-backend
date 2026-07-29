@@ -1,8 +1,7 @@
 <?php
-
-use App\Http\Controllers\Auth\SetInitialPasswordController;
 use Illuminate\Support\Facades\Route;
 use Modules\Auth\Http\Controllers\AuthController;
+use Modules\Auth\Http\Controllers\SetInitialPasswordController;
 
 Route::prefix('v1/auth')
     ->name('auth.')
@@ -33,10 +32,12 @@ Route::prefix('v1/auth')
         });
     });
 
-Route::post(
-    '/auth/set-initial-password',
-    [
-        SetInitialPasswordController::class,
-        'store',
-    ]
-)->middleware('throttle:6,1');
+Route::prefix('v1/auth')
+    ->group(function (): void {
+        Route::post(
+            '/set-initial-password',
+            SetInitialPasswordController::class
+        )->name(
+            'auth.set-initial-password'
+        );
+    });

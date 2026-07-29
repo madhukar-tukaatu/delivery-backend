@@ -24,7 +24,15 @@ Route::prefix('v1/admin')
                     'update' => 'branches.update',
                     'destroy' => 'branches.destroy',
                 ]);
-
+            Route::post(
+                'branches/{branch}/resend-account-invitation',
+                [
+                    BranchController::class,
+                    'resendAccountInvitation',
+                ]
+            )->name(
+                'branches.resend-account-invitation'
+            );
             Route::post('branches/{branch}/approve', [BranchController::class, 'approve'])
                 ->name('branches.approve');
 

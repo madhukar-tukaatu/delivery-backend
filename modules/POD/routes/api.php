@@ -1,7 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
-use Modules\POD\Http\Controllers\CodController;
+use Modules\POD\Http\Controllers\PodController;
 
 /*
 |--------------------------------------------------------------------------
@@ -26,13 +26,13 @@ Route::prefix('v1/admin')
             | pod.deposit
             */
 
-            Route::get('pod', [CodController::class, 'index'])
+            Route::get('pod', [PodController::class, 'index'])
                 ->name('pod.index');
 
-            Route::post('pod/{pod}/collect', [CodController::class, 'collect'])
+            Route::post('pod/{pod}/collect', [PodController::class, 'collect'])
                 ->name('pod.collect');
 
-            Route::post('pod/deposit', [CodController::class, 'deposit'])
+            Route::post('pod/deposit', [PodController::class, 'deposit'])
                 ->name('pod.deposit');
         });
     });
@@ -58,7 +58,7 @@ Route::prefix('v1/merchant')
             | merchant.pod OR pod.view
             */
 
-            Route::get('pod', [CodController::class, 'index'])
+            Route::get('pod', [PodController::class, 'index'])
                 ->name('pod.index');
         });
     });
@@ -84,10 +84,10 @@ Route::prefix('v1/staff')
             | staff.pod OR pod.view
             */
 
-            Route::get('pod', [CodController::class, 'index'])
+            Route::get('pod', [PodController::class, 'index'])
                 ->name('pod.index');
 
-            Route::post('pod/deposit', [CodController::class, 'deposit'])
+            Route::post('pod/deposit', [PodController::class, 'deposit'])
                 ->name('pod.deposit');
         });
     });

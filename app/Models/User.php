@@ -65,6 +65,8 @@ class User extends Authenticatable
             'is_active' => 'boolean',
             'must_change_password' => 'boolean',
             'assigned_at' => 'datetime',
+            'account_setup_completed_at' => 'datetime',
+            'last_login_at' => 'datetime',
         ];
     }
 

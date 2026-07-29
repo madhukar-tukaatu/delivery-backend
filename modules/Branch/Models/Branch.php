@@ -71,6 +71,14 @@ class Branch extends Model
         'rejected_by',
         'rejected_at',
         'rejection_reason',
+
+        'account_invitation_status',
+        'account_invitation_email',
+        'account_invitation_queued_at',
+        'account_invitation_sent_at',
+        'account_invitation_failed_at',
+        'account_invitation_error',
+        'account_invitation_count',
     ];
 
     protected $casts = [
@@ -91,6 +99,12 @@ class Branch extends Model
 
         'approved_at' => 'datetime',
         'rejected_at' => 'datetime',
+
+        'account_invitation_queued_at' => 'datetime',
+        'account_invitation_sent_at' => 'datetime',
+        'account_invitation_failed_at' => 'datetime',
+
+        'account_invitation_count' => 'integer',
     ];
 
     public const TYPE_HEAD_BRANCH = 'head_branch';

@@ -1,19 +1,23 @@
 <?php
 
-namespace App\Http\Controllers\Auth;
+namespace Modules\Auth\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use Illuminate\Auth\Events\PasswordReset;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rules\Password as PasswordRule;
+use Illuminate\Validation\ValidationException;
+use Modules\Branch\Models\Branch;
+use Modules\Branch\Services\BranchAccountInvitationService;
 
-class SetInitialPasswordController extends Controller
+final class SetInitialPasswordController extends Controller
 {
-    public function store(
+    public function __invoke(
         Request $request
     ): JsonResponse {
         $data = $request->validate([
@@ -25,12 +29,12 @@ class SetInitialPasswordController extends Controller
             'email' => [
                 'required',
                 'email',
-                'exists:users,email',
             ],
 
             'password' => [
                 'required',
                 'confirmed',
+
                 PasswordRule::min(8)
                     ->letters()
                     ->mixedCase()
@@ -38,39 +42,119 @@ class SetInitialPasswordController extends Controller
             ],
         ]);
 
+        $user = User::query()
+            ->where(
+                'email',
+                $data['email']
+            )
+            ->first();
+
+        if (!$user) {
+            throw ValidationException::withMessages([
+                'email' => [
+                    'The account setup link is invalid or has expired.',
+                ],
+            ]);
+        }
+
+        $branch = Branch::query()
+            ->where(
+                'manager_user_id',
+                $user->id
+            )
+            ->whereIn(
+                'status',
+                [
+                    Branch::STATUS_APPROVED,
+                    Branch::STATUS_ACTIVE,
+                ]
+            )
+            ->first();
+
+        if (!$branch) {
+            throw ValidationException::withMessages([
+                'email' => [
+                    'This account is not linked to an approved franchise.',
+                ],
+            ]);
+        }
+
         $status = Password::broker()->reset(
             [
-                'email' => $data['email'],
-                'token' => $data['token'],
-                'password' => $data['password'],
+                'email' =>
+                    $data['email'],
+
+                'password' =>
+                    $data['password'],
+
                 'password_confirmation' =>
-                    $request->input(
+                    $data[
                         'password_confirmation'
-                    ),
+                    ],
+
+                'token' =>
+                    $data['token'],
             ],
+
             function (
-                User $user,
+                User $resetUser,
                 string $password
-            ): void {
-                $user->password = $password;
+            ) use ($branch): void {
+                $resetUser->forceFill([
+                    'password' =>
+                        Hash::make(
+                            $password
+                        ),
 
-                $user->must_change_password = false;
-                $user->is_active = true;
-                $user->account_status =
-                    User::ACCOUNT_ACTIVE;
+                    'email_verified_at' =>
+                        $resetUser
+                            ->email_verified_at
+                        ?: now(),
 
-                $user->email_verified_at =
-                    $user->email_verified_at
-                    ?? now();
+                    'account_setup_completed_at' =>
+                        now(),
+                ]);
 
-                $user->setRememberToken(
+                $resetUser->setRememberToken(
                     Str::random(60)
                 );
 
-                $user->save();
+                $resetUser->save();
+
+                /*
+                 * Remove old Sanctum sessions if any temporary
+                 * access token was created previously.
+                 */
+                if (
+                    method_exists(
+                        $resetUser,
+                        'tokens'
+                    )
+                ) {
+                    $resetUser
+                        ->tokens()
+                        ->delete();
+                }
+
+                $branch->forceFill([
+                    'account_invitation_status' =>
+                        BranchAccountInvitationService::
+                            STATUS_ACCOUNT_CONFIGURED,
+
+                    'account_invitation_email' =>
+                        $resetUser->email,
+
+                    'account_invitation_failed_at' =>
+                        null,
+
+                    'account_invitation_error' =>
+                        null,
+                ])->save();
 
                 event(
-                    new PasswordReset($user)
+                    new PasswordReset(
+                        $resetUser
+                    )
                 );
             }
         );
@@ -79,14 +163,28 @@ class SetInitialPasswordController extends Controller
             $status !==
             Password::PASSWORD_RESET
         ) {
-            return response()->json([
-                'message' => __($status),
-            ], 422);
+            throw ValidationException::withMessages([
+                'email' => [
+                    __($status),
+                ],
+            ]);
         }
 
         return response()->json([
+            'success' =>
+                true,
+
             'message' =>
-                'Password created successfully. You can now log in.',
+                'Your password has been created successfully. You can now sign in.',
+
+            /*
+             * No separate Branch Manager portal.
+             */
+            'redirect_url' =>
+                '/login?account_setup=success&email='
+                . rawurlencode(
+                    $data['email']
+                ),
         ]);
     }
 }

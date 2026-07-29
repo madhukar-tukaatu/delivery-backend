@@ -4,7 +4,7 @@ namespace Modules\POD\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-class CodDeposit extends Model
+class PodDeposit extends Model
 {
     protected $guarded = [];
 }

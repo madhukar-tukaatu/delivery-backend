@@ -10,32 +10,37 @@ use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 use Modules\Branch\Models\Branch;
 
-class BranchCreatedMail extends Mailable
+final class BranchAccountInvitationMail extends Mailable
 {
     use Queueable;
     use SerializesModels;
 
     public function __construct(
-        public Branch $branch,
-        public User $manager,
-        public int $generatedUserCount,
-        public string $setPasswordUrl,
-        public string $loginUrl
+        public readonly Branch $branch,
+        public readonly User $manager,
+        public readonly string $setPasswordUrl,
+        public readonly string $loginUrl
     ) {
     }
 
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject:
-                'Your Tukaatu Express branch is ready'
+            subject: 'Your Tukaatu Express franchise has been approved'
         );
     }
 
     public function content(): Content
     {
         return new Content(
-            view: 'emails.branch-created'
+            view: 'branch::emails.branch-account-invitation',
+
+            with: [
+                'branch' => $this->branch,
+                'manager' => $this->manager,
+                'setPasswordUrl' => $this->setPasswordUrl,
+                'loginUrl' => $this->loginUrl,
+            ]
         );
     }
 

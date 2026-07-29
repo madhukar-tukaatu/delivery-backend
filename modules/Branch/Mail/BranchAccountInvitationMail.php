@@ -33,7 +33,12 @@ final class BranchAccountInvitationMail extends Mailable
     public function content(): Content
     {
         return new Content(
-            view: 'branch::emails.branch-account-invitation',
+            /*
+             * Normal Laravel view path.
+             * File:
+             * resources/views/emails/branch-account-invitation.blade.php
+             */
+            view: 'emails.branch-account-invitation',
 
             with: [
                 'branch' => $this->branch,

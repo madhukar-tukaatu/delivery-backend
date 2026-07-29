@@ -33,6 +33,7 @@ final class SetInitialPasswordController extends Controller
 
             'password' => [
                 'required',
+                'string',
                 'confirmed',
 
                 PasswordRule::min(8)
@@ -40,13 +41,19 @@ final class SetInitialPasswordController extends Controller
                     ->mixedCase()
                     ->numbers(),
             ],
+
+            /*
+             * This must be validated explicitly so it
+             * is included in the validated $data array.
+             */
+            'password_confirmation' => [
+                'required',
+                'string',
+            ],
         ]);
 
         $user = User::query()
-            ->where(
-                'email',
-                $data['email']
-            )
+            ->where('email', $data['email'])
             ->first();
 
         if (!$user) {
@@ -74,8 +81,28 @@ final class SetInitialPasswordController extends Controller
         if (!$branch) {
             throw ValidationException::withMessages([
                 'email' => [
-                    'This account is not linked to an approved franchise.',
+                    'This account is not linked to an approved franchise branch.',
                 ],
+            ]);
+        }
+
+        /*
+         * When setup was already completed, send the
+         * manager directly to the login page.
+         */
+        if (
+            $user->account_setup_completed_at !==
+            null
+        ) {
+            return response()->json([
+                'success' => true,
+
+                'message' =>
+                    'This account has already been configured. You can now sign in.',
+
+                'redirect_url' =>
+                    '/login?account_setup=success&email='
+                    . rawurlencode($user->email),
             ]);
         }
 
@@ -88,9 +115,7 @@ final class SetInitialPasswordController extends Controller
                     $data['password'],
 
                 'password_confirmation' =>
-                    $data[
-                        'password_confirmation'
-                    ],
+                    $data['password_confirmation'],
 
                 'token' =>
                     $data['token'],
@@ -102,13 +127,10 @@ final class SetInitialPasswordController extends Controller
             ) use ($branch): void {
                 $resetUser->forceFill([
                     'password' =>
-                        Hash::make(
-                            $password
-                        ),
+                        Hash::make($password),
 
                     'email_verified_at' =>
-                        $resetUser
-                            ->email_verified_at
+                        $resetUser->email_verified_at
                         ?: now(),
 
                     'account_setup_completed_at' =>
@@ -122,8 +144,8 @@ final class SetInitialPasswordController extends Controller
                 $resetUser->save();
 
                 /*
-                 * Remove old Sanctum sessions if any temporary
-                 * access token was created previously.
+                 * Remove any existing Sanctum tokens so the
+                 * manager signs in again with the new password.
                  */
                 if (
                     method_exists(
@@ -171,15 +193,11 @@ final class SetInitialPasswordController extends Controller
         }
 
         return response()->json([
-            'success' =>
-                true,
+            'success' => true,
 
             'message' =>
                 'Your password has been created successfully. You can now sign in.',
 
-            /*
-             * No separate Branch Manager portal.
-             */
             'redirect_url' =>
                 '/login?account_setup=success&email='
                 . rawurlencode(

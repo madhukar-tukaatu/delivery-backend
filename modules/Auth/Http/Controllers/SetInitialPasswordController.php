@@ -196,7 +196,7 @@ final class SetInitialPasswordController extends Controller
             'success' => true,
 
             'message' =>
-                'Your password has been created successfully. You can now sign in.',
+                'Your password has been created successfully. You can sign in now.',
 
             'redirect_url' =>
                 '/login?account_setup=success&email='

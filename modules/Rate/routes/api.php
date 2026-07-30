@@ -13,6 +13,7 @@ use Modules\Rate\Http\Controllers\Api\Admin\AdminServiceTypeController;
 use Modules\Rate\Http\Controllers\Api\Admin\AdminTransferRoutePricingProfileController;
 use Modules\Rate\Http\Controllers\Api\Admin\AdminTransferRoutePricingSettingsController;
 use Modules\Rate\Http\Controllers\Api\MarketplacePricingQuoteController;
+use Modules\Rate\Http\Controllers\Api\PublicPricingEstimateController;
 use Modules\Rate\Http\Controllers\Api\PublicPricingQuoteController;
 
 /*
@@ -396,4 +397,15 @@ Route::prefix('v1/marketplace/pricing')
         Route::post('check', [MarketplacePricingQuoteController::class, 'check'])->name('check');
         Route::post('checkout-quotes', [MarketplacePricingQuoteController::class, 'store'])->name('checkout-quotes.store');
         Route::get('checkout-quotes/{quoteNumber}', [MarketplacePricingQuoteController::class, 'show'])->name('checkout-quotes.show');
+    });
+
+
+Route::prefix('v1/public/pricing')
+    ->name('public.pricing.')
+    ->middleware('throttle:30,1')
+    ->group(function (): void {
+        Route::post(
+            'estimate',
+            PublicPricingEstimateController::class
+        )->name('estimate');
     });

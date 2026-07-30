@@ -30,34 +30,26 @@ final class PublicWebsitePricingEstimateRequest extends FormRequest
                 : 'standard',
         };
 
-        $weightMode = strtolower(trim((string) $this->input(
-            'weight_mode',
-            'actual'
+        $parcelType = strtolower(trim((string) $this->input(
+            'parcel_type',
+            'non_fragile'
         )));
 
-        $weightMode = match ($weightMode) {
-            'volume',
-            'dimension',
-            'dimensions' => 'volumetric',
-            default => $weightMode !== ''
-                ? $weightMode
-                : 'actual',
+        $parcelType = match ($parcelType) {
+            'non-fragile',
+            'non fragile',
+            'normal' => 'non_fragile',
+            default => $parcelType,
         };
 
         $this->merge([
             'service_type' => $serviceType,
-            'weight_mode' => $weightMode,
+            'parcel_type' => $parcelType,
         ]);
     }
 
     public function rules(): array
     {
-        $usesActualWeight = fn (): bool =>
-            $this->input('weight_mode') === 'actual';
-
-        $usesVolumetricWeight = fn (): bool =>
-            $this->input('weight_mode') === 'volumetric';
-
         return [
             'pickup_address' => [
                 'required',
@@ -101,88 +93,48 @@ final class PublicWebsitePricingEstimateRequest extends FormRequest
                 Rule::in([
                     'standard',
                     'express',
-                    'same_day',
                 ]),
             ],
 
-            'weight_mode' => [
+            'parcel_type' => [
                 'required',
                 Rule::in([
-                    'actual',
-                    'volumetric',
+                    'non_fragile',
+                    'fragile',
                 ]),
+            ],
+
+            'actual_weight_kg' => [
+                'required',
+                'numeric',
+                'gt:0',
+                'max:5000',
             ],
 
             'parcel_dimensions' => [
-                Rule::requiredIf($usesVolumetricWeight),
-                'nullable',
+                'required',
                 'array',
             ],
 
             'parcel_dimensions.length_cm' => [
-                Rule::requiredIf($usesVolumetricWeight),
-                'nullable',
+                'required',
                 'numeric',
                 'gt:0',
                 'max:1000',
             ],
 
             'parcel_dimensions.width_cm' => [
-                Rule::requiredIf($usesVolumetricWeight),
-                'nullable',
+                'required',
                 'numeric',
                 'gt:0',
                 'max:1000',
             ],
 
             'parcel_dimensions.height_cm' => [
-                Rule::requiredIf($usesVolumetricWeight),
-                'nullable',
+                'required',
                 'numeric',
                 'gt:0',
                 'max:1000',
-            ],
-
-            'products' => [
-                'required',
-                'array',
-                'min:1',
-                'max:100',
-            ],
-
-            'products.*.product_id' => [
-                'nullable',
-                'string',
-                'max:120',
-            ],
-
-            'products.*.name' => [
-                'required',
-                'string',
-                'max:255',
-            ],
-
-            'products.*.quantity' => [
-                'required',
-                'integer',
-                'min:1',
-                'max:1000',
-            ],
-
-            'products.*.unit_weight' => [
-                Rule::requiredIf($usesActualWeight),
-                'nullable',
-                'numeric',
-                'gt:0',
-                'max:500',
-            ],
-
-            'products.*.parcel_type' => [
-                'required',
-                Rule::in([
-                    'non_fragile',
-                    'fragile',
-                ]),
             ],
         ];
     }
@@ -196,23 +148,11 @@ final class PublicWebsitePricingEstimateRequest extends FormRequest
             'delivery_address.required' =>
                 'Select the delivery location.',
 
-            'weight_mode.required' =>
-                'Select actual or volumetric weight.',
+            'actual_weight_kg.required' =>
+                'Enter the actual parcel weight.',
 
-            'products.required' =>
-                'Add at least one product.',
-
-            'products.*.name.required' =>
-                'Enter the product name.',
-
-            'products.*.quantity.required' =>
-                'Enter the product quantity.',
-
-            'products.*.unit_weight.required' =>
-                'Enter the product unit actual weight.',
-
-            'products.*.unit_weight.gt' =>
-                'The product unit actual weight must be greater than zero.',
+            'actual_weight_kg.gt' =>
+                'The actual parcel weight must be greater than zero.',
 
             'parcel_dimensions.required' =>
                 'Enter the packed parcel dimensions.',

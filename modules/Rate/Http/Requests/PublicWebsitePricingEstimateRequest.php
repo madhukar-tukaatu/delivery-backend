@@ -30,13 +30,34 @@ final class PublicWebsitePricingEstimateRequest extends FormRequest
                 : 'standard',
         };
 
+        $weightMode = strtolower(trim((string) $this->input(
+            'weight_mode',
+            'actual'
+        )));
+
+        $weightMode = match ($weightMode) {
+            'volume',
+            'dimension',
+            'dimensions' => 'volumetric',
+            default => $weightMode !== ''
+                ? $weightMode
+                : 'actual',
+        };
+
         $this->merge([
             'service_type' => $serviceType,
+            'weight_mode' => $weightMode,
         ]);
     }
 
     public function rules(): array
     {
+        $usesActualWeight = fn (): bool =>
+            $this->input('weight_mode') === 'actual';
+
+        $usesVolumetricWeight = fn (): bool =>
+            $this->input('weight_mode') === 'volumetric';
+
         return [
             'pickup_address' => [
                 'required',
@@ -77,7 +98,49 @@ final class PublicWebsitePricingEstimateRequest extends FormRequest
             'service_type' => [
                 'required',
                 'string',
-                'max:50',
+                Rule::in([
+                    'standard',
+                    'express',
+                    'same_day',
+                ]),
+            ],
+
+            'weight_mode' => [
+                'required',
+                Rule::in([
+                    'actual',
+                    'volumetric',
+                ]),
+            ],
+
+            'parcel_dimensions' => [
+                Rule::requiredIf($usesVolumetricWeight),
+                'nullable',
+                'array',
+            ],
+
+            'parcel_dimensions.length_cm' => [
+                Rule::requiredIf($usesVolumetricWeight),
+                'nullable',
+                'numeric',
+                'gt:0',
+                'max:1000',
+            ],
+
+            'parcel_dimensions.width_cm' => [
+                Rule::requiredIf($usesVolumetricWeight),
+                'nullable',
+                'numeric',
+                'gt:0',
+                'max:1000',
+            ],
+
+            'parcel_dimensions.height_cm' => [
+                Rule::requiredIf($usesVolumetricWeight),
+                'nullable',
+                'numeric',
+                'gt:0',
+                'max:1000',
             ],
 
             'products' => [
@@ -107,7 +170,8 @@ final class PublicWebsitePricingEstimateRequest extends FormRequest
             ],
 
             'products.*.unit_weight' => [
-                'required',
+                Rule::requiredIf($usesActualWeight),
+                'nullable',
                 'numeric',
                 'gt:0',
                 'max:500',
@@ -132,6 +196,9 @@ final class PublicWebsitePricingEstimateRequest extends FormRequest
             'delivery_address.required' =>
                 'Select the delivery location.',
 
+            'weight_mode.required' =>
+                'Select actual or volumetric weight.',
+
             'products.required' =>
                 'Add at least one product.',
 
@@ -142,10 +209,22 @@ final class PublicWebsitePricingEstimateRequest extends FormRequest
                 'Enter the product quantity.',
 
             'products.*.unit_weight.required' =>
-                'Enter the product unit weight.',
+                'Enter the product unit actual weight.',
 
             'products.*.unit_weight.gt' =>
-                'The product unit weight must be greater than zero.',
+                'The product unit actual weight must be greater than zero.',
+
+            'parcel_dimensions.required' =>
+                'Enter the packed parcel dimensions.',
+
+            'parcel_dimensions.length_cm.required' =>
+                'Enter the packed parcel length.',
+
+            'parcel_dimensions.width_cm.required' =>
+                'Enter the packed parcel width.',
+
+            'parcel_dimensions.height_cm.required' =>
+                'Enter the packed parcel height.',
         ];
     }
 }

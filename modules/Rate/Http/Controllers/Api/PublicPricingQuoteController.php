@@ -35,12 +35,35 @@ final class PublicPricingQuoteController extends Controller
                 'merchant_id'
             );
 
+            // $quote = $pricingEngine->calculate(
+            //     $validated,
+            //     $merchantId !== null
+            //         ? (int) $merchantId
+            //         : null
+            // );
+            $pricingPayload =
+                $this->buildSingleStorePricingPayload(
+                    $validated
+                );
+
             $quote = $pricingEngine->calculate(
-                $validated,
+                $pricingPayload,
                 $merchantId !== null
                     ? (int) $merchantId
                     : null
             );
+
+            $quote['packing_policy'] =
+                'single_per_store';
+
+            $quote['pricing_model'] =
+                'one_store_one_combined_packet';
+
+            $quote['products'] =
+                $validated['products'] ?? [];
+
+            $quote['product_count'] =
+                $pricingPayload['product_count'];
 
             $productCount = 0;
 
@@ -71,16 +94,24 @@ final class PublicPricingQuoteController extends Controller
                         ? (int) $validated['store_id']
                         : null,
 
-                    'input_mode' => match (true) {
-                        !empty($validated['packets']) =>
-                        'packets',
+                    // 'input_mode' => match (true) {
+                    //     !empty($validated['packets']) =>
+                    //     'packets',
 
-                        !empty($validated['products']) =>
-                        'products',
+                    //     !empty($validated['products']) =>
+                    //     'products',
 
-                        default =>
-                        'legacy_single_parcel',
-                    },
+                    //     default =>
+                    //     'legacy_single_parcel',
+                    // },
+                    'input_mode' =>
+                    'single_per_store',
+
+                    'packing_policy' =>
+                    'single_per_store',
+
+                    'pricing_model' =>
+                    'one_store_one_combined_packet',
 
                     'products' =>
                     $validated['products'] ?? [],
@@ -94,29 +125,44 @@ final class PublicPricingQuoteController extends Controller
                     $quote['packets'] ?? [],
 
                     'product_count' =>
-                    $productCount,
+                    (int) $pricingPayload['product_count'],
 
                     'packet_count' =>
-                    (int) (
-                        $quote['packet_count']
-                        ?? $validated['packet_count']
-                    ),
+                    1,
+
+                    // 'product_count' =>
+                    // $productCount,
+
+                    // 'packet_count' =>
+                    // (int) (
+                    //     $quote['packet_count']
+                    //     ?? $validated['packet_count']
+                    // ),
 
                     /*
                      * Aggregate compatibility fields. Packet-level
                      * weights and types remain available in packets.
                      */
+
                     'parcel_weight' =>
-                    (float) $validated['parcel_weight'],
+                    (float) $pricingPayload['parcel_weight'],
 
                     'parcel_value' =>
-                    (float) (
-                        $validated['parcel_value']
-                        ?? 0
-                    ),
+                    (float) $pricingPayload['parcel_value'],
 
                     'parcel_type' =>
-                    $validated['parcel_type'],
+                    $pricingPayload['parcel_type'],
+                    // 'parcel_weight' =>
+                    // (float) $validated['parcel_weight'],
+
+                    // 'parcel_value' =>
+                    // (float) (
+                    //     $validated['parcel_value']
+                    //     ?? 0
+                    // ),
+
+                    // 'parcel_type' =>
+                    // $validated['parcel_type'],
 
                     'payment_type' =>
                     $validated['payment_type'],
@@ -199,10 +245,15 @@ final class PublicPricingQuoteController extends Controller
     ): JsonResponse {
         $validated = $request->validated();
         $merchantId = $this->resolveMerchantId($request);
+        $pricingPayload =
+            $this->buildSingleStorePricingPayload(
+                $validated
+            );
 
         try {
             $result = DB::transaction(function () use (
                 $validated,
+                $pricingPayload,
                 $merchantId,
                 $pricingEngine
             ): array {
@@ -221,9 +272,21 @@ final class PublicPricingQuoteController extends Controller
                  * - valid_until
                  */
                 $quote = $pricingEngine->calculate(
-                    $validated,
+                    $pricingPayload,
                     $merchantId
                 );
+
+                $quote['packing_policy'] =
+                    'single_per_store';
+
+                $quote['pricing_model'] =
+                    'one_store_one_combined_packet';
+
+                $quote['products'] =
+                    $validated['products'] ?? [];
+
+                $quote['product_count'] =
+                    $pricingPayload['product_count'];
 
                 $this->validateCalculatedQuote($quote);
 
@@ -269,14 +332,23 @@ final class PublicPricingQuoteController extends Controller
                             $validated['delivery_longitude'] ?? null
                         ),
 
+                        // 'parcel_weight' =>
+                        // (float) $validated['parcel_weight'],
+
+                        // 'parcel_value' =>
+                        // (float) ($validated['parcel_value'] ?? 0),
+
+                        // 'parcel_type' =>
+                        // $validated['parcel_type'],
+
                         'parcel_weight' =>
-                        (float) $validated['parcel_weight'],
+                        (float) $pricingPayload['parcel_weight'],
 
                         'parcel_value' =>
-                        (float) ($validated['parcel_value'] ?? 0),
+                        (float) $pricingPayload['parcel_value'],
 
                         'parcel_type' =>
-                        $validated['parcel_type'],
+                        $pricingPayload['parcel_type'],
 
                         'payment_type' =>
                         $validated['payment_type'],
@@ -938,6 +1010,269 @@ final class PublicPricingQuoteController extends Controller
             $storeQuotes,
         ];
     }
+
+    private function buildSingleStorePricingPayload(
+        array $validated
+    ): array {
+        $products = is_array(
+            $validated['products'] ?? null
+        )
+            ? $validated['products']
+            : [];
+
+        $packets = is_array(
+            $validated['packets'] ?? null
+        )
+            ? $validated['packets']
+            : [];
+
+        $totalWeight = 0.0;
+        $totalValue = 0.0;
+        $containsFragile = false;
+        $productCount = 0;
+
+        /*
+     * Product input:
+     * combine every product and quantity into one physical packet.
+     */
+        if ($products !== []) {
+            foreach ($products as $product) {
+                $quantity = max(
+                    1,
+                    (int) (
+                        $product['quantity']
+                        ?? 1
+                    )
+                );
+
+                $unitWeight = max(
+                    0,
+                    (float) (
+                        $product['unit_weight']
+                        ?? $product['actual_weight_kg']
+                        ?? 0
+                    )
+                );
+
+                $unitPrice = max(
+                    0,
+                    (float) (
+                        $product['unit_price']
+                        ?? 0
+                    )
+                );
+
+                $parcelType = $this->normalizeParcelType(
+                    $product['parcel_type']
+                        ?? 'non_fragile'
+                );
+
+                $totalWeight +=
+                    $unitWeight * $quantity;
+
+                $totalValue +=
+                    $unitPrice * $quantity;
+
+                $productCount +=
+                    $quantity;
+
+                if ($parcelType === 'fragile') {
+                    $containsFragile = true;
+                }
+            }
+        }
+
+        /*
+     * Explicit packet input:
+     * combine all supplied packets into one store packet.
+     */
+        if ($packets !== []) {
+            foreach ($packets as $packet) {
+                $actualWeight = max(
+                    0,
+                    (float) (
+                        $packet['actual_weight_kg']
+                        ?? $packet['actual_weight']
+                        ?? $packet['parcel_weight']
+                        ?? 0
+                    )
+                );
+
+                $declaredValue = max(
+                    0,
+                    (float) (
+                        $packet['declared_value']
+                        ?? $packet['unit_price']
+                        ?? 0
+                    )
+                );
+
+                $parcelType = $this->normalizeParcelType(
+                    $packet['parcel_type']
+                        ?? 'non_fragile'
+                );
+
+                $totalWeight +=
+                    $actualWeight;
+
+                $totalValue +=
+                    $declaredValue;
+
+                $productCount++;
+
+                if ($parcelType === 'fragile') {
+                    $containsFragile = true;
+                }
+            }
+        }
+
+        /*
+     * Legacy single-parcel input.
+     */
+        if (
+            $products === [] &&
+            $packets === []
+        ) {
+            $totalWeight = max(
+                0,
+                (float) (
+                    $validated['parcel_weight']
+                    ?? 0
+                )
+            );
+
+            $totalValue = max(
+                0,
+                (float) (
+                    $validated['parcel_value']
+                    ?? 0
+                )
+            );
+
+            $containsFragile =
+                $this->normalizeParcelType(
+                    $validated['parcel_type']
+                        ?? 'non_fragile'
+                ) === 'fragile';
+
+            $productCount = 1;
+        }
+
+        if ($totalWeight <= 0) {
+            throw ValidationException::withMessages([
+                'parcel_weight' => [
+                    'The combined store packet weight must be greater than zero.',
+                ],
+            ]);
+        }
+
+        $parcelType = $containsFragile
+            ? 'fragile'
+            : 'non_fragile';
+
+        /*
+     * Use top-level package dimensions because these dimensions
+     * represent the final combined physical package.
+     */
+        $lengthCm =
+            $validated['package_length_cm']
+            ?? $validated['parcel_length_cm']
+            ?? $validated['length_cm']
+            ?? null;
+
+        $widthCm =
+            $validated['package_width_cm']
+            ?? $validated['parcel_width_cm']
+            ?? $validated['width_cm']
+            ?? null;
+
+        $heightCm =
+            $validated['package_height_cm']
+            ?? $validated['parcel_height_cm']
+            ?? $validated['height_cm']
+            ?? null;
+
+        return [
+            ...$validated,
+
+            /*
+         * Keep products out of PricingEngineService so that
+         * it does not expand product quantities into packets.
+         */
+            'products' => [],
+
+            /*
+         * Send exactly one combined physical packet.
+         */
+            'packets' => [
+                [
+                    'packet_reference' =>
+                    'STORE-PKT-001',
+
+                    'name' =>
+                    'Combined single-store package',
+
+                    'quantity' =>
+                    1,
+
+                    'actual_weight_kg' =>
+                    round(
+                        $totalWeight,
+                        3
+                    ),
+
+                    'declared_value' =>
+                    round(
+                        $totalValue,
+                        2
+                    ),
+
+                    'unit_price' =>
+                    round(
+                        $totalValue,
+                        2
+                    ),
+
+                    'parcel_type' =>
+                    $parcelType,
+
+                    'length_cm' =>
+                    $lengthCm,
+
+                    'width_cm' =>
+                    $widthCm,
+
+                    'height_cm' =>
+                    $heightCm,
+                ],
+            ],
+
+            'packet_count' =>
+            1,
+
+            'product_count' =>
+            max(
+                1,
+                $productCount
+            ),
+
+            'parcel_weight' =>
+            round(
+                $totalWeight,
+                3
+            ),
+
+            'parcel_value' =>
+            round(
+                $totalValue,
+                2
+            ),
+
+            'parcel_type' =>
+            $parcelType,
+        ];
+    }
+
     /**
      * Resolve merchant ID provided by public API middleware.
      */
@@ -956,6 +1291,39 @@ final class PublicPricingQuoteController extends Controller
         }
 
         return (int) $merchantId;
+    }
+
+    private function normalizeParcelType(
+        mixed $value
+    ): string {
+        $value = strtolower(
+            trim(
+                (string) $value
+            )
+        );
+
+        $value = str_replace(
+            [
+                '-',
+                ' ',
+            ],
+            '_',
+            $value
+        );
+
+        return match ($value) {
+            'fragile' =>
+            'fragile',
+
+            'nonfragile',
+            'non_fragile',
+            'normal',
+            'regular' =>
+            'non_fragile',
+
+            default =>
+            'non_fragile',
+        };
     }
 
     /**

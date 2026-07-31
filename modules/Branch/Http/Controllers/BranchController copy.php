@@ -15,7 +15,7 @@ use Illuminate\Support\Str;
 use Modules\Branch\Services\BranchTeamProvisioner;
 use Modules\Branch\Services\BranchAccountInvitationService;
 
-class BranchControllerCopy extends Controller
+class BranchController extends Controller
 {
     public function parentOptions(Request $request, BranchVisibilityService $visibility): JsonResponse
     {
@@ -362,45 +362,183 @@ class BranchControllerCopy extends Controller
         ]);
     }
 
-    public function update(Request $request, Branch $branch, BranchVisibilityService $visibility): JsonResponse
-    {
-        $this->abortIfBranchNotVisible($request, $branch, $visibility);
+    public function update(
+        Request $request,
+        Branch $branch,
+        BranchVisibilityService $visibility
+    ): JsonResponse {
+        $this->abortIfBranchNotVisible(
+            $request,
+            $branch,
+            $visibility
+        );
 
+        /*
+         * Update validation is partial. Only submitted fields are
+         * validated and only changed fields should be sent by the client.
+         */
         $data = $this->validatedData($request, $branch);
 
-        $data['type'] = $this->normalizeBranchType($data['type'] ?? $branch->type);
+        if ($data === []) {
+            return response()->json([
+                'message' => 'No branch changes were submitted.',
+                'data' => $branch->fresh()->load([
+                    'parent',
+                    'children',
+                    'coverageLocation',
+                    'manager:id,name,email,phone',
+                    'documents',
+                    'agreements',
+                    'approver:id,name,email',
+                    'rejecter:id,name,email',
+                ]),
+                'updated_fields' => [],
+            ]);
+        }
 
-        $this->validateHierarchyAccess($request, $visibility, $data, $branch);
+        if (array_key_exists('type', $data)) {
+            $data['type'] = $this->normalizeBranchType(
+                $data['type']
+            );
+        }
+
+        if (array_key_exists('email', $data)) {
+            $data['email'] = filled($data['email'])
+                ? strtolower(trim((string) $data['email']))
+                : null;
+        }
+
+        $effectiveType = $this->normalizeBranchType(
+            $data['type'] ?? $branch->type
+        );
+
+        $effectiveEmail = array_key_exists('email', $data)
+            ? $data['email']
+            : $branch->email;
+
+        if (
+            $effectiveType === Branch::TYPE_FRANCHISE_BRANCH &&
+            blank($effectiveEmail)
+        ) {
+            throw ValidationException::withMessages([
+                'email' => [
+                    'A manager email is required for a franchise branch account.',
+                ],
+            ]);
+        }
+
+        $this->validateHierarchyAccess(
+            $request,
+            $visibility,
+            $data,
+            $branch
+        );
+
+        $coverageWasSubmitted = array_key_exists(
+            'coverage_location_id',
+            $data
+        );
+
+        $emailWasSubmitted = array_key_exists(
+            'email',
+            $data
+        );
 
         $oldCoverageLocationId = $branch->coverage_location_id;
 
-        $this->applyCoverageLocationToBranchPayload($data);
+        if ($coverageWasSubmitted) {
+            $this->applyCoverageLocationToBranchPayload(
+                $data,
+                $effectiveType,
+                $branch
+            );
+        }
 
-        DB::transaction(function () use ($branch, $data, $oldCoverageLocationId) {
-            $branch->update($data);
+        DB::transaction(function () use (
+            $branch,
+            $data,
+            $effectiveType,
+            $coverageWasSubmitted,
+            $emailWasSubmitted,
+            $oldCoverageLocationId
+        ): void {
+            $branch->fill($data);
+            $branch->save();
 
-            if ($oldCoverageLocationId && (int) $oldCoverageLocationId !== (int) ($data['coverage_location_id'] ?? 0)) {
-                CoverageLocation::where('id', $oldCoverageLocationId)
-                    ->where('branch_id', $branch->id)
-                    ->update(['branch_id' => null]);
+            if ($coverageWasSubmitted) {
+                $newCoverageLocationId =
+                    $data['coverage_location_id'] ?? null;
+
+                if (
+                    $oldCoverageLocationId &&
+                    (int) $oldCoverageLocationId !==
+                        (int) ($newCoverageLocationId ?: 0)
+                ) {
+                    CoverageLocation::query()
+                        ->where('id', $oldCoverageLocationId)
+                        ->where('branch_id', $branch->id)
+                        ->update([
+                            'branch_id' => null,
+                        ]);
+                }
+
+                if ($newCoverageLocationId) {
+                    CoverageLocation::query()
+                        ->where('id', $newCoverageLocationId)
+                        ->update([
+                            'branch_id' => $branch->id,
+                        ]);
+                }
             }
 
-            if (!empty($data['coverage_location_id'])) {
-                CoverageLocation::where('id', $data['coverage_location_id'])->update([
-                    'branch_id' => $branch->id,
-                ]);
+            /*
+             * The manager email has one source of truth. Updating the
+             * franchise email keeps the branch, manager user and future
+             * invitation recipient synchronized.
+             */
+            if (
+                $emailWasSubmitted &&
+                $effectiveType === Branch::TYPE_FRANCHISE_BRANCH
+            ) {
+                $manager = $branch
+                    ->manager()
+                    ->lockForUpdate()
+                    ->first();
+
+                if (!$manager) {
+                    throw ValidationException::withMessages([
+                        'email' => [
+                            'The manager email cannot be updated because the Branch Manager account is missing.',
+                        ],
+                    ]);
+                }
+
+                $manager->forceFill([
+                    'email' => $data['email'],
+                ])->save();
+
+                $branch->forceFill([
+                    'email' => $data['email'],
+                    'account_invitation_email' => $data['email'],
+                ])->save();
             }
-        });
+        }, 3);
 
         return response()->json([
             'message' => 'Branch updated successfully.',
-            'data' => $branch->fresh()->load([
-                'parent',
-                'coverageLocation',
-                'manager',
-                'documents',
-                'agreements',
-            ]),
+            'data' => $branch
+                ->fresh()
+                ->load([
+                    'parent',
+                    'children',
+                    'coverageLocation',
+                    'manager:id,name,email,phone',
+                    'documents',
+                    'agreements',
+                    'approver:id,name,email',
+                    'rejecter:id,name,email',
+                ]),
+            'updated_fields' => array_values(array_keys($data)),
         ]);
     }
 
@@ -898,66 +1036,316 @@ class BranchControllerCopy extends Controller
         ]);
     }
 
-    private function validatedData(Request $request, ?Branch $branch = null): array
-    {
+    private function validatedData(
+        Request $request,
+        ?Branch $branch = null
+    ): array {
         $branchId = $branch?->id;
         $managerUserId = $branch?->manager_user_id;
+        $isUpdating = $branch !== null;
+
+        $effectiveType = $this->normalizeBranchType(
+            $request->input('type', $branch?->type)
+        );
+
+        $partial = $isUpdating
+            ? ['sometimes']
+            : [];
+
+        $emailRules = [
+            ...$partial,
+            'nullable',
+            'email',
+            'max:255',
+        ];
+
+        if ($effectiveType === Branch::TYPE_FRANCHISE_BRANCH) {
+            $emailRules[] = Rule::unique(
+                'users',
+                'email'
+            )->ignore($managerUserId);
+        }
+
         return $request->validate([
-            'parent_id' => ['nullable', 'integer', 'exists:branches,id'],
-            'coverage_location_id' => ['nullable', 'integer', 'exists:coverage_locations,id'],
+            'parent_id' => [
+                ...$partial,
+                'nullable',
+                'integer',
+                'exists:branches,id',
+            ],
 
-            'type' => ['required', Rule::in($this->allowedBranchTypes())],
-            'name' => ['nullable', 'string', 'max:255'],
-            'code' => ['nullable', 'string', 'max:80', Rule::unique('branches', 'code')->ignore($branchId)],
+            'coverage_location_id' => [
+                ...$partial,
+                'nullable',
+                'integer',
+                'exists:coverage_locations,id',
+            ],
 
-            'legal_name' => ['nullable', 'string', 'max:255'],
-            'owner_name' => ['nullable', 'string', 'max:255'],
-            'contact_person' => ['nullable', 'string', 'max:255'],
+            'type' => $isUpdating
+                ? [
+                    'sometimes',
+                    Rule::in($this->allowedBranchTypes()),
+                ]
+                : [
+                    'required',
+                    Rule::in($this->allowedBranchTypes()),
+                ],
 
-            'email' => ['nullable', 'email', 'max:255'],
-            'phone' => ['nullable', 'string', 'max:50'],
-            'alternative_phone' => ['nullable', 'string', 'max:50'],
+            'name' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
 
-            'pan_vat_number' => ['nullable', 'string', 'max:255'],
-            'registration_number' => ['nullable', 'string', 'max:255'],
-            'business_type' => ['nullable', 'string', 'max:255'],
+            'code' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:80',
+                Rule::unique('branches', 'code')
+                    ->ignore($branchId),
+            ],
 
-            'status' => ['nullable', 'string', 'max:50'],
+            'legal_name' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
 
-            'country' => ['nullable', 'string', 'max:255'],
-            'province' => ['nullable', 'string', 'max:255'],
-            'district' => ['nullable', 'string', 'max:255'],
-            'city' => ['nullable', 'string', 'max:255'],
-            'area' => ['nullable', 'string', 'max:255'],
-            'address' => ['nullable', 'string', 'max:1000'],
-            'landmark' => ['nullable', 'string', 'max:255'],
+            'owner_name' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
 
-            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
-            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
-            'coverage_radius_km' => ['nullable', 'numeric', 'min:0'],
+            'contact_person' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
 
-            'office_address' => ['nullable', 'string', 'max:1000'],
-            'office_city' => ['nullable', 'string', 'max:255'],
-            'office_area' => ['nullable', 'string', 'max:255'],
-            'office_street' => ['nullable', 'string', 'max:255'],
-            'office_landmark' => ['nullable', 'string', 'max:255'],
-            'office_latitude' => ['nullable', 'numeric', 'between:-90,90'],
-            'office_longitude' => ['nullable', 'numeric', 'between:-180,180'],
+            'email' => $emailRules,
 
-            'covered_areas' => ['nullable', 'array'],
-            'covered_areas.*' => ['nullable', 'string', 'max:255'],
+            'phone' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:50',
+            ],
 
-            'opening_time' => ['nullable', 'date_format:H:i'],
-            'closing_time' => ['nullable', 'date_format:H:i'],
-            'operating_days' => ['nullable', 'array'],
-            'daily_shipment_capacity' => ['nullable', 'integer', 'min:0'],
+            'alternative_phone' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:50',
+            ],
 
-            'pickup_enabled' => ['boolean'],
-            'delivery_enabled' => ['boolean'],
-            'pod_enabled' => ['boolean'],
-            'return_enabled' => ['boolean'],
+            'pan_vat_number' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
 
-            'manager_user_id' => ['nullable', 'integer', 'exists:users,id'],
+            'registration_number' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'business_type' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            /*
+             * Status and manager_user_id are intentionally not accepted
+             * here. Approval, activation, suspension and rejection have
+             * dedicated workflow endpoints.
+             */
+
+            'country' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'province' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'district' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'city' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'area' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'address' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:1000',
+            ],
+
+            'landmark' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'latitude' => [
+                ...$partial,
+                'nullable',
+                'numeric',
+                'between:-90,90',
+            ],
+
+            'longitude' => [
+                ...$partial,
+                'nullable',
+                'numeric',
+                'between:-180,180',
+            ],
+
+            'coverage_radius_km' => [
+                ...$partial,
+                'nullable',
+                'numeric',
+                'min:0',
+            ],
+
+            'office_address' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:1000',
+            ],
+
+            'office_city' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'office_area' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'office_street' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'office_landmark' => [
+                ...$partial,
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'office_latitude' => [
+                ...$partial,
+                'nullable',
+                'numeric',
+                'between:-90,90',
+            ],
+
+            'office_longitude' => [
+                ...$partial,
+                'nullable',
+                'numeric',
+                'between:-180,180',
+            ],
+
+            'covered_areas' => [
+                ...$partial,
+                'nullable',
+                'array',
+            ],
+
+            'covered_areas.*' => [
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'opening_time' => [
+                ...$partial,
+                'nullable',
+                'date_format:H:i',
+            ],
+
+            'closing_time' => [
+                ...$partial,
+                'nullable',
+                'date_format:H:i',
+            ],
+
+            'operating_days' => [
+                ...$partial,
+                'nullable',
+                'array',
+            ],
+
+            'daily_shipment_capacity' => [
+                ...$partial,
+                'nullable',
+                'integer',
+                'min:0',
+            ],
+
+            'pickup_enabled' => [
+                ...$partial,
+                'boolean',
+            ],
+
+            'delivery_enabled' => [
+                ...$partial,
+                'boolean',
+            ],
+
+            'pod_enabled' => [
+                ...$partial,
+                'boolean',
+            ],
+
+            'return_enabled' => [
+                ...$partial,
+                'boolean',
+            ],
         ]);
     }
 
@@ -983,7 +1371,13 @@ class BranchControllerCopy extends Controller
         $parentChanged = $existingBranch && (int) ($parentId ?: 0) !== (int) ($oldParentId ?: 0);
 
         if ($this->isHeadBranchType($type)) {
-            $data['parent_id'] = null;
+            if (
+                $isCreating ||
+                array_key_exists('type', $data) ||
+                array_key_exists('parent_id', $data)
+            ) {
+                $data['parent_id'] = null;
+            }
 
             if (!$this->isSystemAdmin($user) && ($isCreating || $typeChanged)) {
                 throw ValidationException::withMessages([
@@ -1026,21 +1420,53 @@ class BranchControllerCopy extends Controller
         $data['parent_id'] = (int) $parentId;
     }
 
-    private function applyCoverageLocationToBranchPayload(array &$data): void
-    {
-        if (empty($data['coverage_location_id'])) {
+    private function applyCoverageLocationToBranchPayload(
+        array &$data,
+        ?string $fallbackType = null,
+        ?Branch $existingBranch = null
+    ): void {
+        if (!array_key_exists('coverage_location_id', $data)) {
             return;
         }
 
-        $coverageLocation = CoverageLocation::find($data['coverage_location_id']);
+        if (blank($data['coverage_location_id'])) {
+            $data['coverage_location_id'] = null;
+            $data['latitude'] = null;
+            $data['longitude'] = null;
+            $data['coverage_radius_km'] = null;
+
+            return;
+        }
+
+        $coverageLocation = CoverageLocation::query()->find(
+            $data['coverage_location_id']
+        );
 
         if (!$coverageLocation) {
             throw ValidationException::withMessages([
-                'coverage_location_id' => ['Coverage location not found.'],
+                'coverage_location_id' => [
+                    'Coverage location not found.',
+                ],
             ]);
         }
 
-        $type = $this->normalizeBranchType($data['type'] ?? null);
+        if (
+            $coverageLocation->branch_id &&
+            (int) $coverageLocation->branch_id !==
+                (int) ($existingBranch?->id ?? 0)
+        ) {
+            throw ValidationException::withMessages([
+                'coverage_location_id' => [
+                    'This coverage location is already assigned to another branch.',
+                ],
+            ]);
+        }
+
+        $type = $this->normalizeBranchType(
+            $data['type'] ??
+            $fallbackType ??
+            $existingBranch?->type
+        );
 
         $isMainBranch = in_array($type, [
             Branch::TYPE_HEAD_BRANCH,
@@ -1055,36 +1481,64 @@ class BranchControllerCopy extends Controller
             Branch::TYPE_DELIVERY_HUB,
         ], true);
 
-        if ($isMainBranch && $coverageLocation->type !== CoverageLocation::TYPE_MAIN_BRANCH_ZONE) {
+        if (
+            $isMainBranch &&
+            $coverageLocation->type !==
+                CoverageLocation::TYPE_MAIN_BRANCH_ZONE
+        ) {
             throw ValidationException::withMessages([
-                'coverage_location_id' => ['Main/head/franchise branch must be assigned to a main branch coverage zone.'],
+                'coverage_location_id' => [
+                    'Main/head/franchise branch must be assigned to a main branch coverage zone.',
+                ],
             ]);
         }
 
-        if ($isSubBranch && $coverageLocation->type !== CoverageLocation::TYPE_SUB_BRANCH_ZONE) {
+        if (
+            $isSubBranch &&
+            $coverageLocation->type !==
+                CoverageLocation::TYPE_SUB_BRANCH_ZONE
+        ) {
             throw ValidationException::withMessages([
-                'coverage_location_id' => ['Sub branch, pickup point, or delivery hub must be assigned to a sub-branch coverage zone.'],
+                'coverage_location_id' => [
+                    'Sub branch, pickup point, or delivery hub must be assigned to a sub-branch coverage zone.',
+                ],
             ]);
         }
 
         /*
-         * Old branch latitude/longitude/radius stay as assigned coverage point.
-         * Existing pricing/routing continues working.
+         * Routing and pricing coordinates continue to come from the
+         * selected coverage allocation.
          */
         $data['latitude'] = $coverageLocation->latitude;
         $data['longitude'] = $coverageLocation->longitude;
-        $data['coverage_radius_km'] = $coverageLocation->coverage_radius_km;
+        $data['coverage_radius_km'] =
+            $coverageLocation->coverage_radius_km;
 
         /*
-         * Auto-fill normal branch address from coverage point only if empty.
+         * Populate normal address fields only when the request did not
+         * submit them and the existing branch value is empty.
          */
-        $data['country'] = $data['country'] ?? $coverageLocation->country;
-        $data['province'] = $data['province'] ?? $coverageLocation->province;
-        $data['district'] = $data['district'] ?? $coverageLocation->district;
-        $data['city'] = $data['city'] ?? $coverageLocation->city;
-        $data['area'] = $data['area'] ?? $coverageLocation->area;
-        $data['address'] = $data['address'] ?? $coverageLocation->address;
-        $data['landmark'] = $data['landmark'] ?? $coverageLocation->landmark;
+        foreach ([
+            'country',
+            'province',
+            'district',
+            'city',
+            'area',
+            'address',
+            'landmark',
+        ] as $field) {
+            if (array_key_exists($field, $data)) {
+                continue;
+            }
+
+            if (filled($existingBranch?->{$field})) {
+                continue;
+            }
+
+            if (filled($coverageLocation->{$field})) {
+                $data[$field] = $coverageLocation->{$field};
+            }
+        }
     }
 
     private function abortIfBranchNotVisible(

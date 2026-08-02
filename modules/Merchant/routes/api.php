@@ -9,6 +9,7 @@ use Modules\Merchant\Http\Controllers\MerchantDocumentController;
 use Modules\Merchant\Http\Controllers\MerchantOnboardingController;
 use Modules\Merchant\Http\Controllers\MerchantWebhookController;
 use Modules\Merchant\Http\Controllers\PublicMerchantSignupController;
+use Modules\Merchant\Http\Controllers\StoreIntegrationApplicationController;
 use Modules\Shipment\Http\Controllers\MerchantShipmentController;
 
 /*
@@ -41,6 +42,29 @@ Route::prefix('v1/merchant')
     ->group(function () {
         Route::post('signup', [PublicMerchantSignupController::class, 'store'])
             ->name('signup');
+    });
+
+
+
+/*
+    |--------------------------------------------------------------------------
+| Store Manager Application Submission
+|--------------------------------------------------------------------------
+| One complete multipart request from the Store Manager backend.
+*/
+Route::prefix('v1/store-integrations')
+    ->name('store-integrations.')
+    ->middleware([
+        'store.integration.token',
+        'throttle:20,1',
+    ])
+    ->group(function () {
+        Route::post(
+            'applications/{applicationNumber}/submit',
+            [StoreIntegrationApplicationController::class, 'submit']
+        )
+            ->where('applicationNumber', '[A-Za-z0-9._-]+')
+            ->name('applications.submit');
     });
 
 /*

@@ -14,10 +14,12 @@ class StoreIntegrationApplicationController extends Controller
         string $applicationNumber,
         StoreIntegrationApplicationService $service
     ) {
+        $data = $request->validated();
+
         $result = $service->submit(
             $applicationNumber,
-            $request->validated(),
-            $request->file('documents', [])
+            $data,
+            $data['documents'] ?? []
         );
 
         return ApiResponse::success(

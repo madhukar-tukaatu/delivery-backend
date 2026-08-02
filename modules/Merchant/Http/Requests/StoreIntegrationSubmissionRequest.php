@@ -110,41 +110,61 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             'terms_accepted' => ['accepted'],
 
             'documents' => ['required', 'array'],
+
             'documents.business_registration' => [
-                'nullable',
-                'file',
-                'mimes:pdf,jpg,jpeg,png,webp',
-                'max:10240',
+                'required',
+                'array',
             ],
+
             'documents.pan_vat' => [
-                'nullable',
-                'file',
-                'mimes:pdf,jpg,jpeg,png,webp',
-                'max:10240',
+                'required',
+                'array',
             ],
+
             'documents.owner_id' => [
-                'nullable',
-                'file',
-                'mimes:pdf,jpg,jpeg,png,webp',
-                'max:10240',
+                'required',
+                'array',
             ],
+
             'documents.bank_proof' => [
-                'nullable',
-                'file',
-                'mimes:pdf,jpg,jpeg,png,webp',
-                'max:10240',
+                'required',
+                'array',
             ],
+
             'documents.office_photo' => [
                 'nullable',
-                'file',
-                'mimes:jpg,jpeg,png,webp',
-                'max:10240',
+                'array',
             ],
+
             'documents.authorisation_letter' => [
                 'nullable',
-                'file',
-                'mimes:pdf,jpg,jpeg,png,webp',
-                'max:10240',
+                'array',
+            ],
+
+            'documents.*.url' => [
+                'required',
+                'url',
+                'max:5000',
+                'starts_with:https://',
+            ],
+
+            'documents.*.original_name' => [
+                'required',
+                'string',
+                'max:255',
+            ],
+
+            'documents.*.size_bytes' => [
+                'nullable',
+                'integer',
+                'min:1',
+                'max:10485760',
+            ],
+
+            'documents.*.sha256' => [
+                'nullable',
+                'string',
+                'regex:/^[a-fA-F0-9]{64}$/',
             ],
         ];
     }

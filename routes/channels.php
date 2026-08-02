@@ -71,3 +71,73 @@ Broadcast::channel('rider.{riderId}.location', function ($user, $riderId) {
         || $user->hasRole('branch_manager')
         || $user->hasRole('sub_branch_manager');
 });
+
+
+Broadcast::channel(
+    'admin.operations',
+    function (User $user): bool {
+        return $user->hasAnyRole([
+            'super-admin',
+            'admin',
+            'operations-manager',
+        ]);
+    }
+);
+
+Broadcast::channel(
+    'admin.merchants',
+    function (User $user): bool {
+        return $user->hasAnyRole([
+            'super-admin',
+            'admin',
+            'merchant-manager',
+        ]);
+    }
+);
+
+Broadcast::channel(
+    'admin.branches',
+    function (User $user): bool {
+        return $user->hasAnyRole([
+            'super-admin',
+            'admin',
+            'branch-manager',
+        ]);
+    }
+);
+
+Broadcast::channel(
+    'merchant.{merchantId}',
+    function (User $user, int $merchantId): bool {
+        return (int) optional($user->merchant)->id === $merchantId;
+    }
+);
+
+Broadcast::channel(
+    'user.{userId}',
+    function (User $user, int $userId): bool {
+        return (int) $user->id === $userId;
+    }
+);
+
+Broadcast::channel(
+    'presence.admins',
+    function (User $user): array|bool {
+        if (!$user->hasAnyRole([
+            'super-admin',
+            'admin',
+            'operations-manager',
+            'branch-manager',
+            'merchant-manager',
+        ])) {
+            return false;
+        }
+
+        return [
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'role' => $user->getRoleNames()->first(),
+        ];
+    }
+);

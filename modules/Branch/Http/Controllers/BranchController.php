@@ -2,6 +2,7 @@
 
 namespace Modules\Branch\Http\Controllers;
 
+use App\Events\BranchChanged;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -472,7 +473,7 @@ class BranchController extends Controller
                 if (
                     $oldCoverageLocationId &&
                     (int) $oldCoverageLocationId !==
-                        (int) ($newCoverageLocationId ?: 0)
+                    (int) ($newCoverageLocationId ?: 0)
                 ) {
                     CoverageLocation::query()
                         ->where('id', $oldCoverageLocationId)
@@ -821,6 +822,11 @@ class BranchController extends Controller
                 );
         }
 
+        BranchChanged::dispatch(
+            branch: $branch->toArray(),
+            action: 'approved',
+            performedBy: auth()->id(),
+        );
         return response()->json([
             'message' => match ($invitation['status']) {
                 BranchAccountInvitationService::STATUS_QUEUED =>
@@ -1453,7 +1459,7 @@ class BranchController extends Controller
         if (
             $coverageLocation->branch_id &&
             (int) $coverageLocation->branch_id !==
-                (int) ($existingBranch?->id ?? 0)
+            (int) ($existingBranch?->id ?? 0)
         ) {
             throw ValidationException::withMessages([
                 'coverage_location_id' => [
@@ -1464,8 +1470,8 @@ class BranchController extends Controller
 
         $type = $this->normalizeBranchType(
             $data['type'] ??
-            $fallbackType ??
-            $existingBranch?->type
+                $fallbackType ??
+                $existingBranch?->type
         );
 
         $isMainBranch = in_array($type, [
@@ -1484,7 +1490,7 @@ class BranchController extends Controller
         if (
             $isMainBranch &&
             $coverageLocation->type !==
-                CoverageLocation::TYPE_MAIN_BRANCH_ZONE
+            CoverageLocation::TYPE_MAIN_BRANCH_ZONE
         ) {
             throw ValidationException::withMessages([
                 'coverage_location_id' => [
@@ -1496,7 +1502,7 @@ class BranchController extends Controller
         if (
             $isSubBranch &&
             $coverageLocation->type !==
-                CoverageLocation::TYPE_SUB_BRANCH_ZONE
+            CoverageLocation::TYPE_SUB_BRANCH_ZONE
         ) {
             throw ValidationException::withMessages([
                 'coverage_location_id' => [
@@ -1518,15 +1524,17 @@ class BranchController extends Controller
          * Populate normal address fields only when the request did not
          * submit them and the existing branch value is empty.
          */
-        foreach ([
-            'country',
-            'province',
-            'district',
-            'city',
-            'area',
-            'address',
-            'landmark',
-        ] as $field) {
+        foreach (
+            [
+                'country',
+                'province',
+                'district',
+                'city',
+                'area',
+                'address',
+                'landmark',
+            ] as $field
+        ) {
             if (array_key_exists($field, $data)) {
                 continue;
             }

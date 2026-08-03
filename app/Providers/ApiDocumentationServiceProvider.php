@@ -2,7 +2,6 @@
 
 namespace App\Providers;
 
-use App\Documentation\MixedMerchantSecurityStrategy;
 use Dedoc\Scramble\Scramble;
 use Dedoc\Scramble\SecurityDocumentation\MiddlewareAuthSecurityStrategy;
 use Dedoc\Scramble\Support\Generator\SecurityScheme;
@@ -12,12 +11,6 @@ use Illuminate\Support\Str;
 
 class ApiDocumentationServiceProvider extends ServiceProvider
 {
-    /**
-     * Disable Scramble's default documentation routes:
-     *
-     * /docs/api
-     * /docs/api.json
-     */
     public function register(): void
     {
         Scramble::ignoreDefaultRoutes();
@@ -36,35 +29,42 @@ class ApiDocumentationServiceProvider extends ServiceProvider
     | Admin Panel API
     |--------------------------------------------------------------------------
     |
-    | Authentication:
-    |
-    | Authorization: Bearer {ADMIN_ACCESS_TOKEN}
+    | Header:
+    | Authorization: Bearer {ADMIN_TOKEN}
     |
     */
 
     private function registerAdminPanelApi(): void
     {
-        Scramble::registerApi(
-            'admin-panel',
-            $this->makeApiConfig(
-                title: 'Tukaatu Express Admin API',
-                description:
-                    'Internal Tukaatu Express administration API.',
-                securityStrategy: [
-                    MiddlewareAuthSecurityStrategy::class,
-                    [
-                        'middleware' => [
-                            'auth',
-                            'auth:*',
-                        ],
+        Scramble::registerApi('admin-panel', [
+            'api_path' => 'api/v1',
 
-                        'scheme' => SecurityScheme::http(
-                            'bearer'
-                        ),
+            'info' => [
+                'title' => 'Tukaatu Express Admin API',
+                'version' => '1.0.0',
+                'description' =>
+                    'Internal Tukaatu Express administration API.',
+            ],
+
+            'renderer' => 'scalar',
+
+            'security_strategy' => [
+                MiddlewareAuthSecurityStrategy::class,
+                [
+                    /*
+                     * Matches auth, auth:sanctum,
+                     * auth:api and similar middleware.
+                     */
+                    'middleware' => [
+                        'auth',
+                        'auth:*',
                     ],
-                ]
-            )
-        )
+
+                    'scheme' =>
+                        SecurityScheme::http('bearer'),
+                ],
+            ],
+        ])
             ->routes(function (Route $route): bool {
                 return $this->matchesAnyPrefix(
                     $route,
@@ -84,49 +84,44 @@ class ApiDocumentationServiceProvider extends ServiceProvider
     | Store Integration API
     |--------------------------------------------------------------------------
     |
-    | Authentication:
-    |
+    | Header:
     | Authorization: Bearer {STORE_SUBMISSION_TOKEN}
-    |
-    | Request format:
-    |
-    | Content-Type: application/json
     |
     */
 
     private function registerStoreIntegrationApi(): void
     {
-        Scramble::registerApi(
-            'store-integration',
-            $this->makeApiConfig(
-                title: 'Tukaatu Store Integration API',
-                description:
-                    'Store Manager integration API for merchant application submission, approval and connection.',
-                securityStrategy: [
-                    MiddlewareAuthSecurityStrategy::class,
-                    [
-                        /*
-                         * This must match the middleware added
-                         * to the Store Integration routes.
-                         */
-                        'middleware' => [
-                            'store.integration.token',
+        Scramble::registerApi('store-integration', [
+            'api_path' => 'api/v1',
 
-                            /*
-                             * Also supports the middleware class
-                             * when Laravel returns the resolved
-                             * class name instead of its alias.
-                             */
-                            '*AuthenticateStoreIntegrationToken',
-                        ],
+            'info' => [
+                'title' =>
+                    'Tukaatu Store Integration API',
 
-                        'scheme' => SecurityScheme::http(
-                            'bearer'
-                        ),
+                'version' => '1.0.0',
+
+                'description' =>
+                    'Store Manager merchant application and integration API.',
+            ],
+
+            'renderer' => 'scalar',
+
+            'security_strategy' => [
+                MiddlewareAuthSecurityStrategy::class,
+                [
+                    /*
+                     * Must exactly match the alias in:
+                     * bootstrap/app.php
+                     */
+                    'middleware' => [
+                        'store.integration.token',
                     ],
-                ]
-            )
-        )
+
+                    'scheme' =>
+                        SecurityScheme::http('bearer'),
+                ],
+            ],
+        ])
             ->routes(function (Route $route): bool {
                 return $this->matchesAnyPrefix(
                     $route,
@@ -147,28 +142,35 @@ class ApiDocumentationServiceProvider extends ServiceProvider
     | Public Merchant API
     |--------------------------------------------------------------------------
     |
-    | Authentication:
-    |
     | No authentication header.
     |
-    | The public merchant form continues using direct file uploads.
-    | Scramble detects Laravel file validation and documents the body as:
-    |
-    | Content-Type: multipart/form-data
+    | Direct document uploads should automatically use:
+    | multipart/form-data
     |
     */
 
     private function registerPublicMerchantApi(): void
     {
-        Scramble::registerApi(
-            'public-merchant',
-            $this->makeApiConfig(
-                title: 'Tukaatu Public Merchant API',
-                description:
-                    'Public Tukaatu Express merchant registration and onboarding API.',
-                securityStrategy: null
-            )
-        )
+        Scramble::registerApi('public-merchant', [
+            'api_path' => 'api/v1',
+
+            'info' => [
+                'title' =>
+                    'Tukaatu Public Merchant API',
+
+                'version' => '1.0.0',
+
+                'description' =>
+                    'Public merchant registration and onboarding API.',
+            ],
+
+            'renderer' => 'scalar',
+
+            /*
+             * Public API: no authentication.
+             */
+            'security_strategy' => null,
+        ])
             ->routes(function (Route $route): bool {
                 $uri = $this->routeUri($route);
 
@@ -194,69 +196,72 @@ class ApiDocumentationServiceProvider extends ServiceProvider
 
     /*
     |--------------------------------------------------------------------------
-    | Merchant and Pricing Engine API
+    | Merchant Pricing API
     |--------------------------------------------------------------------------
     |
-    | This combined documentation contains two authentication types.
-    |
-    | Store Integration endpoints:
-    |
-    | Authorization: Bearer {STORE_SUBMISSION_TOKEN}
-    |
-    | Approved merchant operational endpoints:
-    |
+    | Header:
     | X-Tukaatu-Api-Key: {MERCHANT_API_KEY}
     |
-    | MixedMerchantSecurityStrategy automatically selects the correct
-    | header based on each route's middleware.
+    | Important:
+    | The real middleware alias in bootstrap/app.php is:
+    | merchant.api-key
     |
     */
 
     private function registerMerchantPricingApi(): void
     {
-        Scramble::registerApi(
-            'merchant-pricing',
-            $this->makeApiConfig(
-                title: 'Tukaatu Merchant and Pricing API',
-                description:
-                    'Merchant integration, pricing, quotation, shipment and tracking API.',
-                securityStrategy:
-                    MixedMerchantSecurityStrategy::class
-            )
-        )
+        Scramble::registerApi('merchant-pricing', [
+            'api_path' => 'api/v1',
+
+            'info' => [
+                'title' =>
+                    'Tukaatu Merchant and Pricing API',
+
+                'version' => '1.0.0',
+
+                'description' =>
+                    'Merchant pricing, quotation, shipment and tracking API.',
+            ],
+
+            'renderer' => 'scalar',
+
+            'security_strategy' => [
+                MiddlewareAuthSecurityStrategy::class,
+                [
+                    /*
+                     * Exact alias from bootstrap/app.php:
+                     *
+                     * 'merchant.api-key' =>
+                     *     AuthenticateMerchantApiKey::class
+                     */
+                    'middleware' => [
+                        'merchant.api-key',
+                    ],
+
+                    'scheme' =>
+                        SecurityScheme::apiKey(
+                            'header',
+                            'X-Tukaatu-Api-Key'
+                        ),
+                ],
+            ],
+        ])
             ->routes(function (Route $route): bool {
                 return $this->matchesAnyPrefix(
                     $route,
                     [
-                        /*
-                         * Store Manager connection/application
-                         */
-                        'api/v1/store-integrations',
-
-                        /*
-                         * General pricing routes
-                         */
                         'api/v1/pricing',
                         'api/v1/rates',
                         'api/v1/quotes',
 
-                        /*
-                         * Merchant pricing routes
-                         */
                         'api/v1/merchant/pricing',
                         'api/v1/merchant/rates',
                         'api/v1/merchant/quotes',
 
-                        /*
-                         * Merchant operational routes
-                         */
                         'api/v1/merchant/shipments',
                         'api/v1/merchant/tracking',
                         'api/v1/merchant/webhooks',
 
-                        /*
-                         * Alternative merchant-api prefix
-                         */
                         'api/v1/merchant-api/pricing',
                         'api/v1/merchant-api/rates',
                         'api/v1/merchant-api/quotes',
@@ -272,58 +277,6 @@ class ApiDocumentationServiceProvider extends ServiceProvider
                     '/docs/merchant-pricing/openapi.json'
             );
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Common API configuration
-    |--------------------------------------------------------------------------
-    */
-
-    private function makeApiConfig(
-        string $title,
-        string $description,
-        array|string|null $securityStrategy
-    ): array {
-        return [
-            'api_path' => 'api/v1',
-
-            'info' => [
-                'version' => '1.0.0',
-                'description' => $description,
-            ],
-
-            'ui' => [
-                'title' => $title,
-            ],
-
-            'renderer' => 'scalar',
-
-            /*
-             * Automatically works locally and live based on APP_URL.
-             *
-             * Local example:
-             * http://localhost:8081/api/v1
-             *
-             * Live example:
-             * https://api.yourdomain.com/api/v1
-             */
-            'servers' => [
-                'Current environment' =>
-                    rtrim(
-                        (string) config('app.url'),
-                        '/'
-                    ) . '/api/v1',
-            ],
-
-            'security_strategy' => $securityStrategy,
-        ];
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | Route matching helpers
-    |--------------------------------------------------------------------------
-    */
 
     private function matchesAnyPrefix(
         Route $route,

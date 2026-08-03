@@ -17,6 +17,39 @@ Broadcast::channel('merchant.{merchantId}', function ($user, $merchantId) {
         );
 });
 
+Broadcast::channel(
+    'admin.merchant-applications',
+    function ($user): bool {
+        /*
+         * Spatie or another role package.
+         */
+        if (method_exists($user, 'hasAnyRole')) {
+            return $user->hasAnyRole([
+                'super_admin',
+                'admin',
+            ]);
+        }
+
+        /*
+         * Fallback for a simple role column or role relation.
+         */
+        $role = data_get(
+            $user,
+            'role.name',
+            data_get($user, 'role', '')
+        );
+
+        return in_array(
+            strtolower((string) $role),
+            [
+                'super_admin',
+                'admin',
+            ],
+            true
+        );
+    }
+);
+
 Broadcast::channel('branch.{branchId}', function ($user, $branchId) {
     return $user->hasRole('super_admin')
         || $user->hasRole('main_admin')

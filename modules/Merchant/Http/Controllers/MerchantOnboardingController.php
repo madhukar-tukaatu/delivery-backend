@@ -9,6 +9,8 @@ use Illuminate\Support\Facades\Storage;
 use Modules\Merchant\Models\MerchantDocument;
 use Modules\Merchant\Services\MerchantOnboardingService;
 use Illuminate\Support\Str;
+use Modules\Merchant\Events\MerchantApplicationChanged;
+use Modules\Merchant\Models\Merchant;
 
 class MerchantOnboardingController extends Controller
 {
@@ -36,8 +38,25 @@ class MerchantOnboardingController extends Controller
             'area' => ['nullable', 'string', 'max:120'],
         ]);
 
+        // return ApiResponse::success(
+        //     $service->updateBusinessProfile($request->user()->merchant, $data),
+        //     'Business profile saved.'
+        // );
+
+        $merchant = $request->user()->merchant;
+
+        $result = $service->updateBusinessProfile(
+            $merchant,
+            $data
+        );
+
+        $this->broadcastMerchantChange(
+            $merchant,
+            'onboarding_updated'
+        );
+
         return ApiResponse::success(
-            $service->updateBusinessProfile($request->user()->merchant, $data),
+            $result,
             'Business profile saved.'
         );
     }
@@ -55,8 +74,30 @@ class MerchantOnboardingController extends Controller
             'longitude' => ['required', 'numeric', 'between:-180,180'],
         ]);
 
+        // return ApiResponse::success(
+        //     $service->updatePickupLocation($request->user()->merchant, $data)->load(['branch', 'subBranch']),
+        //     'Pickup location saved.'
+        // );
+
+        $merchant = $request->user()->merchant;
+
+        $location = $service
+            ->updatePickupLocation(
+                $merchant,
+                $data
+            )
+            ->load([
+                'branch',
+                'subBranch',
+            ]);
+
+        $this->broadcastMerchantChange(
+            $merchant,
+            'onboarding_updated'
+        );
+
         return ApiResponse::success(
-            $service->updatePickupLocation($request->user()->merchant, $data)->load(['branch', 'subBranch']),
+            $location,
             'Pickup location saved.'
         );
     }
@@ -149,8 +190,25 @@ class MerchantOnboardingController extends Controller
             'bank_branch' => ['nullable', 'string', 'max:150'],
         ]);
 
+        // return ApiResponse::success(
+        //     $service->updateBankDetails($request->user()->merchant, $data),
+        //     'Bank details saved.'
+        // );
+
+        $merchant = $request->user()->merchant;
+
+        $result = $service->updateBankDetails(
+            $merchant,
+            $data
+        );
+
+        $this->broadcastMerchantChange(
+            $merchant,
+            'onboarding_updated'
+        );
+
         return ApiResponse::success(
-            $service->updateBankDetails($request->user()->merchant, $data),
+            $result,
             'Bank details saved.'
         );
     }
@@ -237,20 +295,62 @@ class MerchantOnboardingController extends Controller
         );
 
         $merchant->update([
-            'verification_status' => 'documents_pending',
+            'verification_status' =>
+            'documents_pending',
         ]);
 
+        $this->broadcastMerchantChange(
+            $merchant,
+            'document_uploaded'
+        );
+
         return response()->json([
-            'message' => 'Document uploaded successfully.',
-            'data' => $document->fresh(),
+            'message' =>
+            'Document uploaded successfully.',
+
+            'data' =>
+            $document->fresh(),
         ]);
     }
 
     public function submit(Request $request, MerchantOnboardingService $service)
     {
+        // return ApiResponse::success(
+        //     $service->submitForReview($request->user()->merchant),
+        //     'Submitted for verification.'
+        // );
+
+        $merchant = $request->user()->merchant;
+
+        $result = $service->submitForReview(
+            $merchant
+        );
+
+        $this->broadcastMerchantChange(
+            $merchant,
+            'submitted'
+        );
+
         return ApiResponse::success(
-            $service->submitForReview($request->user()->merchant),
+            $result,
             'Submitted for verification.'
+        );
+    }
+
+    private function broadcastMerchantChange(
+        Merchant $merchant,
+        string $action
+    ): void {
+        $merchant = $merchant->fresh();
+
+        event(
+            new MerchantApplicationChanged(
+                merchantId: $merchant->id,
+                action: $action,
+                source: $merchant->application_source
+                    ?: Merchant::SOURCE_PUBLIC_WEBSITE,
+                status: $merchant->status
+            )
         );
     }
 }

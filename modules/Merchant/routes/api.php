@@ -14,11 +14,10 @@ use Modules\Shipment\Http\Controllers\MerchantShipmentController;
 
 /*
 |--------------------------------------------------------------------------
-| Shared Merchant Document Routes
+| Store Manager Application Submission
 |--------------------------------------------------------------------------
-| Used by admin and merchant to preview/download private KYC documents.
-| Do NOT put inside route.permission.
-| Do NOT put inside role:merchant only.
+| One complete JSON request from the Store Manager backend.
+| Documents are supplied as HTTPS URLs and copied into Tukaatu storage.
 */
 
 Route::prefix('v1')

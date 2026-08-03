@@ -4,6 +4,7 @@ namespace Modules\Merchant\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
+use Modules\Merchant\Events\MerchantApplicationChanged;
 use Modules\Merchant\Http\Requests\StoreIntegrationSubmissionRequest;
 use Modules\Merchant\Services\StoreIntegrationApplicationService;
 
@@ -22,7 +23,29 @@ class StoreIntegrationApplicationController extends Controller
             documents: $data['documents']
         );
 
-        $merchant = $result['merchant'];
+        /*
+         * StoreIntegrationApplicationService has already completed
+         * its database transaction before returning.
+         */
+        $merchant = $result['merchant']->fresh([
+            'defaultBranch',
+            'defaultSubBranch',
+            'suggestedBranch',
+            'suggestedSubBranch',
+        ]);
+
+        event(
+            new MerchantApplicationChanged(
+                merchantId: $merchant->id,
+
+                action: $result['created']
+                    ? 'created'
+                    : 'resubmitted',
+
+                source: $merchant->application_source,
+                status: $merchant->status
+            )
+        );
 
         return ApiResponse::success(
             [
@@ -49,7 +72,8 @@ class StoreIntegrationApplicationController extends Controller
             ],
             $result['created']
                 ? 'Store integration application submitted successfully.'
-                : 'Store integration application updated and resubmitted successfully.'
+                : 'Store integration application updated and resubmitted successfully.',
+            $result['created'] ? 201 : 200
         );
     }
 }

@@ -153,50 +153,41 @@ class AdminMerchantApplicationController extends Controller
         ];
 
         /*
-         * These fields are required only for Store Manager
-         * integration applications.
+         * Store Manager integration approval only requires
+         * the services that Tukaatu allows the Store to use.
+         *
+         * Pricing is resolved through the currently active
+         * global Pricing Settings version.
          */
         if ($isStoreManagerApplication) {
-            $rules = array_merge(
-                $rules,
-                [
-                    'rate_card_id' => [
-                        'required',
-                        'integer',
-                        'exists:rate_cards,id',
-                    ],
+            $rules['approved_services'] = [
+                'required',
+                'array',
+                'min:1',
+            ];
 
-                    'approved_services' => [
-                        'required',
-                        'array',
-                        'min:1',
-                    ],
+            $rules['approved_services.*'] = [
+                'required',
+                'string',
 
-                    'approved_services.*' => [
-                        'required',
-                        'string',
-
-                        Rule::in([
-                            'delivery_pricing',
-                            'quote_creation',
-                            'shipment_creation',
-                            'tracking',
-                            'webhooks',
-                            'cod',
-                            'returns',
-                        ]),
-                    ],
-                ]
-            );
+                Rule::in([
+                    'delivery_pricing',
+                    'quote_creation',
+                    'shipment_creation',
+                    'tracking',
+                    'webhooks',
+                    'cod',
+                    'returns',
+                ]),
+            ];
         }
 
-        $data = $request->validate($rules);
+        $data =
+            $request->validate($rules);
 
         /*
-         * Shared approval process.
-         *
-         * This remains the source of truth for both public
-         * merchants and Store Manager merchants.
+         * Shared approval process for both public merchants
+         * and Store Manager merchants.
          */
         $approvedMerchant =
             $onboardingService->approve(
@@ -212,27 +203,28 @@ class AdminMerchantApplicationController extends Controller
             );
 
         /*
-         * Defensive fallback in case the service updates the
-         * model but does not return it.
+         * Defensive fallback when the service updates the
+         * merchant but does not explicitly return it.
          */
         if (!$approvedMerchant instanceof Merchant) {
             $approvedMerchant = $merchant;
         }
 
         /*
-         * Only Store Manager integrations receive:
+         * Store Manager integrations additionally receive:
          *
          * - approved services
-         * - rate card
-         * - integration credentials
-         * - approval callback
+         * - API credentials
+         * - integration activation
+         * - post-approval callback
+         *
+         * No merchant rate card is required.
          */
         if ($isStoreManagerApplication) {
             $integrationResult =
                 $integrationService->completeApproval(
                     $approvedMerchant,
-                    $data['approved_services'],
-                    (int) $data['rate_card_id']
+                    $data['approved_services']
                 );
 
             if ($integrationResult instanceof Merchant) {
@@ -247,7 +239,7 @@ class AdminMerchantApplicationController extends Controller
             );
 
         /*
-         * Notify all connected admin pages.
+         * Notify connected admin pages.
          */
         $this->broadcastChange(
             $approvedMerchant,
@@ -286,8 +278,9 @@ class AdminMerchantApplicationController extends Controller
         );
 
         /*
-         * Support service methods that either return the Merchant
-         * model or update the supplied model without returning it.
+         * Support service methods that either return the
+         * Merchant model or update the supplied model
+         * without returning it.
          */
         $rejectedMerchant =
             $result instanceof Merchant
@@ -311,7 +304,8 @@ class AdminMerchantApplicationController extends Controller
     }
 
     /**
-     * Ask a merchant to update or provide additional information.
+     * Ask a merchant to update or provide additional
+     * information.
      */
     public function requestMoreInfo(
         Request $request,
@@ -376,8 +370,9 @@ class AdminMerchantApplicationController extends Controller
     /**
      * Broadcast a safe realtime update.
      *
-     * The frontend receives the merchant ID and reloads the
-     * protected REST endpoint for full application information.
+     * The frontend receives the merchant ID and reloads
+     * the protected REST endpoint for full application
+     * information.
      */
     private function broadcastChange(
         Merchant $merchant,

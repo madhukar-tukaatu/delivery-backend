@@ -15,6 +15,7 @@ use Modules\Rate\Http\Controllers\Api\Admin\AdminTransferRoutePricingSettingsCon
 use Modules\Rate\Http\Controllers\Api\MarketplacePricingQuoteController;
 use Modules\Rate\Http\Controllers\Api\PublicPricingEstimateController;
 use Modules\Rate\Http\Controllers\Api\PublicPricingQuoteController;
+use Modules\Rate\Http\Controllers\RateCardController;
 
 /*
 |--------------------------------------------------------------------------
@@ -271,6 +272,11 @@ Route::prefix('v1/admin')
     ->name('admin.')
     ->middleware(['auth:sanctum', 'route.permission'])
     ->group(function (): void {
+        Route::get(
+            '/rate-cards',
+            [RateCardController::class, 'index']
+        )->name('admin.rate-cards.index');
+
         Route::get('pricing-settings/defaults', [AdminPricingSettingsController::class, 'defaults',]);
         Route::get('pricing-settings', [AdminPricingSettingsController::class, 'index'])->name('pricing-settings.index');
         Route::post('pricing-settings', [AdminPricingSettingsController::class, 'store'])->name('pricing-settings.store');

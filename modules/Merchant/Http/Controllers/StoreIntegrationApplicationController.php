@@ -17,25 +17,39 @@ class StoreIntegrationApplicationController extends Controller
         $data = $request->validated();
 
         $result = $service->submit(
-            $applicationNumber,
-            $data,
-            $data['documents'] ?? []
+            applicationNumber: $applicationNumber,
+            data: $data,
+            documents: $data['documents']
         );
+
+        $merchant = $result['merchant'];
 
         return ApiResponse::success(
             [
-                'application_number' => $result['merchant']->application_number,
-                'merchant_application_id' => $result['merchant']->id,
-                'status' => $result['merchant']->status,
-                'verification_status' => $result['merchant']->verification_status,
-                'integration_status' => $result['merchant']->integration_status,
-                'submitted_at' => $result['merchant']->submitted_at,
-                'created' => $result['created'],
+                'application_number' =>
+                    $merchant->application_number,
+
+                'merchant_application_id' =>
+                    $merchant->id,
+
+                'status' =>
+                    $merchant->status,
+
+                'verification_status' =>
+                    $merchant->verification_status,
+
+                'integration_status' =>
+                    $merchant->integration_status,
+
+                'submitted_at' =>
+                    $merchant->submitted_at,
+
+                'created' =>
+                    $result['created'],
             ],
             $result['created']
                 ? 'Store integration application submitted successfully.'
-                : 'Store integration application updated and resubmitted successfully.',
-            $result['created'] ? 201 : 200
+                : 'Store integration application updated and resubmitted successfully.'
         );
     }
 }

@@ -21,32 +21,62 @@ Broadcast::channel(
     'admin.merchant-applications',
     function ($user): bool {
         /*
-         * Spatie or another role package.
+         * Spatie permissions/roles.
          */
-        if (method_exists($user, 'hasAnyRole')) {
+        if (method_exists(
+            $user,
+            'hasAnyRole'
+        )) {
             return $user->hasAnyRole([
                 'super_admin',
                 'admin',
             ]);
         }
 
-        /*
-         * Fallback for a simple role column or role relation.
-         */
-        $role = data_get(
+        if (method_exists(
             $user,
-            'role.name',
-            data_get($user, 'role', '')
-        );
+            'hasRole'
+        )) {
+            return
+                $user->hasRole('super_admin') ||
+                $user->hasRole('admin');
+        }
 
-        return in_array(
-            strtolower((string) $role),
-            [
-                'super_admin',
-                'admin',
-            ],
-            true
-        );
+        /*
+         * Fallback for custom role models/columns.
+         */
+        $candidates = [
+            data_get($user, 'role.slug'),
+            data_get($user, 'role.name'),
+            data_get($user, 'role_name'),
+            data_get($user, 'user_type'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (!is_scalar($candidate)) {
+                continue;
+            }
+
+            $role = strtolower(
+                trim((string) $candidate)
+            );
+
+            if (
+                in_array(
+                    $role,
+                    [
+                        'super_admin',
+                        'super-admin',
+                        'admin',
+                    ],
+                    true
+                )
+            ) {
+                return true;
+            }
+        }
+
+        return false;
     }
 );
 

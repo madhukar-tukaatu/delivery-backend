@@ -115,7 +115,7 @@ class StoreIntegrationPostApprovalService
             'shipment_creation' => 'shipments.create',
             'tracking' => 'shipments.track',
             'webhooks' => 'webhooks.manage',
-            'cod' => 'cod.use',
+            'pod' => 'pod.use',
             'returns' => 'returns.create',
         ];
 

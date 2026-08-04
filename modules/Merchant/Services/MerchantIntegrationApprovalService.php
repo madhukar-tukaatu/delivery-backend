@@ -111,7 +111,7 @@ class MerchantIntegrationApprovalService
             'shipment_creation' => 'shipments:create',
             'tracking' => 'tracking:read',
             'webhooks' => 'webhooks:manage',
-            'cod' => 'cod:use',
+            'pod' => 'pod:use',
             'returns' => 'returns:create',
         ];
 

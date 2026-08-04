@@ -176,7 +176,7 @@ class AdminMerchantApplicationController extends Controller
                     'shipment_creation',
                     'tracking',
                     'webhooks',
-                    'cod',
+                    'pod',
                     'returns',
                 ]),
             ];

@@ -41,9 +41,9 @@ final class StorePublicPricingQuoteRequest extends FormRequest
             trim((string) $this->input('payment_type'))
         );
 
-        if ($paymentType === 'cod') {
-            $paymentType = 'pod';
-        }
+        // if ($paymentType === 'cod') {
+        //     $paymentType = 'pod';
+        // }
 
         $serviceType = strtolower(
             trim((string) $this->input('service_type'))

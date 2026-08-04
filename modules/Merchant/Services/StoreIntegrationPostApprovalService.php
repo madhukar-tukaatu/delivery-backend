@@ -181,8 +181,8 @@ class StoreIntegrationPostApprovalService
             'webhooks' =>
                 'webhooks.manage',
 
-            'cod' =>
-                'cod.use',
+            'pod' =>
+                'pod.use',
 
             'returns' =>
                 'returns.create',

@@ -947,10 +947,12 @@ class StoreMultiStorePricingQuoteRequestOLD extends FormRequest
         );
 
         return match ($value) {
-            'cod',
+            'pod',
             'cash_on_delivery',
-            'cash-on-delivery' =>
-                'pod',
+            'payment_on_delivery',
+            'cash-on-delivery',
+            'payment-on-delivery'
+             => 'pod',
 
             default =>
                 $value,

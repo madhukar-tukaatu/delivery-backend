@@ -272,9 +272,11 @@ trait NormalizesPricingPayload
         );
 
         return match ($value) {
-            'cod',
+            'pod',
+            'payment_on_delivery',
             'cash_on_delivery',
-            'cash-on-delivery' => 'pod',
+            'cash-on-delivery',
+            'payment-on-delivery' => 'pod',
 
             default => $value,
         };

@@ -702,9 +702,11 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
         $value = strtolower(trim((string) $value));
 
         return match ($value) {
-            'cod',
+            'pod',
             'cash_on_delivery',
-            'cash-on-delivery' => 'pod',
+            'cash-on-delivery',
+            'payment_on_delivery',
+            'payment-on-delivery' => 'pod',
             default => $value,
         };
     }

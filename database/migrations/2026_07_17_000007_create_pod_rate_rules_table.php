@@ -21,7 +21,7 @@ return new class extends Migration
                  * Supported examples:
                  * prepaid
                  * pod
-                 * cod
+                 * pod
                  * partial
                  */
                 $table->string('payment_type', 30)

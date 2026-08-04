@@ -397,7 +397,7 @@ class StoreIntegrationSubmissionRequest extends FormRequest
                     'shipment_creation',
                     'tracking',
                     'webhooks',
-                    'cod',
+                    'pod',
                     'returns',
                 ]),
             ],

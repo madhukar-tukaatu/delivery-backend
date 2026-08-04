@@ -7,6 +7,8 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Modules\Branch\Models\Branch;
@@ -182,13 +184,25 @@ class BranchController extends Controller
             $data['type']
         );
 
+        $documents = $this->validatedBranchDocuments(
+            $request,
+            $data['type']
+        );
+
         if (
-            $data['type'] === Branch::TYPE_FRANCHISE_BRANCH &&
+            in_array(
+                $data['type'],
+                [
+                    Branch::TYPE_FRANCHISE_BRANCH,
+                    Branch::TYPE_SUB_BRANCH,
+                ],
+                true
+            ) &&
             blank($data['email'] ?? null)
         ) {
             throw ValidationException::withMessages([
                 'email' => [
-                    'A manager email is required for a franchise branch account.',
+                    'A manager email is required for branch assignment creation.',
                 ],
             ]);
         }
@@ -203,13 +217,17 @@ class BranchController extends Controller
             $data
         );
 
-        /*
-     * The branch form currently hides name and code,
-     * so generate them safely when they are empty.
-     */
         $data['name'] = trim(
             (string) ($data['name'] ?? '')
-        ) ?: $data['legal_name'];
+        );
+
+        if ($data['name'] === '') {
+            throw ValidationException::withMessages([
+                'name' => [
+                    'Branch name is required.',
+                ],
+            ]);
+        }
 
         $data['code'] = trim(
             (string) ($data['code'] ?? '')
@@ -218,59 +236,91 @@ class BranchController extends Controller
             $data['type']
         );
 
-        $result = DB::transaction(function () use (
-            $data,
-            $teamProvisioner
-        ) {
-            $data['status'] = Branch::STATUS_DRAFT;
-            $data['manager_user_id'] = null;
+        $storedFiles = [];
 
-            $branch = Branch::create($data);
+        try {
+            $result = DB::transaction(function () use (
+                $data,
+                $documents,
+                $teamProvisioner,
+                &$storedFiles
+            ) {
+                $data['status'] = Branch::STATUS_DRAFT;
+                $data['manager_user_id'] = null;
 
-            if (!empty($data['coverage_location_id'])) {
-                CoverageLocation::where(
-                    'id',
-                    $data['coverage_location_id']
-                )->update([
-                    'branch_id' => $branch->id,
+                /*
+                 * Lock the selected allocation so two concurrent requests
+                 * cannot assign the same coverage location.
+                 */
+                if (!empty($data['coverage_location_id'])) {
+                    $coverageLocation = CoverageLocation::query()
+                        ->lockForUpdate()
+                        ->findOrFail($data['coverage_location_id']);
+
+                    if ($coverageLocation->branch_id) {
+                        throw ValidationException::withMessages([
+                            'coverage_location_id' => [
+                                'This coverage location is already assigned to another branch.',
+                            ],
+                        ]);
+                    }
+                }
+
+                $branch = Branch::create($data);
+
+                if (!empty($data['coverage_location_id'])) {
+                    CoverageLocation::query()
+                        ->whereKey($data['coverage_location_id'])
+                        ->update([
+                            'branch_id' => $branch->id,
+                        ]);
+                }
+
+                $team = $teamProvisioner->provision(
+                    $branch,
+                    $data
+                );
+
+                $branch->update([
+                    'manager_user_id' => $team['manager']->id,
                 ]);
+
+                $branch->forceFill([
+                    'account_invitation_status' =>
+                        'pending_admin_approval',
+
+                    'account_invitation_email' =>
+                        $team['manager']->email,
+                ])->save();
+
+                $createdDocuments = $this->storeBranchDocuments(
+                    $branch,
+                    $documents,
+                    $storedFiles
+                );
+
+                return [
+                    'branch' => $branch,
+                    'team' => $team,
+                    'documents' => $createdDocuments,
+                ];
+            }, 3);
+        } catch (\Throwable $exception) {
+            /*
+             * Database rollback does not delete files written to disk.
+             * Remove every file written by this failed request.
+             */
+            foreach ($storedFiles as $storedFile) {
+                Storage::disk($storedFile['disk'])
+                    ->delete($storedFile['path']);
             }
 
-            /*
-         * Creates the manager and all prepared
-         * position-based login accounts.
-         */
-            $team = $teamProvisioner->provision(
-                $branch,
-                $data
-            );
-
-            $branch->update([
-                'manager_user_id' =>
-                $team['manager']->id,
-            ]);
-
-            /*
-             * The manager account exists now, but no email is sent yet.
-             * The invitation is queued only after admin approval.
-             */
-            $branch->forceFill([
-                'account_invitation_status' =>
-                'pending_admin_approval',
-
-                'account_invitation_email' =>
-                $team['manager']->email,
-            ])->save();
-
-            return [
-                'branch' => $branch,
-                'team' => $team,
-            ];
-        });
+            throw $exception;
+        }
 
         return response()->json([
             'message' =>
-            'Branch and operational team accounts created successfully. The account setup email will be sent after admin approval.',
+                'Branch, coverage assignment, operational team and documents created successfully. The account setup email will be sent after admin approval.',
 
             'data' => $result['branch']
                 ->fresh()
@@ -284,34 +334,258 @@ class BranchController extends Controller
 
             'team_setup' => [
                 'manager' => [
-                    'id' =>
-                    $result['team']['manager']->id,
-
-                    'name' =>
-                    $result['team']['manager']->name,
-
-                    'username' =>
-                    $result['team']['manager']->username,
-
-                    'email' =>
-                    $result['team']['manager']->email,
-
-                    'role' =>
-                    $result['team']['manager']->role,
+                    'id' => $result['team']['manager']->id,
+                    'name' => $result['team']['manager']->name,
+                    'username' => $result['team']['manager']->username,
+                    'email' => $result['team']['manager']->email,
+                    'role' => $result['team']['manager']->role,
                 ],
 
                 'generated_accounts' =>
-                $result['team']['total_accounts'],
+                    $result['team']['total_accounts'],
 
                 'vacant_positions' =>
-                count(
-                    $result['team']['staff_accounts']
-                ),
+                    count($result['team']['staff_accounts']),
 
-                'owner_notification' => 'pending_admin_approval',
+                'owner_notification' =>
+                    'pending_admin_approval',
             ],
+
+            'documents_created' =>
+                count($result['documents']),
         ], 201);
     }
+
+    /**
+     * Validate document metadata and files submitted in the same multipart
+     * request as the branch. Franchise and sub-branch assignment creation
+     * cannot succeed without their required documents.
+     */
+    private function validatedBranchDocuments(
+        Request $request,
+        string $branchType
+    ): array {
+        $requiredDocumentTypes = match ($branchType) {
+            Branch::TYPE_FRANCHISE_BRANCH => [
+                'pan_vat_certificate',
+                'owner_id',
+                'agreement',
+                'office_photo',
+            ],
+
+            Branch::TYPE_SUB_BRANCH => [
+                'pan_vat_certificate',
+                'agreement',
+                'office_photo',
+            ],
+
+            default => [],
+        };
+
+        $documentsRule = $requiredDocumentTypes !== []
+            ? ['required', 'array', 'min:1']
+            : ['nullable', 'array'];
+
+        $validated = $request->validate([
+            'documents' => $documentsRule,
+
+            'documents.*.document_type' => [
+                'required',
+                'string',
+                Rule::in([
+                    'pan_vat_certificate',
+                    'company_registration',
+                    'owner_id',
+                    'agreement',
+                    'office_photo',
+                    'other',
+                ]),
+            ],
+
+            'documents.*.title' => [
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'documents.*.notes' => [
+                'nullable',
+                'string',
+                'max:2000',
+            ],
+
+            'documents.*.file' => [
+                'required',
+                'file',
+                'mimes:pdf,jpg,jpeg,png,webp,doc,docx',
+                'max:10240',
+            ],
+        ]);
+
+        $rows = $validated['documents'] ?? [];
+        $submittedTypes = collect($rows)
+            ->pluck('document_type')
+            ->filter()
+            ->values();
+
+        $duplicateTypes = $submittedTypes
+            ->duplicates()
+            ->unique()
+            ->values()
+            ->all();
+
+        if ($duplicateTypes !== []) {
+            throw ValidationException::withMessages([
+                'documents' => [
+                    'Duplicate document types are not allowed: ' .
+                    implode(', ', $duplicateTypes),
+                ],
+            ]);
+        }
+
+        $missingTypes = collect($requiredDocumentTypes)
+            ->reject(fn (string $type) => $submittedTypes->contains($type))
+            ->values()
+            ->all();
+
+        if ($missingTypes !== []) {
+            throw ValidationException::withMessages([
+                'documents' => [
+                    'Missing required documents: ' .
+                    implode(', ', $missingTypes),
+                ],
+            ]);
+        }
+
+        return collect($rows)
+            ->map(function (array $row, int $index) use ($request) {
+                $file = $request->file(
+                    "documents.{$index}.file"
+                );
+
+                if (!$file) {
+                    throw ValidationException::withMessages([
+                        "documents.{$index}.file" => [
+                            'The document file is missing.',
+                        ],
+                    ]);
+                }
+
+                return [
+                    'document_type' => $row['document_type'],
+                    'title' => $row['title'] ?? null,
+                    'notes' => $row['notes'] ?? null,
+                    'file' => $file,
+                ];
+            })
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Store branch documents through the existing Branch::documents()
+     * relationship. The column checks support common path/size/note naming
+     * differences without changing your existing BranchDocument model.
+     */
+    private function storeBranchDocuments(
+        Branch $branch,
+        array $documents,
+        array &$storedFiles
+    ): array {
+        $createdDocuments = [];
+
+        foreach ($documents as $documentData) {
+            $file = $documentData['file'];
+            $disk = 'public';
+
+            $path = $file->store(
+                "branch-documents/{$branch->id}",
+                $disk
+            );
+
+            $storedFiles[] = [
+                'disk' => $disk,
+                'path' => $path,
+            ];
+
+            $relation = $branch->documents();
+            $documentModel = $relation->getRelated()->newInstance();
+            $table = $documentModel->getTable();
+            $values = [];
+
+            if (!Schema::hasColumn($table, 'document_type')) {
+                throw new \LogicException(
+                    "The {$table} table must contain document_type."
+                );
+            }
+
+            $values['document_type'] =
+                $documentData['document_type'];
+
+            if (Schema::hasColumn($table, 'title')) {
+                $values['title'] =
+                    $documentData['title']
+                    ?: $file->getClientOriginalName();
+            }
+
+            if (Schema::hasColumn($table, 'notes')) {
+                $values['notes'] =
+                    $documentData['notes'] ?: null;
+            } elseif (Schema::hasColumn($table, 'remarks')) {
+                $values['remarks'] =
+                    $documentData['notes'] ?: null;
+            }
+
+            if (Schema::hasColumn($table, 'file_path')) {
+                $values['file_path'] = $path;
+            } elseif (Schema::hasColumn($table, 'path')) {
+                $values['path'] = $path;
+            } else {
+                throw new \LogicException(
+                    "The {$table} table must contain file_path or path."
+                );
+            }
+
+            if (Schema::hasColumn($table, 'disk')) {
+                $values['disk'] = $disk;
+            }
+
+            if (Schema::hasColumn($table, 'original_name')) {
+                $values['original_name'] =
+                    $file->getClientOriginalName();
+            } elseif (Schema::hasColumn($table, 'file_name')) {
+                $values['file_name'] =
+                    $file->getClientOriginalName();
+            }
+
+            if (Schema::hasColumn($table, 'mime_type')) {
+                $values['mime_type'] =
+                    $file->getClientMimeType();
+            }
+
+            if (Schema::hasColumn($table, 'size_bytes')) {
+                $values['size_bytes'] = $file->getSize();
+            } elseif (Schema::hasColumn($table, 'size')) {
+                $values['size'] = $file->getSize();
+            }
+
+            if (Schema::hasColumn($table, 'status')) {
+                $values['status'] = 'pending';
+            }
+
+            if (Schema::hasColumn($table, 'uploaded_by')) {
+                $values['uploaded_by'] = auth()->id();
+            }
+
+            $documentModel->forceFill($values);
+            $relation->save($documentModel);
+
+            $createdDocuments[] = $documentModel;
+        }
+
+        return $createdDocuments;
+    }
+
     private function generateBranchCode(
         string $name,
         string $type

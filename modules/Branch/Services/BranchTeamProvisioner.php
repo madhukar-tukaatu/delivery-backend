@@ -15,20 +15,13 @@ class BranchTeamProvisioner
         Branch $branch,
         array $branchData
     ): array {
-        $manager = $this->createManager(
-            $branch,
-            $branchData
-        );
-
-        $staffAccounts = $this->createStaffAccounts(
-            $branch
-        );
+        $manager = $this->createManager($branch, $branchData);
+        $staffAccounts = $this->createStaffAccounts($branch);
 
         return [
             'manager' => $manager,
             'staff_accounts' => $staffAccounts,
-            'total_accounts' =>
-                1 + count($staffAccounts),
+            'total_accounts' => 1 + count($staffAccounts),
         ];
     }
 
@@ -47,15 +40,17 @@ class BranchTeamProvisioner
             1
         );
 
-        $email = strtolower(
-            trim((string) $branchData['email'])
-        );
+        $email = strtolower(trim((string) ($branchData['email'] ?? '')));
 
-        if (
-            User::query()
-                ->where('email', $email)
-                ->exists()
-        ) {
+        if ($email === '') {
+            throw ValidationException::withMessages([
+                'email' => [
+                    'A manager email is required to create the branch manager account.',
+                ],
+            ]);
+        }
+
+        if (User::query()->where('email', $email)->exists()) {
             throw ValidationException::withMessages([
                 'email' => [
                     'A user account with this email already exists.',
@@ -63,33 +58,37 @@ class BranchTeamProvisioner
             ]);
         }
 
+        $contactPerson = trim(
+            (string) ($branchData['contact_person'] ?? '')
+        );
+
+        $ownerName = trim(
+            (string) ($branchData['owner_name'] ?? '')
+        );
+
+        $legalName = trim(
+            (string) ($branchData['legal_name'] ?? '')
+        );
+
+        $managerName =
+            $contactPerson
+            ?: $ownerName
+            ?: $legalName
+            ?: trim((string) $branch->name)
+            ?: 'Branch Manager';
+
+        $phone = trim((string) ($branchData['phone'] ?? ''));
+
         $manager = User::create([
             'branch_id' => $branch->id,
             'merchant_id' => null,
-
             'username' => $username,
-
-            'name' => $branchData['contact_person']
-                ?: $branchData['owner_name']
-                ?: $branchData['legal_name']
-                ?: 'Branch Manager',
-
+            'name' => $managerName,
             'email' => $email,
-            'phone' => $branchData['phone'],
-
+            'phone' => $phone !== '' ? $phone : null,
             'role' => $managerRole,
-
-            /*
-             * The owner sets a real password using the
-             * password setup link received by email.
-             */
             'password' => Str::random(64),
-
-            /*
-             * This project does not require email verification.
-             */
             'email_verified_at' => now(),
-
             'is_active' => true,
             'account_status' => User::ACCOUNT_ACTIVE,
             'must_change_password' => true,
@@ -102,22 +101,18 @@ class BranchTeamProvisioner
             'role' => $managerRole,
             'position_code' => $username,
             'position_number' => 1,
-            'staffing_status' =>
-                BranchTeamPosition::STATUS_ASSIGNED,
+            'staffing_status' => BranchTeamPosition::STATUS_ASSIGNED,
             'assigned_at' => now(),
         ]);
 
         return $manager;
     }
 
-    private function createStaffAccounts(
-        Branch $branch
-    ): array {
+    private function createStaffAccounts(Branch $branch): array
+    {
         $createdAccounts = [];
 
-        foreach (
-            $this->teamTemplate($branch) as $definition
-        ) {
+        foreach ($this->teamTemplate($branch) as $definition) {
             for (
                 $position = 1;
                 $position <= $definition['quantity'];
@@ -134,60 +129,33 @@ class BranchTeamProvisioner
                 $user = User::create([
                     'branch_id' => $branch->id,
                     'merchant_id' => null,
-
                     'username' => $username,
-
                     'name' => sprintf(
                         '%s %02d',
-                        Str::headline(
-                            $definition['role']
-                        ),
+                        Str::headline($definition['role']),
                         $position
                     ),
-
                     'email' => null,
                     'phone' => null,
-
                     'role' => $definition['role'],
-
-                    /*
-                     * The User model hashes this automatically.
-                     */
                     'password' => $temporaryPassword,
-
-                    /*
-                     * Verification is not applicable to
-                     * position-based accounts.
-                     */
                     'email_verified_at' => now(),
-
-                    /*
-                     * Vacant positions may still access the system.
-                     */
                     'is_active' => true,
                     'account_status' => User::ACCOUNT_ACTIVE,
                     'must_change_password' => true,
                     'assigned_at' => null,
                 ]);
 
-                $teamPosition =
-                    BranchTeamPosition::create([
-                        'branch_id' => $branch->id,
-                        'user_id' => $user->id,
-                        'role' => $definition['role'],
-                        'position_code' => $username,
-                        'position_number' => $position,
-                        'staffing_status' =>
-                            BranchTeamPosition::STATUS_VACANT,
-
-                        /*
-                         * The Branch Manager may reveal this once.
-                         */
-                        'temporary_password_encrypted' =>
-                            Crypt::encryptString(
-                                $temporaryPassword
-                            ),
-                    ]);
+                $teamPosition = BranchTeamPosition::create([
+                    'branch_id' => $branch->id,
+                    'user_id' => $user->id,
+                    'role' => $definition['role'],
+                    'position_code' => $username,
+                    'position_number' => $position,
+                    'staffing_status' => BranchTeamPosition::STATUS_VACANT,
+                    'temporary_password_encrypted' =>
+                        Crypt::encryptString($temporaryPassword),
+                ]);
 
                 $createdAccounts[] = [
                     'user' => $user,
@@ -199,67 +167,24 @@ class BranchTeamProvisioner
         return $createdAccounts;
     }
 
-    private function teamTemplate(
-        Branch $branch
-    ): array {
-        if (
-            $branch->type === Branch::TYPE_SUB_BRANCH
-        ) {
+    private function teamTemplate(Branch $branch): array
+    {
+        if ($branch->type === Branch::TYPE_SUB_BRANCH) {
             return [
-                [
-                    'role' => 'booking_staff',
-                    'code' => 'BOOKING',
-                    'quantity' => 1,
-                ],
-                [
-                    'role' => 'pickup_staff',
-                    'code' => 'PICKUP',
-                    'quantity' => 1,
-                ],
-                [
-                    'role' => 'dispatch_staff',
-                    'code' => 'DISPATCH',
-                    'quantity' => 1,
-                ],
-                [
-                    'role' => 'accounts_staff',
-                    'code' => 'ACCOUNTS',
-                    'quantity' => 1,
-                ],
-                [
-                    'role' => 'support_staff',
-                    'code' => 'SUPPORT',
-                    'quantity' => 1,
-                ],
+                ['role' => 'booking_staff', 'code' => 'BOOKING', 'quantity' => 1],
+                ['role' => 'pickup_staff', 'code' => 'PICKUP', 'quantity' => 1],
+                ['role' => 'dispatch_staff', 'code' => 'DISPATCH', 'quantity' => 1],
+                ['role' => 'accounts_staff', 'code' => 'ACCOUNTS', 'quantity' => 1],
+                ['role' => 'support_staff', 'code' => 'SUPPORT', 'quantity' => 1],
             ];
         }
 
         return [
-            [
-                'role' => 'booking_staff',
-                'code' => 'BOOKING',
-                'quantity' => 2,
-            ],
-            [
-                'role' => 'pickup_staff',
-                'code' => 'PICKUP',
-                'quantity' => 2,
-            ],
-            [
-                'role' => 'dispatch_staff',
-                'code' => 'DISPATCH',
-                'quantity' => 2,
-            ],
-            [
-                'role' => 'accounts_staff',
-                'code' => 'ACCOUNTS',
-                'quantity' => 1,
-            ],
-            [
-                'role' => 'support_staff',
-                'code' => 'SUPPORT',
-                'quantity' => 1,
-            ],
+            ['role' => 'booking_staff', 'code' => 'BOOKING', 'quantity' => 2],
+            ['role' => 'pickup_staff', 'code' => 'PICKUP', 'quantity' => 2],
+            ['role' => 'dispatch_staff', 'code' => 'DISPATCH', 'quantity' => 2],
+            ['role' => 'accounts_staff', 'code' => 'ACCOUNTS', 'quantity' => 1],
+            ['role' => 'support_staff', 'code' => 'SUPPORT', 'quantity' => 1],
         ];
     }
 
@@ -285,14 +210,8 @@ class BranchTeamProvisioner
         $username = $baseUsername;
         $suffix = 1;
 
-        while (
-            User::query()
-                ->where('username', $username)
-                ->exists()
-        ) {
-            $username =
-                "{$baseUsername}-{$suffix}";
-
+        while (User::query()->where('username', $username)->exists()) {
+            $username = "{$baseUsername}-{$suffix}";
             $suffix++;
         }
 

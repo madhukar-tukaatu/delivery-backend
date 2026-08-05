@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\ServiceProvider;
 
@@ -16,6 +17,15 @@ final class AppServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+
+        Gate::define(
+            'viewApiDocs',
+            function ($user = null): bool {
+                return app()->environment('local')
+                    || config('api_docs.enabled', false);
+            }
+        );
+
         RateLimiter::for(
             'marketplace-pricing',
             function (Request $request): Limit {

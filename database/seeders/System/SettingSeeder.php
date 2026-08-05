@@ -10,7 +10,7 @@ class SettingSeeder extends Seeder
     public function run(): void
     {
         foreach ([
-            'company_name' => ['Hotstone Courier Nepal','string'],
+            'company_name' => ['Tukaatu Express DMS','string'],
             'tracking_prefix' => ['NPD','string'],
             'default_currency' => ['NPR','string'],
             'seed_last_profile' => [env('SEED_PROFILE', 'demo'),'string'],

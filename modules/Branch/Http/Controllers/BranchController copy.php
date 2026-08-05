@@ -15,7 +15,7 @@ use Illuminate\Support\Str;
 use Modules\Branch\Services\BranchTeamProvisioner;
 use Modules\Branch\Services\BranchAccountInvitationService;
 
-class BranchController extends Controller
+class BranchControllerCopy extends Controller
 {
     public function parentOptions(Request $request, BranchVisibilityService $visibility): JsonResponse
     {

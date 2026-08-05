@@ -7,13 +7,13 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 use Modules\Branch\Models\Branch;
 use Modules\Branch\Models\CoverageLocation;
 use Modules\Branch\Services\BranchVisibilityService;
+use Modules\Branch\Services\BranchDocumentService;
 use Illuminate\Support\Str;
 use Modules\Branch\Services\BranchTeamProvisioner;
 use Modules\Branch\Services\BranchAccountInvitationService;
@@ -176,7 +176,8 @@ class BranchController extends Controller
     public function store(
         Request $request,
         BranchVisibilityService $visibility,
-        BranchTeamProvisioner $teamProvisioner
+        BranchTeamProvisioner $teamProvisioner,
+        BranchDocumentService $documentService
     ): JsonResponse {
         $data = $this->validatedData($request);
 
@@ -213,9 +214,7 @@ class BranchController extends Controller
             $data
         );
 
-        $this->applyCoverageLocationToBranchPayload(
-            $data
-        );
+        $this->applyCoverageLocationToBranchPayload($data);
 
         $data['name'] = trim(
             (string) ($data['name'] ?? '')
@@ -243,15 +242,12 @@ class BranchController extends Controller
                 $data,
                 $documents,
                 $teamProvisioner,
+                $documentService,
                 &$storedFiles
             ) {
                 $data['status'] = Branch::STATUS_DRAFT;
                 $data['manager_user_id'] = null;
 
-                /*
-                 * Lock the selected allocation so two concurrent requests
-                 * cannot assign the same coverage location.
-                 */
                 if (!empty($data['coverage_location_id'])) {
                     $coverageLocation = CoverageLocation::query()
                         ->lockForUpdate()
@@ -288,16 +284,27 @@ class BranchController extends Controller
                 $branch->forceFill([
                     'account_invitation_status' =>
                         'pending_admin_approval',
-
                     'account_invitation_email' =>
                         $team['manager']->email,
                 ])->save();
 
-                $createdDocuments = $this->storeBranchDocuments(
-                    $branch,
-                    $documents,
-                    $storedFiles
-                );
+                $createdDocuments = [];
+
+                foreach ($documents as $documentData) {
+                    $document = $documentService->storeOrReplace(
+                        branch: $branch,
+                        file: $documentData['file'],
+                        documentType: $documentData['document_type'],
+                        remarks: $documentData['remarks'],
+                    );
+
+                    $storedFiles[] = [
+                        'disk' => $document->disk ?: 'local',
+                        'path' => $document->file_path,
+                    ];
+
+                    $createdDocuments[] = $document;
+                }
 
                 return [
                     'branch' => $branch,
@@ -306,32 +313,36 @@ class BranchController extends Controller
                 ];
             }, 3);
         } catch (\Throwable $exception) {
-            /*
-             * Database rollback does not delete files written to disk.
-             * Remove every file written by this failed request.
-             */
             foreach ($storedFiles as $storedFile) {
-                Storage::disk($storedFile['disk'])
-                    ->delete($storedFile['path']);
+                if (!empty($storedFile['path'])) {
+                    Storage::disk($storedFile['disk'])
+                        ->delete($storedFile['path']);
+                }
             }
 
             throw $exception;
         }
 
+        $createdBranch = $result['branch']
+            ->fresh()
+            ->load([
+                'parent',
+                'coverageLocation',
+                'manager',
+                'documents',
+                'agreements',
+            ]);
+
+        BranchChanged::dispatch(
+            branch: $this->branchBroadcastPayload($createdBranch),
+            action: 'created',
+            performedBy: $request->user()?->id,
+        );
+
         return response()->json([
             'message' =>
                 'Branch, coverage assignment, operational team and documents created successfully. The account setup email will be sent after admin approval.',
-
-            'data' => $result['branch']
-                ->fresh()
-                ->load([
-                    'parent',
-                    'coverageLocation',
-                    'manager',
-                    'documents',
-                    'agreements',
-                ]),
-
+            'data' => $createdBranch,
             'team_setup' => [
                 'manager' => [
                     'id' => $result['team']['manager']->id,
@@ -340,27 +351,18 @@ class BranchController extends Controller
                     'email' => $result['team']['manager']->email,
                     'role' => $result['team']['manager']->role,
                 ],
-
                 'generated_accounts' =>
                     $result['team']['total_accounts'],
-
                 'vacant_positions' =>
                     count($result['team']['staff_accounts']),
-
                 'owner_notification' =>
                     'pending_admin_approval',
             ],
-
             'documents_created' =>
                 count($result['documents']),
         ], 201);
     }
 
-    /**
-     * Validate document metadata and files submitted in the same multipart
-     * request as the branch. Franchise and sub-branch assignment creation
-     * cannot succeed without their required documents.
-     */
     private function validatedBranchDocuments(
         Request $request,
         string $branchType
@@ -372,23 +374,18 @@ class BranchController extends Controller
                 'agreement',
                 'office_photo',
             ],
-
             Branch::TYPE_SUB_BRANCH => [
                 'pan_vat_certificate',
                 'agreement',
                 'office_photo',
             ],
-
             default => [],
         };
 
-        $documentsRule = $requiredDocumentTypes !== []
-            ? ['required', 'array', 'min:1']
-            : ['nullable', 'array'];
-
         $validated = $request->validate([
-            'documents' => $documentsRule,
-
+            'documents' => $requiredDocumentTypes !== []
+                ? ['required', 'array', 'min:1']
+                : ['nullable', 'array'],
             'documents.*.document_type' => [
                 'required',
                 'string',
@@ -401,23 +398,21 @@ class BranchController extends Controller
                     'other',
                 ]),
             ],
-
-            'documents.*.title' => [
+            'documents.*.remarks' => [
                 'nullable',
                 'string',
-                'max:255',
+                'max:2000',
             ],
-
+            // Temporary backwards compatibility during frontend rollout.
             'documents.*.notes' => [
                 'nullable',
                 'string',
                 'max:2000',
             ],
-
             'documents.*.file' => [
                 'required',
                 'file',
-                'mimes:pdf,jpg,jpeg,png,webp,doc,docx',
+                'mimes:jpg,jpeg,png,webp,pdf,doc,docx',
                 'max:10240',
             ],
         ]);
@@ -437,22 +432,25 @@ class BranchController extends Controller
         if ($duplicateTypes !== []) {
             throw ValidationException::withMessages([
                 'documents' => [
-                    'Duplicate document types are not allowed: ' .
-                    implode(', ', $duplicateTypes),
+                    'Duplicate document types are not allowed: '
+                    . implode(', ', $duplicateTypes),
                 ],
             ]);
         }
 
         $missingTypes = collect($requiredDocumentTypes)
-            ->reject(fn (string $type) => $submittedTypes->contains($type))
+            ->reject(
+                fn (string $type) =>
+                    $submittedTypes->contains($type)
+            )
             ->values()
             ->all();
 
         if ($missingTypes !== []) {
             throw ValidationException::withMessages([
                 'documents' => [
-                    'Missing required documents: ' .
-                    implode(', ', $missingTypes),
+                    'Missing required documents: '
+                    . implode(', ', $missingTypes),
                 ],
             ]);
         }
@@ -473,117 +471,14 @@ class BranchController extends Controller
 
                 return [
                     'document_type' => $row['document_type'],
-                    'title' => $row['title'] ?? null,
-                    'notes' => $row['notes'] ?? null,
+                    'remarks' => $row['remarks']
+                        ?? $row['notes']
+                        ?? null,
                     'file' => $file,
                 ];
             })
             ->values()
             ->all();
-    }
-
-    /**
-     * Store branch documents through the existing Branch::documents()
-     * relationship. The column checks support common path/size/note naming
-     * differences without changing your existing BranchDocument model.
-     */
-    private function storeBranchDocuments(
-        Branch $branch,
-        array $documents,
-        array &$storedFiles
-    ): array {
-        $createdDocuments = [];
-
-        foreach ($documents as $documentData) {
-            $file = $documentData['file'];
-            $disk = 'public';
-
-            $path = $file->store(
-                "branch-documents/{$branch->id}",
-                $disk
-            );
-
-            $storedFiles[] = [
-                'disk' => $disk,
-                'path' => $path,
-            ];
-
-            $relation = $branch->documents();
-            $documentModel = $relation->getRelated()->newInstance();
-            $table = $documentModel->getTable();
-            $values = [];
-
-            if (!Schema::hasColumn($table, 'document_type')) {
-                throw new \LogicException(
-                    "The {$table} table must contain document_type."
-                );
-            }
-
-            $values['document_type'] =
-                $documentData['document_type'];
-
-            if (Schema::hasColumn($table, 'title')) {
-                $values['title'] =
-                    $documentData['title']
-                    ?: $file->getClientOriginalName();
-            }
-
-            if (Schema::hasColumn($table, 'notes')) {
-                $values['notes'] =
-                    $documentData['notes'] ?: null;
-            } elseif (Schema::hasColumn($table, 'remarks')) {
-                $values['remarks'] =
-                    $documentData['notes'] ?: null;
-            }
-
-            if (Schema::hasColumn($table, 'file_path')) {
-                $values['file_path'] = $path;
-            } elseif (Schema::hasColumn($table, 'path')) {
-                $values['path'] = $path;
-            } else {
-                throw new \LogicException(
-                    "The {$table} table must contain file_path or path."
-                );
-            }
-
-            if (Schema::hasColumn($table, 'disk')) {
-                $values['disk'] = $disk;
-            }
-
-            if (Schema::hasColumn($table, 'original_name')) {
-                $values['original_name'] =
-                    $file->getClientOriginalName();
-            } elseif (Schema::hasColumn($table, 'file_name')) {
-                $values['file_name'] =
-                    $file->getClientOriginalName();
-            }
-
-            if (Schema::hasColumn($table, 'mime_type')) {
-                $values['mime_type'] =
-                    $file->getClientMimeType();
-            }
-
-            if (Schema::hasColumn($table, 'size_bytes')) {
-                $values['size_bytes'] = $file->getSize();
-            } elseif (Schema::hasColumn($table, 'size')) {
-                $values['size'] = $file->getSize();
-            }
-
-            if (Schema::hasColumn($table, 'status')) {
-                $values['status'] = 'pending';
-            }
-
-            if (Schema::hasColumn($table, 'uploaded_by')) {
-                $values['uploaded_by'] = auth()->id();
-            }
-
-            $documentModel->forceFill($values);
-            $relation->save($documentModel);
-
-            $createdDocuments[] = $documentModel;
-        }
-
-        return $createdDocuments;
     }
 
     private function generateBranchCode(
@@ -799,21 +694,44 @@ class BranchController extends Controller
             }
         }, 3);
 
+        $updatedBranch = $branch
+            ->fresh()
+            ->load([
+                'parent',
+                'children',
+                'coverageLocation',
+                'manager:id,name,email,phone',
+                'documents',
+                'agreements',
+                'approver:id,name,email',
+                'rejecter:id,name,email',
+            ]);
+
+        $updatedFields = array_values(array_keys($data));
+
+        $action = collect($updatedFields)->intersect([
+            'parent_id',
+            'coverage_location_id',
+            'latitude',
+            'longitude',
+            'coverage_radius_km',
+            'office_address',
+            'office_latitude',
+            'office_longitude',
+        ])->isNotEmpty()
+            ? 'allocation_updated'
+            : 'updated';
+
+        BranchChanged::dispatch(
+            branch: $this->branchBroadcastPayload($updatedBranch),
+            action: $action,
+            performedBy: $request->user()?->id,
+        );
+
         return response()->json([
             'message' => 'Branch updated successfully.',
-            'data' => $branch
-                ->fresh()
-                ->load([
-                    'parent',
-                    'children',
-                    'coverageLocation',
-                    'manager:id,name,email,phone',
-                    'documents',
-                    'agreements',
-                    'approver:id,name,email',
-                    'rejecter:id,name,email',
-                ]),
-            'updated_fields' => array_values(array_keys($data)),
+            'data' => $updatedBranch,
+            'updated_fields' => $updatedFields,
         ]);
     }
 
@@ -827,11 +745,27 @@ class BranchController extends Controller
             ], 422);
         }
 
-        CoverageLocation::where('branch_id', $branch->id)->update([
-            'branch_id' => null,
-        ]);
+        $deletedBranchPayload = $this->branchBroadcastPayload(
+            $branch->loadMissing([
+                'parent',
+                'coverageLocation',
+                'manager',
+            ])
+        );
 
-        $branch->delete();
+        DB::transaction(function () use ($branch): void {
+            CoverageLocation::where('branch_id', $branch->id)->update([
+                'branch_id' => null,
+            ]);
+
+            $branch->delete();
+        }, 3);
+
+        BranchChanged::dispatch(
+            branch: $deletedBranchPayload,
+            action: 'deleted',
+            performedBy: $request->user()?->id,
+        );
 
         return response()->json([
             'message' => 'Branch deleted successfully.',
@@ -1097,9 +1031,9 @@ class BranchController extends Controller
         }
 
         BranchChanged::dispatch(
-            branch: $branch->toArray(),
+            branch: $this->branchBroadcastPayload($freshBranch),
             action: 'approved',
-            performedBy: auth()->id(),
+            performedBy: $request->user()?->id,
         );
         return response()->json([
             'message' => match ($invitation['status']) {
@@ -1197,6 +1131,20 @@ class BranchController extends Controller
                 force: true
             );
 
+        $freshBranch = $branch
+            ->fresh()
+            ->load([
+                'parent',
+                'coverageLocation',
+                'manager',
+            ]);
+
+        BranchChanged::dispatch(
+            branch: $this->branchBroadcastPayload($freshBranch),
+            action: 'account_invitation_queued',
+            performedBy: $request->user()?->id,
+        );
+
         return response()->json([
             'message' => match ($invitation['status']) {
                 BranchAccountInvitationService::STATUS_ACCOUNT_CONFIGURED =>
@@ -1274,9 +1222,19 @@ class BranchController extends Controller
             'approved_at' => $branch->approved_at ?: now(),
         ]);
 
+        $freshBranch = $branch
+            ->fresh()
+            ->load(['parent', 'coverageLocation', 'manager']);
+
+        BranchChanged::dispatch(
+            branch: $this->branchBroadcastPayload($freshBranch),
+            action: 'activated',
+            performedBy: $request->user()?->id,
+        );
+
         return response()->json([
             'message' => 'Branch activated successfully.',
-            'data' => $branch->fresh()->load(['parent', 'coverageLocation', 'manager']),
+            'data' => $freshBranch,
         ]);
     }
 
@@ -1284,14 +1242,28 @@ class BranchController extends Controller
     {
         $this->abortIfBranchNotVisible($request, $branch, $visibility);
 
+        $request->validate([
+            'reason' => ['required', 'string', 'max:2000'],
+        ]);
+
         $branch->update([
             'status' => Branch::STATUS_SUSPENDED,
             'rejection_reason' => $request->input('reason'),
         ]);
 
+        $freshBranch = $branch
+            ->fresh()
+            ->load(['parent', 'coverageLocation', 'manager']);
+
+        BranchChanged::dispatch(
+            branch: $this->branchBroadcastPayload($freshBranch),
+            action: 'suspended',
+            performedBy: $request->user()?->id,
+        );
+
         return response()->json([
             'message' => 'Branch suspended successfully.',
-            'data' => $branch->fresh()->load(['parent', 'coverageLocation', 'manager']),
+            'data' => $freshBranch,
         ]);
     }
 
@@ -1310,10 +1282,101 @@ class BranchController extends Controller
             'rejection_reason' => $request->input('reason'),
         ]);
 
+        $freshBranch = $branch
+            ->fresh()
+            ->load(['parent', 'coverageLocation', 'manager']);
+
+        BranchChanged::dispatch(
+            branch: $this->branchBroadcastPayload($freshBranch),
+            action: 'rejected',
+            performedBy: $request->user()?->id,
+        );
+
         return response()->json([
             'message' => 'Branch rejected successfully.',
-            'data' => $branch->fresh()->load(['parent', 'coverageLocation', 'manager']),
+            'data' => $freshBranch,
         ]);
+    }
+
+    /**
+     * Keep every real-time branch event payload consistent so the
+     * frontend can update table, counters and map without reloading.
+     */
+    private function branchBroadcastPayload(Branch $branch): array
+    {
+        $branch->loadMissing([
+            'parent:id,name,code,type,city,area',
+            'manager:id,name,email,phone',
+            'coverageLocation:id,name,code,type,latitude,longitude,coverage_radius_km,status',
+        ]);
+
+        return [
+            'id' => $branch->id,
+            'parent_id' => $branch->parent_id,
+            'coverage_location_id' => $branch->coverage_location_id,
+            'manager_user_id' => $branch->manager_user_id,
+            'type' => $branch->type,
+            'name' => $branch->name,
+            'code' => $branch->code,
+            'legal_name' => $branch->legal_name,
+            'owner_name' => $branch->owner_name,
+            'contact_person' => $branch->contact_person,
+            'email' => $branch->email,
+            'phone' => $branch->phone,
+            'alternative_phone' => $branch->alternative_phone,
+            'country' => $branch->country,
+            'province' => $branch->province,
+            'district' => $branch->district,
+            'city' => $branch->city,
+            'area' => $branch->area,
+            'address' => $branch->address,
+            'latitude' => $branch->latitude,
+            'longitude' => $branch->longitude,
+            'coverage_radius_km' => $branch->coverage_radius_km,
+            'office_address' => $branch->office_address,
+            'office_city' => $branch->office_city,
+            'office_area' => $branch->office_area,
+            'office_latitude' => $branch->office_latitude,
+            'office_longitude' => $branch->office_longitude,
+            'pickup_enabled' => (bool) $branch->pickup_enabled,
+            'delivery_enabled' => (bool) $branch->delivery_enabled,
+            'pod_enabled' => (bool) $branch->pod_enabled,
+            'return_enabled' => (bool) $branch->return_enabled,
+            'status' => $branch->status,
+            'account_invitation_status' => $branch->account_invitation_status,
+            'account_invitation_email' => $branch->account_invitation_email,
+            'approved_by' => $branch->approved_by,
+            'approved_at' => optional($branch->approved_at)?->toIso8601String(),
+            'rejected_by' => $branch->rejected_by,
+            'rejected_at' => optional($branch->rejected_at)?->toIso8601String(),
+            'rejection_reason' => $branch->rejection_reason,
+            'created_at' => optional($branch->created_at)?->toIso8601String(),
+            'updated_at' => optional($branch->updated_at)?->toIso8601String(),
+            'parent' => $branch->parent?->only([
+                'id',
+                'name',
+                'code',
+                'type',
+                'city',
+                'area',
+            ]),
+            'manager' => $branch->manager?->only([
+                'id',
+                'name',
+                'email',
+                'phone',
+            ]),
+            'coverage_location' => $branch->coverageLocation?->only([
+                'id',
+                'name',
+                'code',
+                'type',
+                'latitude',
+                'longitude',
+                'coverage_radius_km',
+                'status',
+            ]),
+        ];
     }
 
     private function validatedData(

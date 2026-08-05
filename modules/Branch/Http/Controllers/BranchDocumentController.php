@@ -6,52 +6,41 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use Modules\Branch\Models\Branch;
 use Modules\Branch\Models\BranchDocument;
+use Modules\Branch\Services\BranchDocumentService;
 
 class BranchDocumentController extends Controller
 {
-    public function store(Request $request, Branch $branch): JsonResponse
-    {
+    public function store(
+        Request $request,
+        Branch $branch,
+        BranchDocumentService $documentService
+    ): JsonResponse {
         $data = $request->validate([
-            'document_type' => ['required', 'string', 'max:80'],
-            'file' => ['required', 'file', 'mimes:jpg,jpeg,png,webp,pdf,doc,docx', 'max:10240'],
-            'remarks' => ['nullable', 'string', 'max:2000'],
+            'document_type' => [
+                'required',
+                'string',
+                'max:80',
+            ],
+            'file' => [
+                'required',
+                'file',
+                'mimes:jpg,jpeg,png,webp,pdf,doc,docx',
+                'max:10240',
+            ],
+            'remarks' => [
+                'nullable',
+                'string',
+                'max:2000',
+            ],
         ]);
 
-        $file = $request->file('file');
-        $disk = 'local';
-        $safeType = Str::slug($data['document_type'], '_');
-        $extension = strtolower($file->getClientOriginalExtension());
-        $filename = $safeType . '_' . now()->format('YmdHis') . '_' . Str::random(8) . '.' . $extension;
-        $folder = "branch-documents/{$branch->id}";
-        $path = $file->storeAs($folder, $filename, $disk);
-
-        $existing = BranchDocument::where('branch_id', $branch->id)
-            ->where('document_type', $data['document_type'])
-            ->first();
-
-        if ($existing && $existing->file_path) {
-            Storage::disk($existing->disk ?: 'local')->delete($existing->file_path);
-        }
-
-        $document = BranchDocument::updateOrCreate(
-            [
-                'branch_id' => $branch->id,
-                'document_type' => $data['document_type'],
-            ],
-            [
-                'file_path' => $path,
-                'original_name' => $file->getClientOriginalName(),
-                'mime_type' => $file->getMimeType(),
-                'size_bytes' => $file->getSize(),
-                'disk' => $disk,
-                'status' => 'pending',
-                'remarks' => $data['remarks'] ?? null,
-                'verified_by' => null,
-                'verified_at' => null,
-            ]
+        $document = $documentService->storeOrReplace(
+            branch: $branch,
+            file: $request->file('file'),
+            documentType: $data['document_type'],
+            remarks: $data['remarks'] ?? null,
         );
 
         return response()->json([
@@ -60,9 +49,47 @@ class BranchDocumentController extends Controller
         ], 201);
     }
 
+    public function update(
+        Request $request,
+        BranchDocument $document,
+        BranchDocumentService $documentService
+    ): JsonResponse {
+        $data = $request->validate([
+            'document_type' => [
+                'required',
+                'string',
+                'max:80',
+            ],
+            'file' => [
+                'nullable',
+                'file',
+                'mimes:jpg,jpeg,png,webp,pdf,doc,docx',
+                'max:10240',
+            ],
+            'remarks' => [
+                'nullable',
+                'string',
+                'max:2000',
+            ],
+        ]);
+
+        $updatedDocument = $documentService->update(
+            document: $document,
+            documentType: $data['document_type'],
+            remarks: $data['remarks'] ?? null,
+            file: $request->file('file'),
+        );
+
+        return response()->json([
+            'message' => 'Branch document updated successfully.',
+            'data' => $updatedDocument,
+        ]);
+    }
+
     public function preview(BranchDocument $document)
     {
         $this->authorizeDocumentAccess();
+
         return $this->inlineFileResponse($document);
     }
 
@@ -72,7 +99,10 @@ class BranchDocumentController extends Controller
 
         $disk = $document->disk ?: 'local';
 
-        if (!$document->file_path || !Storage::disk($disk)->exists($document->file_path)) {
+        if (
+            !$document->file_path ||
+            !Storage::disk($disk)->exists($document->file_path)
+        ) {
             abort(404, 'File not found.');
         }
 
@@ -82,18 +112,34 @@ class BranchDocumentController extends Controller
         );
     }
 
-    public function verify(Request $request, BranchDocument $document): JsonResponse
-    {
+    public function verify(
+        Request $request,
+        BranchDocument $document
+    ): JsonResponse {
         $data = $request->validate([
-            'status' => ['required', 'string', 'in:pending,verified,rejected'],
-            'remarks' => ['nullable', 'string', 'max:2000'],
+            'status' => [
+                'required',
+                'string',
+                'in:pending,verified,rejected',
+            ],
+            'remarks' => [
+                'nullable',
+                'string',
+                'max:2000',
+            ],
         ]);
 
         $document->update([
             'status' => $data['status'],
-            'remarks' => $data['remarks'] ?? $document->remarks,
-            'verified_by' => $data['status'] === 'verified' ? request()->user()?->id : null,
-            'verified_at' => $data['status'] === 'verified' ? now() : null,
+            'remarks' => array_key_exists('remarks', $data)
+                ? $data['remarks']
+                : $document->remarks,
+            'verified_by' => $data['status'] === 'verified'
+                ? $request->user()?->id
+                : null,
+            'verified_at' => $data['status'] === 'verified'
+                ? now()
+                : null,
         ]);
 
         return response()->json([
@@ -102,22 +148,25 @@ class BranchDocumentController extends Controller
         ]);
     }
 
-    public function destroy(BranchDocument $document): JsonResponse
-    {
-        if ($document->file_path) {
-            Storage::disk($document->disk ?: 'local')->delete($document->file_path);
-        }
+    public function destroy(
+        BranchDocument $document,
+        BranchDocumentService $documentService
+    ): JsonResponse {
+        $documentService->delete($document);
 
-        $document->delete();
-
-        return response()->json(['message' => 'Branch document deleted successfully.']);
+        return response()->json([
+            'message' => 'Branch document deleted successfully.',
+        ]);
     }
 
     private function inlineFileResponse(BranchDocument $document)
     {
         $disk = $document->disk ?: 'local';
 
-        if (!$document->file_path || !Storage::disk($disk)->exists($document->file_path)) {
+        if (
+            !$document->file_path ||
+            !Storage::disk($disk)->exists($document->file_path)
+        ) {
             abort(404, 'File not found.');
         }
 
@@ -125,11 +174,18 @@ class BranchDocumentController extends Controller
             ?: Storage::disk($disk)->mimeType($document->file_path)
             ?: 'application/octet-stream';
 
-        $fileName = $document->original_name ?: basename($document->file_path);
+        $fileName = $document->original_name
+            ?: basename($document->file_path);
 
-        return response(Storage::disk($disk)->get($document->file_path), 200)
+        return response(
+            Storage::disk($disk)->get($document->file_path),
+            200
+        )
             ->header('Content-Type', $mimeType)
-            ->header('Content-Disposition', 'inline; filename="' . addslashes($fileName) . '"')
+            ->header(
+                'Content-Disposition',
+                'inline; filename="' . addslashes($fileName) . '"'
+            )
             ->header('Cache-Control', 'private, max-age=300');
     }
 

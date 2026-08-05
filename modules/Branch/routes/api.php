@@ -11,10 +11,21 @@ Route::prefix('v1/admin')
     ->name('admin.')
     ->middleware(['auth:sanctum'])
     ->group(function () {
-        Route::get('branches/parent-options', [BranchController::class, 'parentOptions'])
-            ->name('branches.parent-options');
-        Route::get('coverage-locations/map', [AdminCoverageLocationController::class, 'map']);
-        Route::apiResource('coverage-locations', AdminCoverageLocationController::class);
+        Route::get(
+            'branches/parent-options',
+            [BranchController::class, 'parentOptions']
+        )->name('branches.parent-options');
+
+        Route::get(
+            'coverage-locations/map',
+            [AdminCoverageLocationController::class, 'map']
+        );
+
+        Route::apiResource(
+            'coverage-locations',
+            AdminCoverageLocationController::class
+        );
+
         Route::middleware(['route.permission'])->group(function () {
             Route::apiResource('branches', BranchController::class)
                 ->names([
@@ -24,44 +35,79 @@ Route::prefix('v1/admin')
                     'update' => 'branches.update',
                     'destroy' => 'branches.destroy',
                 ]);
+
             Route::post(
                 'branches/{branch}/resend-account-invitation',
                 [
                     BranchController::class,
                     'resendAccountInvitation',
                 ]
-            )->name(
-                'branches.resend-account-invitation'
-            );
-            Route::post('branches/{branch}/approve', [BranchController::class, 'approve'])
-                ->name('branches.approve');
+            )->name('branches.resend-account-invitation');
 
-            Route::post('branches/{branch}/reject', [BranchController::class, 'reject'])
-                ->name('branches.reject');
+            Route::post(
+                'branches/{branch}/approve',
+                [BranchController::class, 'approve']
+            )->name('branches.approve');
 
-            Route::post('branches/{branch}/suspend', [BranchController::class, 'suspend'])
-                ->name('branches.suspend');
+            Route::post(
+                'branches/{branch}/reject',
+                [BranchController::class, 'reject']
+            )->name('branches.reject');
 
-            Route::post('branches/{branch}/activate', [BranchController::class, 'activate'])
-                ->name('branches.activate');
+            Route::post(
+                'branches/{branch}/suspend',
+                [BranchController::class, 'suspend']
+            )->name('branches.suspend');
 
-            Route::post('branches/{branch}/documents', [BranchDocumentController::class, 'store'])
-                ->name('branch-documents.store');
+            Route::post(
+                'branches/{branch}/activate',
+                [BranchController::class, 'activate']
+            )->name('branches.activate');
 
-            Route::get('branch-documents/{document}/preview', [BranchDocumentController::class, 'preview'])
-                ->name('branch-documents.preview');
+            Route::post(
+                'branches/{branch}/documents',
+                [BranchDocumentController::class, 'store']
+            )->name('branch-documents.store');
 
-            Route::get('branch-documents/{document}/download', [BranchDocumentController::class, 'download'])
-                ->name('branch-documents.download');
+            Route::put(
+                'branch-documents/{document}',
+                [BranchDocumentController::class, 'update']
+            )->name('branch-documents.update');
 
-            Route::post('branches/{branch}/agreements', [BranchAgreementController::class, 'store'])
-                ->name('branch-agreements.store');
+            Route::delete(
+                'branch-documents/{document}',
+                [BranchDocumentController::class, 'destroy']
+            )->name('branch-documents.destroy');
 
-            Route::get('branch-agreements/{agreement}/preview', [BranchAgreementController::class, 'preview'])
-                ->name('branch-agreements.preview');
+            Route::patch(
+                'branch-documents/{document}/verify',
+                [BranchDocumentController::class, 'verify']
+            )->name('branch-documents.verify');
 
-            Route::get('branch-agreements/{agreement}/download', [BranchAgreementController::class, 'download'])
-                ->name('branch-agreements.download');
+            Route::get(
+                'branch-documents/{document}/preview',
+                [BranchDocumentController::class, 'preview']
+            )->name('branch-documents.preview');
+
+            Route::get(
+                'branch-documents/{document}/download',
+                [BranchDocumentController::class, 'download']
+            )->name('branch-documents.download');
+
+            Route::post(
+                'branches/{branch}/agreements',
+                [BranchAgreementController::class, 'store']
+            )->name('branch-agreements.store');
+
+            Route::get(
+                'branch-agreements/{agreement}/preview',
+                [BranchAgreementController::class, 'preview']
+            )->name('branch-agreements.preview');
+
+            Route::get(
+                'branch-agreements/{agreement}/download',
+                [BranchAgreementController::class, 'download']
+            )->name('branch-agreements.download');
         });
     });
 
@@ -75,33 +121,21 @@ Route::middleware('auth:sanctum')
 
         Route::post(
             '/reveal-credentials',
-            [
-                BranchTeamController::class,
-                'revealCredentials',
-            ]
+            [BranchTeamController::class, 'revealCredentials']
         );
 
         Route::put(
             '/positions/{position}/assign',
-            [
-                BranchTeamController::class,
-                'assign',
-            ]
+            [BranchTeamController::class, 'assign']
         );
 
         Route::put(
             '/positions/{position}/unassign',
-            [
-                BranchTeamController::class,
-                'unassign',
-            ]
+            [BranchTeamController::class, 'unassign']
         );
 
         Route::post(
             '/positions/{position}/reset-credentials',
-            [
-                BranchTeamController::class,
-                'resetCredentials',
-            ]
+            [BranchTeamController::class, 'resetCredentials']
         );
     });

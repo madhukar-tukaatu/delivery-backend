@@ -23,65 +23,83 @@ final class PublicPricingEstimateController extends Controller
         $data = $request->validated();
 
         try {
-            $actualWeightKg = round(
-                (float) $data['actual_weight_kg'],
-                3
-            );
+            // ------------------------------------------------------------------
+            // Weight & dimensions – either actual weight OR complete dimensions
+            // (or both; engine takes the higher value)
+            // ------------------------------------------------------------------
+            $actualWeightKg = array_key_exists('actual_weight_kg', $data)
+                ? round((float) $data['actual_weight_kg'], 3)
+                : null;
+
+            $rawLength = data_get($data, 'parcel_dimensions.length_cm');
+            $rawWidth  = data_get($data, 'parcel_dimensions.width_cm');
+            $rawHeight = data_get($data, 'parcel_dimensions.height_cm');
+
+            $lengthCm = ($rawLength !== null && $rawLength !== '')
+                ? round((float) $rawLength, 2)
+                : null;
+
+            $widthCm = ($rawWidth !== null && $rawWidth !== '')
+                ? round((float) $rawWidth, 2)
+                : null;
+
+            $heightCm = ($rawHeight !== null && $rawHeight !== '')
+                ? round((float) $rawHeight, 2)
+                : null;
 
             $dimensions = [
-                'length_cm' => round(
-                    (float) data_get(
-                        $data,
-                        'parcel_dimensions.length_cm'
-                    ),
-                    2
-                ),
-                'width_cm' => round(
-                    (float) data_get(
-                        $data,
-                        'parcel_dimensions.width_cm'
-                    ),
-                    2
-                ),
-                'height_cm' => round(
-                    (float) data_get(
-                        $data,
-                        'parcel_dimensions.height_cm'
-                    ),
-                    2
-                ),
+                'length_cm' => $lengthCm,
+                'width_cm'  => $widthCm,
+                'height_cm' => $heightCm,
             ];
+
+            $hasAnyDimension       = $lengthCm !== null || $widthCm !== null || $heightCm !== null;
+            $hasCompleteDimensions = $lengthCm !== null && $widthCm !== null && $heightCm !== null;
+
+            // Reject partial dimensions
+            if ($hasAnyDimension && ! $hasCompleteDimensions) {
+                throw ValidationException::withMessages([
+                    'parcel_dimensions' => [
+                        'All three dimensions (length, width, height) are required when any dimension is supplied.',
+                    ],
+                ]);
+            }
+
+            // At least one of weight or complete dimensions must be present
+            if (($actualWeightKg === null || $actualWeightKg <= 0) && ! $hasCompleteDimensions) {
+                throw ValidationException::withMessages([
+                    'actual_weight_kg' => [
+                        'Provide either a positive actual weight or complete parcel dimensions.',
+                    ],
+                ]);
+            }
+
+            // Engine requires actual_weight_kg > 0.
+            // When only dimensions are supplied we pass a tiny placeholder;
+            // the engine will override with volumetric weight.
+            $engineActualWeight = ($actualWeightKg !== null && $actualWeightKg > 0)
+                ? $actualWeightKg
+                : 0.001;
 
             $pricingPayload = [
                 'store_id' => null,
 
-                'pickup_address' =>
-                    (string) $data['pickup_address'],
+                'pickup_address'    => (string) $data['pickup_address'],
+                'pickup_latitude'   => (float) $data['pickup_latitude'],
+                'pickup_longitude'  => (float) $data['pickup_longitude'],
 
-                'pickup_latitude' =>
-                    (float) $data['pickup_latitude'],
+                'delivery_address'  => (string) $data['delivery_address'],
+                'delivery_latitude' => (float) $data['delivery_latitude'],
+                'delivery_longitude'=> (float) $data['delivery_longitude'],
 
-                'pickup_longitude' =>
-                    (float) $data['pickup_longitude'],
-
-                'delivery_address' =>
-                    (string) $data['delivery_address'],
-
-                'delivery_latitude' =>
-                    (float) $data['delivery_latitude'],
-
-                'delivery_longitude' =>
-                    (float) $data['delivery_longitude'],
-
-                'service_type' =>
-                    (string) $data['service_type'],
+                'service_type' => (string) $data['service_type'],
 
                 /*
                  * Payment fields are internal compatibility values only.
                  * They are not exposed on the public estimator form.
                  */
                 'payment_type' => 'prepaid',
-                'pod_amount' => 0.0,
+                'pod_amount'   => 0.0,
 
                 /*
                  * One public calculator request represents one physical
@@ -89,38 +107,28 @@ final class PublicPricingEstimateController extends Controller
                  */
                 'packets' => [
                     [
-                        'packet_reference' =>
-                            'PUBLIC-PKT-001',
+                        'packet_reference' => 'PUBLIC-PKT-001',
+                        'product_id'       => null,
+                        'name'             => 'Public website parcel',
+                        'quantity'         => 1,
 
-                        'product_id' => null,
-                        'name' => 'Public website parcel',
-                        'quantity' => 1,
+                        'actual_weight_kg' => $engineActualWeight,
 
-                        'actual_weight_kg' =>
-                            $actualWeightKg,
-
-                        'unit_price' => 0.0,
+                        'unit_price'     => 0.0,
                         'declared_value' => 0.0,
 
-                        'parcel_type' =>
-                            (string) $data['parcel_type'],
+                        'parcel_type' => (string) $data['parcel_type'],
 
-                        'length_cm' =>
-                            $dimensions['length_cm'],
-
-                        'width_cm' =>
-                            $dimensions['width_cm'],
-
-                        'height_cm' =>
-                            $dimensions['height_cm'],
+                        'length_cm' => $lengthCm,
+                        'width_cm'  => $widthCm,
+                        'height_cm' => $heightCm,
                     ],
                 ],
 
-                'packet_count' => 1,
-                'parcel_weight' => $actualWeightKg,
-                'parcel_value' => 0.0,
-                'parcel_type' =>
-                    (string) $data['parcel_type'],
+                'packet_count'  => 1,
+                'parcel_weight' => $engineActualWeight,
+                'parcel_value'  => 0.0,
+                'parcel_type'   => (string) $data['parcel_type'],
             ];
 
             $result = $pricingEngine->calculate(
@@ -128,23 +136,15 @@ final class PublicPricingEstimateController extends Controller
                 null
             );
 
-            $finalPrice = data_get(
-                $result,
-                'final_price'
-            ) ?? data_get(
-                $result,
-                'breakdown.final_price'
-            );
+            $finalPrice = data_get($result, 'final_price')
+                ?? data_get($result, 'breakdown.final_price');
 
-            if (
-                $finalPrice === null ||
-                (float) $finalPrice < 0
-            ) {
+            if ($finalPrice === null || (float) $finalPrice < 0) {
                 Log::warning(
                     'Public pricing returned no valid final price.',
                     [
                         'pricing_payload' => $pricingPayload,
-                        'pricing_result' => $result,
+                        'pricing_result'  => $result,
                     ]
                 );
 
@@ -159,36 +159,28 @@ final class PublicPricingEstimateController extends Controller
                 (float) data_get(
                     $result,
                     'weight_summary.total_actual_weight_kg',
-                    $actualWeightKg
+                    $actualWeightKg ?? 0
                 ),
                 3
             );
 
-            $volumetricWeightKg = round(
-                (float) data_get(
-                    $result,
-                    'weight_summary.total_volumetric_weight_kg',
-                    0
-                ),
-                3
+            $volumetricWeightKg = data_get(
+                $result,
+                'weight_summary.total_volumetric_weight_kg'
             );
 
-            if ($volumetricWeightKg <= 0) {
-                throw ValidationException::withMessages([
-                    'parcel_dimensions' => [
-                        'The volumetric weight could not be calculated from the supplied dimensions.',
-                    ],
-                ]);
-            }
+            $volumetricWeightKg = $volumetricWeightKg !== null
+                ? round((float) $volumetricWeightKg, 3)
+                : 0.0;
+
+            // NOTE: We no longer throw when volumetric weight is 0.
+            // That is a valid outcome when only actual weight is supplied.
 
             $chargeableWeightKg = round(
                 (float) data_get(
                     $result,
                     'weight_summary.total_chargeable_weight_kg',
-                    max(
-                        $calculatedActualWeightKg,
-                        $volumetricWeightKg
-                    )
+                    max($calculatedActualWeightKg, $volumetricWeightKg)
                 ),
                 3
             );
@@ -207,79 +199,49 @@ final class PublicPricingEstimateController extends Controller
                 $volumetricWeightKg > $calculatedActualWeightKg
             );
 
-            $estimatedHours = data_get(
-                $result,
-                'estimated_hours'
-            );
-
+            $estimatedHours = data_get($result, 'estimated_hours');
             $estimatedHours = $estimatedHours !== null
                 ? (int) $estimatedHours
                 : null;
 
             return response()->json([
                 'success' => true,
-                'message' =>
-                    'Delivery price estimated successfully.',
-                'data' => [
-                    'currency' =>
-                        (string) data_get(
-                            $result,
-                            'currency',
-                            'NPR'
-                        ),
+                'message' => 'Delivery price estimated successfully.',
+                'data'    => [
+                    'currency' => (string) data_get($result, 'currency', 'NPR'),
 
-                    'price' =>
-                        round((float) $finalPrice, 2),
-
-                    'delivery_charge' =>
-                        round((float) $finalPrice, 2),
+                    'price'           => round((float) $finalPrice, 2),
+                    'delivery_charge' => round((float) $finalPrice, 2),
 
                     'packet_count' => 1,
-                    'parcel_type' =>
-                        (string) $data['parcel_type'],
+                    'parcel_type'  => (string) $data['parcel_type'],
 
-                    'weight_calculation_rule' =>
-                        'higher_of_actual_or_volumetric',
+                    'weight_calculation_rule' => 'higher_of_actual_or_volumetric',
 
-                    'actual_weight_kg' =>
-                        $calculatedActualWeightKg,
+                    'actual_weight_kg'     => $calculatedActualWeightKg,
+                    'volumetric_weight_kg' => $volumetricWeightKg,
+                    'chargeable_weight_kg' => $chargeableWeightKg,
+                    'final_weight_kg'      => $chargeableWeightKg,
 
-                    'volumetric_weight_kg' =>
-                        $volumetricWeightKg,
+                    'weight_source'      => $weightSource,
+                    'volumetric_applied' => $volumetricApplied,
 
-                    'chargeable_weight_kg' =>
-                        $chargeableWeightKg,
-
-                    'final_weight_kg' =>
-                        $chargeableWeightKg,
-
-                    'weight_source' =>
-                        $weightSource,
-
-                    'volumetric_applied' =>
-                        $volumetricApplied,
-
-                    'volumetric_divisor' =>
-                        (float) data_get(
-                            $result,
-                            'packets.0.volumetric_divisor',
-                            5000
-                        ),
+                    'volumetric_divisor' => (float) data_get(
+                        $result,
+                        'packets.0.volumetric_divisor',
+                        5000
+                    ),
 
                     'dimensions' => $dimensions,
 
-                    'estimated_delivery_label' =>
-                        $this->formatEstimatedDeliveryLabel(
-                            $estimatedHours
-                        ),
+                    'estimated_delivery_label' => $this->formatEstimatedDeliveryLabel(
+                        $estimatedHours
+                    ),
+                    'estimated_delivery_hours' => $estimatedHours,
 
-                    'estimated_delivery_hours' =>
-                        $estimatedHours,
-
-                    'valid_until' =>
-                        $this->serializeDate(
-                            data_get($result, 'valid_until')
-                        ),
+                    'valid_until' => $this->serializeDate(
+                        data_get($result, 'valid_until')
+                    ),
                 ],
             ]);
         } catch (ValidationException $exception) {
@@ -290,38 +252,26 @@ final class PublicPricingEstimateController extends Controller
             Log::error(
                 'Public website pricing estimate failed.',
                 [
-                    'pickup_latitude' =>
-                        $data['pickup_latitude'] ?? null,
-                    'pickup_longitude' =>
-                        $data['pickup_longitude'] ?? null,
-                    'delivery_latitude' =>
-                        $data['delivery_latitude'] ?? null,
-                    'delivery_longitude' =>
-                        $data['delivery_longitude'] ?? null,
-                    'service_type' =>
-                        $data['service_type'] ?? null,
-                    'actual_weight_kg' =>
-                        $data['actual_weight_kg'] ?? null,
-                    'exception' =>
-                        $exception->getMessage(),
+                    'pickup_latitude'   => $data['pickup_latitude'] ?? null,
+                    'pickup_longitude'  => $data['pickup_longitude'] ?? null,
+                    'delivery_latitude' => $data['delivery_latitude'] ?? null,
+                    'delivery_longitude'=> $data['delivery_longitude'] ?? null,
+                    'service_type'      => $data['service_type'] ?? null,
+                    'actual_weight_kg'  => $data['actual_weight_kg'] ?? null,
+                    'exception'         => $exception->getMessage(),
                 ]
             );
 
             return response()->json([
                 'success' => false,
-                'message' =>
-                    'The delivery price could not be calculated.',
+                'message' => 'The delivery price could not be calculated.',
             ], 500);
         }
     }
 
-    private function formatEstimatedDeliveryLabel(
-        ?int $estimatedHours
-    ): ?string {
-        if (
-            $estimatedHours === null ||
-            $estimatedHours <= 0
-        ) {
+    private function formatEstimatedDeliveryLabel(?int $estimatedHours): ?string
+    {
+        if ($estimatedHours === null || $estimatedHours <= 0) {
             return null;
         }
 
@@ -339,10 +289,7 @@ final class PublicPricingEstimateController extends Controller
                 : "{$days} days";
         }
 
-        return sprintf(
-            '%.1f days',
-            $estimatedHours / 24
-        );
+        return sprintf('%.1f days', $estimatedHours / 24);
     }
 
     private function serializeDate(mixed $value): ?string
@@ -359,7 +306,6 @@ final class PublicPricingEstimateController extends Controller
             return Carbon::instance($value)->toIso8601String();
         }
 
-        return Carbon::parse((string) $value)
-            ->toIso8601String();
+        return Carbon::parse((string) $value)->toIso8601String();
     }
 }

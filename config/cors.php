@@ -9,6 +9,13 @@ return [
         'https://tukaatuexpress.com',
         'https://www.tukaatuexpress.com',
         'http://localhost:3000',
+        'http://localhost:3001',
+        'http://localhost:3002',
+        'http://localhost:3003',
+        'https://tukaatu.com',
+        'https://fca.com.np',
+        'https://api.tukaatu.com',
+        'https://api.fca.com.np'
     ],
 
     'allowed_origins_patterns' => [],

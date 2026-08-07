@@ -105,33 +105,33 @@ final class PublicWebsitePricingEstimateRequest extends FormRequest
             ],
 
             'actual_weight_kg' => [
-                'required',
+                'nullable',
                 'numeric',
                 'gt:0',
                 'max:5000',
             ],
 
             'parcel_dimensions' => [
-                'required',
+                'nullable',
                 'array',
             ],
 
             'parcel_dimensions.length_cm' => [
-                'required',
+                'nullable',
                 'numeric',
                 'gt:0',
                 'max:1000',
             ],
 
             'parcel_dimensions.width_cm' => [
-                'required',
+                'nullable',
                 'numeric',
                 'gt:0',
                 'max:1000',
             ],
 
             'parcel_dimensions.height_cm' => [
-                'required',
+                'nullable',
                 'numeric',
                 'gt:0',
                 'max:1000',
@@ -147,24 +147,6 @@ final class PublicWebsitePricingEstimateRequest extends FormRequest
 
             'delivery_address.required' =>
                 'Select the delivery location.',
-
-            'actual_weight_kg.required' =>
-                'Enter the actual parcel weight.',
-
-            'actual_weight_kg.gt' =>
-                'The actual parcel weight must be greater than zero.',
-
-            'parcel_dimensions.required' =>
-                'Enter the packed parcel dimensions.',
-
-            'parcel_dimensions.length_cm.required' =>
-                'Enter the packed parcel length.',
-
-            'parcel_dimensions.width_cm.required' =>
-                'Enter the packed parcel width.',
-
-            'parcel_dimensions.height_cm.required' =>
-                'Enter the packed parcel height.',
         ];
     }
 }

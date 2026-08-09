@@ -50,6 +50,8 @@ class BranchController extends Controller
         ]);
     }
 
+    // comm
+
     public function index(Request $request, BranchVisibilityService $visibility): JsonResponse
     {
         $visibleIds = $visibility->visibleBranchIds($request->user());

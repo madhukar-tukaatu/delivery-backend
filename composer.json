@@ -1,11 +1,11 @@
 {
-    "name": "hotstone/courier-delivery-gateway",
+    "name": "tukaatu/courier-delivery-gateway",
     "type": "project",
     "description": "Laravel 12 API backend for a courier delivery gateway platform.",
     "keywords": ["laravel", "courier", "delivery", "gateway", "merchant", "nwidart"],
     "license": "MIT",
     "require": {
-        "php": "^8.2",
+        "php": "^8.3",
         "darkaonline/l5-swagger": "^11.1",
         "dedoc/scramble": "^0.13.37",
         "knuckleswtf/scribe": "^5.11",

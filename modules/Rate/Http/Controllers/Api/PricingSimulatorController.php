@@ -14,7 +14,7 @@ use Modules\Rate\Http\Requests\PublicWebsitePricingEstimateRequest;
 use Modules\Rate\Services\PricingEngineService;
 use Throwable;
 
-final class PublicPricingEstimateController extends Controller
+final class PublicPricingSimulateController extends Controller
 {
     public function __invoke(
         PublicWebsitePricingEstimateRequest $request,

@@ -162,6 +162,21 @@ Route::middleware('auth:sanctum')
                 'admin.pricing.transfer-routes.store'
             );
 
+        Route::get(
+            '/branch-transfer-routes/{transferRoute}',
+            [
+                AdminBranchTransferRouteController::class,
+                'show',
+            ]
+        )
+            ->whereNumber('transferRoute')
+            ->middleware(
+                'permission:pricing.transfer_routes.view'
+            )
+            ->name(
+                'admin.pricing.transfer-routes.show'
+            );
+
         Route::put(
             '/branch-transfer-routes/{transferRoute}',
             [
@@ -277,7 +292,7 @@ Route::prefix('v1/admin')
             [RateCardController::class, 'index']
         )->name('admin.rate-cards.index');
 
-        Route::get('pricing-settings/defaults', [AdminPricingSettingsController::class, 'defaults',]);
+        Route::get('pricing-settings/defaults', [AdminPricingSettingsController::class, 'defaults']);
         Route::get('pricing-settings', [AdminPricingSettingsController::class, 'index'])->name('pricing-settings.index');
         Route::post('pricing-settings', [AdminPricingSettingsController::class, 'store'])->name('pricing-settings.store');
         Route::get('pricing-settings/{pricingSetting}', [AdminPricingSettingsController::class, 'show'])->name('pricing-settings.show');
@@ -307,7 +322,6 @@ Route::prefix('v1/admin')
         Route::get('pricing-quotes', [AdminPricingQuoteController::class, 'index'])->name('pricing-quotes.index');
         Route::get('pricing-quotes/{pricingQuote}', [AdminPricingQuoteController::class, 'show'])->name('pricing-quotes.show');
         Route::delete('pricing-quotes/{pricingQuote}', [AdminPricingQuoteController::class, 'destroy'])->name('pricing-quotes.destroy');
-
 
         Route::get(
             'pricing-defaults/preview',
@@ -404,7 +418,6 @@ Route::prefix('v1/marketplace/pricing')
         Route::post('checkout-quotes', [MarketplacePricingQuoteController::class, 'store'])->name('checkout-quotes.store');
         Route::get('checkout-quotes/{quoteNumber}', [MarketplacePricingQuoteController::class, 'show'])->name('checkout-quotes.show');
     });
-
 
 Route::prefix('v1/public/pricing')
     ->name('public.pricing.')

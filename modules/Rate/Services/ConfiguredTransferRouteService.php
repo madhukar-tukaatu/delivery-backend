@@ -4,17 +4,23 @@ declare(strict_types=1);
 
 namespace Modules\Rate\Services;
 
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
+use Modules\Rate\Models\BranchTransferLane;
 use Modules\Rate\Models\BranchTransferRoute;
 
 final class ConfiguredTransferRouteService
 {
+    /**
+     * Resolve an already configured complete transfer route.
+     */
     public function resolve(
         int $originBranchId,
         int $destinationBranchId,
         string $serviceType = 'standard'
     ): array {
-        $serviceType = strtolower(trim($serviceType));
+        $serviceType = $this->normalizeServiceType($serviceType);
 
         $route = BranchTransferRoute::query()
             ->with([
@@ -49,7 +55,18 @@ final class ConfiguredTransferRouteService
             ->sortBy('sequence_number')
             ->values();
 
-        if ($routeLanes->count() !== (int) $route->transfer_count) {
+        if ($routeLanes->isEmpty()) {
+            throw ValidationException::withMessages([
+                'transfer_route' => [
+                    'The configured transfer route has no lane mappings.',
+                ],
+            ]);
+        }
+
+        if (
+            $routeLanes->count() !==
+            (int) $route->transfer_count
+        ) {
             throw ValidationException::withMessages([
                 'transfer_route' => [
                     'The configured transfer route contains missing lane mappings.',
@@ -57,37 +74,139 @@ final class ConfiguredTransferRouteService
             ]);
         }
 
+        $laneMappings = $routeLanes
+            ->map(
+                static fn ($routeLane) => $routeLane->lane
+            )
+            ->filter()
+            ->values();
+
+        return $this->validateAndCalculateLanes(
+            $laneMappings,
+            $originBranchId,
+            $destinationBranchId,
+            $serviceType
+        ) + [
+            'route_id' => (int) $route->id,
+            'route_code' => (string) $route->route_code,
+            'route_name' => (string) $route->name,
+        ];
+    }
+
+    /**
+     * Validate direct transfer lanes and calculate:
+     *
+     * - route path
+     * - distance
+     * - ETA
+     * - branch pricing
+     * - total base rate
+     */
+    public function validateAndCalculateLanes(
+        Collection|array $laneMappings,
+        int $originBranchId,
+        int $destinationBranchId,
+        string $serviceType = 'standard'
+    ): array {
+        $serviceType = $this->normalizeServiceType($serviceType);
+
+        $lanes = $laneMappings instanceof Collection
+            ? $laneMappings->values()
+            : collect($laneMappings)->values();
+
+        if ($lanes->isEmpty()) {
+            throw ValidationException::withMessages([
+                'transfer_route' => [
+                    'At least one active transfer lane is required.',
+                ],
+            ]);
+        }
+
         $path = [];
-        $lanes = [];
+        $pricing = [];
+        $laneResponse = [];
+
+        $totalDistance = 0.0;
+        $totalEstimatedHours = 0;
+        $calculatedBaseRate = 0.0;
+
         $expectedFromBranchId = $originBranchId;
 
-        foreach ($routeLanes as $index => $routeLane) {
-            $lane = $routeLane->lane;
-
-            if (!$lane || !$lane->is_active) {
+        foreach ($lanes as $index => $lane) {
+            if (!$lane instanceof BranchTransferLane) {
                 throw ValidationException::withMessages([
                     'transfer_route' => [
-                        'The configured transfer route contains an inactive or deleted direct lane.',
+                        'Invalid transfer lane supplied.',
                     ],
                 ]);
             }
 
-            if ((string) $lane->service_type !== $serviceType) {
+            /*
+             * ----------------------------------------------------------
+             * Active lane check
+             * ----------------------------------------------------------
+             */
+            if (!(bool) $lane->is_active) {
                 throw ValidationException::withMessages([
                     'transfer_route' => [
-                        'The configured route contains a lane for a different service type.',
+                        sprintf(
+                            'Transfer lane %d is inactive.',
+                            (int) $lane->id
+                        ),
                     ],
                 ]);
             }
 
-            if ((int) $lane->from_branch_id !== $expectedFromBranchId) {
+            /*
+             * ----------------------------------------------------------
+             * Service type check
+             * ----------------------------------------------------------
+             */
+            if (
+                strtolower(
+                    trim(
+                        (string) $lane->service_type
+                    )
+                ) !== $serviceType
+            ) {
                 throw ValidationException::withMessages([
                     'transfer_route' => [
-                        'The configured transfer-lane sequence is disconnected.',
+                        sprintf(
+                            'Transfer lane %d uses service type %s instead of %s.',
+                            (int) $lane->id,
+                            (string) $lane->service_type,
+                            $serviceType
+                        ),
                     ],
                 ]);
             }
 
+            /*
+             * ----------------------------------------------------------
+             * Connected path check
+             * ----------------------------------------------------------
+             */
+            if (
+                (int) $lane->from_branch_id !==
+                $expectedFromBranchId
+            ) {
+                throw ValidationException::withMessages([
+                    'transfer_route' => [
+                        sprintf(
+                            'Transfer lane sequence is disconnected. Expected branch %d but lane %d starts from branch %d.',
+                            $expectedFromBranchId,
+                            (int) $lane->id,
+                            (int) $lane->from_branch_id
+                        ),
+                    ],
+                ]);
+            }
+
+            /*
+             * ----------------------------------------------------------
+             * Add origin once
+             * ----------------------------------------------------------
+             */
             if ($index === 0) {
                 $path[] = [
                     'id' => (int) $lane->from_branch_id,
@@ -96,75 +215,348 @@ final class ConfiguredTransferRouteService
                 ];
             }
 
+            /*
+             * ----------------------------------------------------------
+             * Add destination of this lane
+             * ----------------------------------------------------------
+             */
             $path[] = [
                 'id' => (int) $lane->to_branch_id,
                 'name' => $lane->toBranch?->name,
                 'code' => $lane->toBranch?->code,
             ];
 
-            $lanes[] = [
-                'sequence' => (int) $routeLane->sequence_number,
+            /*
+             * ----------------------------------------------------------
+             * Distance / ETA
+             * ----------------------------------------------------------
+             */
+            $distanceKm = (float) (
+                $lane->distance_km ?? 0
+            );
+
+            $estimatedHours = (int) (
+                $lane->estimated_hours ?? 0
+            );
+
+            $totalDistance += $distanceKm;
+            $totalEstimatedHours += $estimatedHours;
+
+            /*
+             * ----------------------------------------------------------
+             * REAL BRANCH PRICING LOOKUP
+             * ----------------------------------------------------------
+             *
+             * Actual branch_route_rates schema:
+             *
+             * pickup_branch_id
+             * delivery_branch_id
+             * base_rate
+             * is_active
+             *
+             * DO NOT use:
+             *
+             * origin_branch_id
+             * destination_branch_id
+             * effective_from
+             * effective_to
+             */
+            $lanePricing = $this->resolveLaneBaseRate(
+                (int) $lane->from_branch_id,
+                (int) $lane->to_branch_id
+            );
+
+            $laneRate = (float) $lanePricing['base_rate'];
+
+            $calculatedBaseRate += $laneRate;
+
+            /*
+             * ----------------------------------------------------------
+             * Pricing response
+             * ----------------------------------------------------------
+             */
+            $pricing[] = [
                 'lane_id' => (int) $lane->id,
+
                 'from_branch_id' => (int) $lane->from_branch_id,
+
                 'from_branch_name' => $lane->fromBranch?->name,
+
                 'to_branch_id' => (int) $lane->to_branch_id,
+
                 'to_branch_name' => $lane->toBranch?->name,
-                'service_type' => (string) $lane->service_type,
-                'transport_mode' => $lane->transport_mode,
-                'distance_km' => (float) ($lane->distance_km ?? 0),
-                'estimated_hours' => (int) ($lane->estimated_hours ?? 0),
+
+                'service_type' => $serviceType,
+
+                'base_rate' => $laneRate,
+
+                'currency' => $lanePricing['currency'],
             ];
 
-            $expectedFromBranchId = (int) $lane->to_branch_id;
+            /*
+             * ----------------------------------------------------------
+             * Lane response
+             * ----------------------------------------------------------
+             */
+            $laneResponse[] = [
+                'sequence' => $index + 1,
+
+                'lane_id' => (int) $lane->id,
+
+                'from_branch_id' => (int) $lane->from_branch_id,
+
+                'from_branch_name' => $lane->fromBranch?->name,
+
+                'to_branch_id' => (int) $lane->to_branch_id,
+
+                'to_branch_name' => $lane->toBranch?->name,
+
+                'service_type' => $serviceType,
+
+                'transport_mode' => $lane->transport_mode,
+
+                'distance_km' => $distanceKm,
+
+                'estimated_hours' => $estimatedHours,
+
+                'base_rate' => $laneRate,
+            ];
+
+            /*
+             * Next lane must start where this lane ended.
+             */
+            $expectedFromBranchId =
+                (int) $lane->to_branch_id;
         }
 
-        if ($expectedFromBranchId !== $destinationBranchId) {
+        /*
+         * --------------------------------------------------------------
+         * Final destination check
+         * --------------------------------------------------------------
+         */
+        if (
+            $expectedFromBranchId !==
+            $destinationBranchId
+        ) {
             throw ValidationException::withMessages([
                 'transfer_route' => [
-                    'The configured transfer route does not finish at the selected destination branch.',
+                    sprintf(
+                        'The transfer route ends at branch %d but destination branch %d was requested.',
+                        $expectedFromBranchId,
+                        $destinationBranchId
+                    ),
                 ],
             ]);
         }
 
-        $transitBranches = count($path) > 2
-            ? array_slice($path, 1, count($path) - 2)
-            : [];
+        /*
+         * --------------------------------------------------------------
+         * Transit branches
+         * --------------------------------------------------------------
+         */
+        $transitBranches = [];
 
-        $transitBranches = array_values(array_map(
-            static fn (array $branch, int $index): array => [
-                'sequence' => $index + 1,
-                ...$branch,
-            ],
-            $transitBranches,
-            array_keys($transitBranches)
-        ));
+        if (count($path) > 2) {
+            $transitBranches = array_slice(
+                $path,
+                1,
+                count($path) - 2
+            );
+
+            $transitBranches = array_values(
+                array_map(
+                    static function (
+                        array $branch,
+                        int $index
+                    ): array {
+                        return [
+                            'sequence' => $index + 1,
+                            ...$branch,
+                        ];
+                    },
+                    $transitBranches,
+                    array_keys($transitBranches)
+                )
+            );
+        }
+
+        /*
+         * --------------------------------------------------------------
+         * Path text
+         * --------------------------------------------------------------
+         */
+        $pathText = implode(
+            ' -> ',
+            array_values(
+                array_filter(
+                    array_column(
+                        $path,
+                        'name'
+                    )
+                )
+            )
+        );
+
+        /*
+         * --------------------------------------------------------------
+         * FINAL CALCULATION
+         * --------------------------------------------------------------
+         */
+        $calculatedBaseRate = round(
+            $calculatedBaseRate,
+            2
+        );
 
         return [
-            'route_id' => (int) $route->id,
-            'route_code' => (string) $route->route_code,
-            'route_name' => (string) $route->name,
-            'origin_branch' => [
-                'id' => (int) $route->origin_branch_id,
-                'name' => $route->originBranch?->name,
-                'code' => $route->originBranch?->code,
-            ],
-            'destination_branch' => [
-                'id' => (int) $route->destination_branch_id,
-                'name' => $route->destinationBranch?->name,
-                'code' => $route->destinationBranch?->code,
-            ],
-            'service_type' => (string) $route->service_type,
-            'base_rate' => (float) $route->base_rate,
-            'currency' => (string) $route->currency,
-            'transfer_count' => count($lanes),
-            'lane_count' => count($lanes),
+            'origin_branch_id' => $originBranchId,
+
+            'destination_branch_id' => $destinationBranchId,
+
+            'service_type' => $serviceType,
+
+            'calculated_base_rate' => $calculatedBaseRate,
+
+            'base_rate' => $calculatedBaseRate,
+
+            'currency' => 'NPR',
+
+            'lane_count' => $lanes->count(),
+
+            'transfer_count' => $lanes->count(),
+
             'transit_count' => count($transitBranches),
-            'total_distance_km' => (float) $route->total_distance_km,
-            'total_estimated_hours' => (int) $route->total_estimated_hours,
+
+            'total_distance_km' => round(
+                $totalDistance,
+                2
+            ),
+
+            'total_estimated_hours' =>
+                $totalEstimatedHours,
+
             'path' => $path,
-            'path_text' => implode(' -> ', array_column($path, 'name')),
-            'transit_branches' => $transitBranches,
-            'lanes' => $lanes,
+
+            'path_text' => $pathText,
+
+            'transit_branches' =>
+                $transitBranches,
+
+            'lanes' =>
+                $laneResponse,
+
+            'pricing' =>
+                $pricing,
         ];
+    }
+
+    /**
+     * Resolve Branch Pricing for one direct lane.
+     *
+     * REAL DATABASE SCHEMA:
+     *
+     * branch_route_rates
+     * -------------------
+     * pickup_branch_id
+     * delivery_branch_id
+     * base_rate
+     * is_active
+     *
+     * Example:
+     *
+     * pickup_branch_id  = 185
+     * delivery_branch_id = 190
+     * base_rate = 89
+     * is_active = 1
+     *
+     * Result:
+     *
+     * NPR 89
+     */
+    private function resolveLaneBaseRate(
+        int $pickupBranchId,
+        int $deliveryBranchId
+    ): array {
+        $rate = DB::table('branch_route_rates')
+            ->where(
+                'pickup_branch_id',
+                $pickupBranchId
+            )
+            ->where(
+                'delivery_branch_id',
+                $deliveryBranchId
+            )
+            ->where(
+                'is_active',
+                true
+            )
+            ->orderByDesc('id')
+            ->first();
+
+        if (!$rate) {
+            throw ValidationException::withMessages([
+                'transfer_route' => [
+                    sprintf(
+                        'No active Branch Pricing exists from branch %d to branch %d.',
+                        $pickupBranchId,
+                        $deliveryBranchId
+                    ),
+                ],
+            ]);
+        }
+
+        if (
+            $rate->base_rate === null ||
+            $rate->base_rate === ''
+        ) {
+            throw ValidationException::withMessages([
+                'transfer_route' => [
+                    sprintf(
+                        'Branch Pricing from branch %d to branch %d has no base rate configured.',
+                        $pickupBranchId,
+                        $deliveryBranchId
+                    ),
+                ],
+            ]);
+        }
+
+        return [
+            'base_rate' => round(
+                (float) $rate->base_rate,
+                2
+            ),
+
+            'currency' => 'NPR',
+        ];
+    }
+
+    /**
+     * Normalize service type.
+     */
+    private function normalizeServiceType(
+        string $serviceType
+    ): string {
+        $serviceType = strtolower(
+            trim($serviceType)
+        );
+
+        if (
+            !in_array(
+                $serviceType,
+                [
+                    'standard',
+                    'express',
+                    'same_day',
+                ],
+                true
+            )
+        ) {
+            throw ValidationException::withMessages([
+                'service_type' => [
+                    'Invalid transfer service type.',
+                ],
+            ]);
+        }
+
+        return $serviceType;
     }
 }

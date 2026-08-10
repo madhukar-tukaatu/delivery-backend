@@ -229,31 +229,31 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             'pickup_location.country' => [
-                'required',
+                'nullable',
                 'string',
                 'max:100',
             ],
 
             'pickup_location.province' => [
-                'required',
+                'nullable',
                 'string',
                 'max:100',
             ],
 
             'pickup_location.district' => [
-                'required',
+                'nullable',
                 'string',
                 'max:100',
             ],
 
             'pickup_location.city' => [
-                'required',
+                'nullable',
                 'string',
                 'max:120',
             ],
 
             'pickup_location.area' => [
-                'required',
+                'nulable',
                 'string',
                 'max:120',
             ],
@@ -265,7 +265,7 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             'pickup_location.address' => [
-                'required',
+                'nullable',
                 'string',
                 'max:1000',
             ],
@@ -304,6 +304,7 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             'pickup_location.operating_days.*' => [
+                'nullable',
                 'string',
                 Rule::in([
                     'sunday',
@@ -325,7 +326,7 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             'documents.business_registration' => [
-                'required',
+                'nullable',
                 'array',
             ],
 
@@ -340,7 +341,7 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             'documents.bank_proof' => [
-                'required',
+                'nullable',
                 'array',
             ],
 
@@ -362,7 +363,7 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             'documents.*.original_name' => [
-                'required',
+                'nullable',
                 'string',
                 'max:255',
             ],

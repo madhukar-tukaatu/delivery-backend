@@ -195,7 +195,7 @@ final class StorePublicPricingQuoteRequest extends FormRequest
             ],
 
             'pickup_address' => [
-                'required',
+                'nullable',
                 'string',
                 'max:500',
             ],
@@ -213,7 +213,7 @@ final class StorePublicPricingQuoteRequest extends FormRequest
             ],
 
             'delivery_address' => [
-                'required',
+                'nullable',
                 'string',
                 'max:500',
             ],

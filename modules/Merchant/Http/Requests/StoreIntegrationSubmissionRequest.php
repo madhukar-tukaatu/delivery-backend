@@ -217,7 +217,7 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             'pickup_location.contact_person' => [
-                'required',
+                'nullable',
                 'string',
                 'max:255',
             ],
@@ -253,7 +253,7 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             'pickup_location.area' => [
-                'nulable',
+                'nullable',
                 'string',
                 'max:120',
             ],

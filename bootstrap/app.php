@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\ApiCorsMiddleware;
 use App\Http\Middleware\AuthenticateMarketplaceApiKey;
 use App\Http\Middleware\BranchScopeMiddleware;
 use App\Http\Middleware\CheckRoutePermission;
@@ -32,7 +33,7 @@ return Application::configure(basePath: dirname(__DIR__))
         ]
     )
     ->withMiddleware(function (Middleware $middleware) {
-        $middleware->api(prepend: [HandleCors::class]);
+        $middleware->api(prepend: [ApiCorsMiddleware::class]);
         $middleware->alias([
             'role' => RoleMiddleware::class,
             'gateway.auth' => GatewayAuthMiddleware::class,

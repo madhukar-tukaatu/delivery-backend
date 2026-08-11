@@ -12,16 +12,23 @@ class PublicPricingCors
     {
         $origin = $request->headers->get('Origin');
 
+        /*
+         * Handle browser preflight request.
+         */
         if ($request->isMethod('OPTIONS')) {
             $response = response('', 204);
         } else {
             $response = $next($request);
         }
 
+        /*
+         * This endpoint is intentionally public for browser
+         * clients from any origin.
+         */
         if ($origin) {
             $response->headers->set(
                 'Access-Control-Allow-Origin',
-                $origin
+                '*'
             );
 
             $response->headers->set(
@@ -31,17 +38,12 @@ class PublicPricingCors
 
             $response->headers->set(
                 'Access-Control-Allow-Headers',
-                'Content-Type, X-Requested-With, Accept, Authorization'
+                'Content-Type, Accept, Authorization, X-Requested-With'
             );
 
             $response->headers->set(
                 'Access-Control-Max-Age',
                 '86400'
-            );
-
-            $response->headers->set(
-                'Vary',
-                'Origin'
             );
         }
 

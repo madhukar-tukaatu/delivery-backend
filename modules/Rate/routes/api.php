@@ -421,13 +421,12 @@ Route::prefix('v1/marketplace/pricing')
 
 Route::prefix('v1/public/pricing')
     ->name('public.pricing.')
-    ->middleware([
-        \App\Http\Middleware\PublicPricingCors::class,
-        'throttle:30,1',
-    ])
+    ->middleware('throttle:30,1')
     ->group(function (): void {
+
         Route::post(
             'estimate',
             PublicPricingEstimateController::class
         )->name('estimate');
+
     });

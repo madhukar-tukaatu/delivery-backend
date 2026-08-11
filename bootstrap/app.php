@@ -10,6 +10,7 @@ use App\Http\Middleware\RoleMiddleware;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Middleware\HandleCors;
 use Modules\Merchant\Http\Middleware\AuthenticateMerchantApiKey;
 use Modules\Merchant\Http\Middleware\AuthenticateStoreIntegrationToken;
 
@@ -38,23 +39,23 @@ return Application::configure(
 
         /*
         |--------------------------------------------------------------------------
-        | API middleware
+        | CORS
         |--------------------------------------------------------------------------
         |
-        | ApiCorsMiddleware is registered ONCE for the complete API stack.
+        | ApiCorsMiddleware is the ONLY CORS middleware we use for the API.
         |
-        | It handles:
-        | - Admin frontend CORS
-        | - External store CORS
-        | - Public pricing CORS
-        | - Normal API CORS
+        | IMPORTANT:
+        | Laravel's default HandleCors is removed from the API group below.
         |
         */
 
         $middleware->api(
             prepend: [
                 ApiCorsMiddleware::class,
-            ]
+            ],
+            remove: [
+                HandleCors::class,
+            ],
         );
 
         /*
@@ -64,29 +65,43 @@ return Application::configure(
         */
 
         $middleware->alias([
-            'role' =>
-                RoleMiddleware::class,
 
-            'gateway.auth' =>
-                GatewayAuthMiddleware::class,
+            /*
+            |--------------------------------------------------------------------------
+            | Legacy CORS alias
+            |--------------------------------------------------------------------------
+            |
+            | Some existing routes still use:
+            |
+            |     ->middleware('api.cors')
+            |
+            | Keep this temporarily so those routes do not crash.
+            |
+            */
 
-            'permission' =>
-                PermissionMiddleware::class,
+            'api.cors' => ApiCorsMiddleware::class,
 
-            'branch.scope' =>
-                BranchScopeMiddleware::class,
+            /*
+            |--------------------------------------------------------------------------
+            | Application middleware
+            |--------------------------------------------------------------------------
+            */
 
-            'route.permission' =>
-                CheckRoutePermission::class,
+            'role' => RoleMiddleware::class,
 
-            'merchant.api-key' =>
-                AuthenticateMerchantApiKey::class,
+            'gateway.auth' => GatewayAuthMiddleware::class,
 
-            'marketplace.api-key' =>
-                AuthenticateMarketplaceApiKey::class,
+            'permission' => PermissionMiddleware::class,
 
-            'store.integration.token' =>
-                AuthenticateStoreIntegrationToken::class,
+            'branch.scope' => BranchScopeMiddleware::class,
+
+            'route.permission' => CheckRoutePermission::class,
+
+            'merchant.api-key' => AuthenticateMerchantApiKey::class,
+
+            'marketplace.api-key' => AuthenticateMarketplaceApiKey::class,
+
+            'store.integration.token' => AuthenticateStoreIntegrationToken::class,
         ]);
     })
 

@@ -8,17 +8,6 @@ use Symfony\Component\HttpFoundation\Response;
 
 class ApiCorsMiddleware
 {
-    /**
-     * Public endpoints that any external storefront may call.
-     * These endpoints reflect the requesting Origin.
-     */
-    private const PUBLIC_DYNAMIC_CORS_PATHS = [
-        'api/v1/public/pricing/estimate',
-    ];
-
-    /**
-     * Fixed origins allowed for normal / admin APIs.
-     */
     private const ALLOWED_ORIGINS = [
         'https://tukaatuexpress.com',
         'https://www.tukaatuexpress.com',
@@ -42,24 +31,18 @@ class ApiCorsMiddleware
     {
         $origin = $request->headers->get('Origin');
 
-        // Non-browser request – just continue
+        // Always treat the public pricing estimate as open to any origin
+        if ($this->isPublicPricingPath($request)) {
+            return $this->handlePublicPricingCors($request, $next, $origin ?? '*');
+        }
+
+        // Non-browser request
         if (!$origin) {
             return $next($request);
         }
 
-        // -------------------------------------------------
-        // PUBLIC EXTERNAL STOREFRONT ENDPOINTS
-        // -------------------------------------------------
-        // Any origin is allowed (lavishme.tukaatu.com, acstore.com, …)
-        if ($this->isPublicPricingPath($request)) {
-            return $this->handlePublicPricingCors($request, $next, $origin);
-        }
-
-        // -------------------------------------------------
-        // NORMAL / ADMIN API CORS
-        // -------------------------------------------------
+        // Normal / admin APIs – only allow listed origins
         if (!in_array($origin, self::ALLOWED_ORIGINS, true)) {
-            // Unknown origin → no CORS headers (browser will block)
             return $next($request);
         }
 
@@ -75,19 +58,17 @@ class ApiCorsMiddleware
     }
 
     /**
-     * Robust path check – works with or without leading slash / api prefix issues.
+     * Very aggressive path detection – catches any variation.
      */
     private function isPublicPricingPath(Request $request): bool
     {
-        // Most reliable Laravel helper
-        if ($request->is('api/v1/public/pricing/estimate')) {
-            return true;
-        }
-
-        // Fallback for edge cases
         $path = trim($request->path(), '/');
-        return $path === 'api/v1/public/pricing/estimate'
-            || str_ends_with($path, '/api/v1/public/pricing/estimate');
+        $uri  = $request->getRequestUri();
+
+        return $request->is('api/v1/public/pricing/estimate')
+            || $path === 'api/v1/public/pricing/estimate'
+            || str_contains($path, 'public/pricing/estimate')
+            || str_contains($uri, '/api/v1/public/pricing/estimate');
     }
 
     private function handlePublicPricingCors(
@@ -95,34 +76,31 @@ class ApiCorsMiddleware
         Closure $next,
         string $origin
     ): Response {
-        // Preflight
+        // Preflight – answer immediately
         if ($request->isMethod('OPTIONS')) {
             $response = response('', 204);
             $this->addPublicCorsHeaders($response, $origin);
             return $response;
         }
 
-        // Actual request
         $response = $next($request);
         $this->addPublicCorsHeaders($response, $origin);
         return $response;
     }
 
-    /**
-     * CORS headers for public pricing – any origin is reflected.
-     */
     private function addPublicCorsHeaders(Response $response, string $origin): void
     {
-        $response->headers->set('Access-Control-Allow-Origin', $origin);
+        // Reflect the exact origin the browser sent (or * as last resort)
+        $response->headers->set('Access-Control-Allow-Origin', $origin === '*' ? '*' : $origin);
         $response->headers->set('Access-Control-Allow-Methods', 'POST, OPTIONS');
         $response->headers->set(
             'Access-Control-Allow-Headers',
-            'Content-Type, Accept, Authorization, X-Requested-With, X-Requested-With'
+            'Content-Type, Accept, Authorization, X-Requested-With'
         );
         $response->headers->set('Access-Control-Max-Age', '86400');
         $response->headers->set('Vary', 'Origin');
 
-        // Public endpoint must never send credentials
+        // Public endpoint must never advertise credentials
         $response->headers->remove('Access-Control-Allow-Credentials');
     }
 

@@ -1,4 +1,5 @@
 <?php
+
 namespace Modules\Merchant\Services;
 
 use Illuminate\Support\Facades\DB;
@@ -15,6 +16,11 @@ use Throwable;
 
 class StoreIntegrationApplicationService
 {
+    /**
+     * These document groups are mandatory.
+     *
+     * Each group can contain ONE OR MANY files.
+     */
     private const REQUIRED_DOCUMENTS = [
         'business_registration',
         'pan_vat',
@@ -22,181 +28,262 @@ class StoreIntegrationApplicationService
         'bank_proof',
     ];
 
-    /*
-     * Store Manager documents are copied into Tukaatu local storage for now.
-     * Change this single value to "s3" later after the project-wide S3 disk
-     * has been configured in config/filesystems.php.
+    /**
+     * All supported document groups.
      */
+    private const DOCUMENT_TYPES = [
+        'business_registration',
+        'pan_vat',
+        'owner_id',
+        'bank_proof',
+        'office_photo',
+        'authorisation_letter',
+        'additional_documents',
+    ];
+
     private const DOCUMENT_DISK = 'public';
 
-    private const MAX_DOCUMENT_BYTES       = 10 * 1024 * 1024;
+    private const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+
     private const DOWNLOAD_TIMEOUT_SECONDS = 60;
-    private const CONNECT_TIMEOUT_SECONDS  = 10;
+
+    private const CONNECT_TIMEOUT_SECONDS = 10;
 
     public function __construct(
         private BranchLocatorService $branchLocator
     ) {
     }
 
-    /**
-     * This method is used only by the Store Manager integration endpoint.
-     * The public Tukaatu merchant form keeps using its existing direct-upload
-     * services and is not changed by this class.
-     */
     public function submit(
         string $applicationNumber,
         array $data,
         array $documents
     ): array {
         $newFiles = [];
+
         $oldFiles = [];
 
         try {
-            $result = DB::transaction(function () use (
-                $applicationNumber,
-                $data,
-                $documents,
-                &$newFiles,
-                &$oldFiles
-            ) {
-                $merchant = Merchant::query()
-                    ->where('application_number', $applicationNumber)
-                    ->lockForUpdate()
-                    ->first();
-
-                $created = ! $merchant;
-
-                if (
-                    $merchant &&
-                    in_array(
-                        $merchant->integration_status,
-                        ['approved', 'suspended'],
-                        true
-                    )
-                ) {
-                    throw ValidationException::withMessages([
-                        'application_number' => [
-                            'This Store Manager application has already been approved.',
-                        ],
-                    ]);
-                }
-
-                $this->ensureNoDuplicateMerchant(
+            $result = DB::transaction(
+                function () use (
+                    $applicationNumber,
                     $data,
-                    $merchant?->id,
-                    $applicationNumber
-                );
-
-                $this->ensureRequiredDocumentsExist(
-                    $merchant,
-                    $documents
-                );
-
-                $pickup = $data['pickup_location'];
-
-                $location = $this->branchLocator->locate(
-                    (float) $pickup['latitude'],
-                    (float) $pickup['longitude']
-                );
-
-                $suggestedBranch    = $location['branch'] ?? null;
-                $suggestedSubBranch = $location['sub_branch'] ?? null;
-
-                if (! $merchant) {
-                    $merchant                     = new Merchant();
-                    $merchant->application_number = $applicationNumber;
-                    $merchant->code               = $this->makeCode(
-                        $data['store']['name']
-                    );
-                }
-
-                $integrationPayload = $this->sanitizeIntegrationPayload(
-                    $data
-                );
-
-                $merchant->forceFill([
-                    'application_source'          => Merchant::SOURCE_STORE_MANAGER,
-                    'external_store_id'           => $data['store']['external_store_id'],
-                    'external_platform'           => $data['store']['platform'],
-                    'store_category'              => $data['store']['category'] ?? null,
-                    'store_url'                   => $data['store']['url'] ?? null,
-
-                    'name'                        => $data['store']['name'],
-                    'owner_name'                  => $data['business']['owner_name'],
-                    'contact_person'              =>
-                    $data['business']['contact_person'] ?? $data['business']['owner_name'],
-                    'phone'                       => $data['business']['phone'],
-                    'email'                       => strtolower($data['business']['email']),
-                    'website_url'                 => $data['store']['url'] ?? null,
-                    'business_type'               => $data['business']['type'] ?? null,
-                    'pan_vat_number'              => $data['business']['pan_vat_number'],
-                    'registration_number'         =>
-                    $data['business']['registration_number'],
-                    'address'                     => $data['business']['registered_address'],
-
-                    'pickup_address'              => $pickup['address'] ?? null,
-                    'pickup_city'                 => $pickup['city'] ?? null,
-                    'pickup_area'                 => $pickup['area'] ?? null,
-                    'pickup_lat'                  => $pickup['latitude'],
-                    'pickup_lng'                  => $pickup['longitude'],
-                    'suggested_branch_id'         => $suggestedBranch?->id,
-                    'suggested_sub_branch_id'     => $suggestedSubBranch?->id,
-
-                    'requested_services'          => array_values(
-                        array_unique($data['requested_services'])
-                    ),
-                    'approved_services'           => null,
-                    'integration_payload'         => $integrationPayload,
-                    'integration_callback_url'    => $data['callback']['url'],
-                    'integration_callback_secret' =>
-                    $data['callback']['secret'],
-                    'integration_status'          => 'pending_review',
-                    'integration_callback_status' => null,
-                    'submitted_at'                => now(),
-
-                    /*
-                     * Reuse the existing public workflow status values so the
-                     * existing admin application list and approval service can
-                     * review Store Manager applications too.
-                     */
-                    'status'                      => 'pending_verification',
-                    'verification_status'         => 'submitted',
-                    'more_info_message'           => null,
-                    'rejected_reason'             => null,
-                ])->save();
-
-                $this->savePickupLocation(
-                    $merchant,
-                    $pickup,
-                    $suggestedBranch?->id,
-                    $suggestedSubBranch?->id
-                );
-
-                $this->saveDocuments(
-                    $merchant,
                     $documents,
-                    $newFiles,
-                    $oldFiles
-                );
+                    &$newFiles,
+                    &$oldFiles
+                ) {
+                    $merchant = Merchant::query()
+                        ->where(
+                            'application_number',
+                            $applicationNumber
+                        )
+                        ->lockForUpdate()
+                        ->first();
 
-                return [
-                    'merchant' => $merchant->fresh([
-                        'documents',
-                        'pickupLocations',
-                        'suggestedBranch',
-                        'suggestedSubBranch',
-                    ]),
-                    'created'  => $created,
-                ];
-            });
+                    $created = ! $merchant;
+
+                    if (
+                        $merchant &&
+                        in_array(
+                            $merchant->integration_status,
+                            [
+                                'approved',
+                                'suspended',
+                            ],
+                            true
+                        )
+                    ) {
+                        throw ValidationException::withMessages([
+                            'application_number' => [
+                                'This Store Manager application has already been approved.',
+                            ],
+                        ]);
+                    }
+
+                    $this->ensureNoDuplicateMerchant(
+                        $data,
+                        $merchant?->id,
+                        $applicationNumber
+                    );
+
+                    $this->ensureRequiredDocumentsExist(
+                        $merchant,
+                        $documents
+                    );
+
+                    $pickup = $data['pickup_location'];
+
+                    $location = $this->branchLocator->locate(
+                        (float) $pickup['latitude'],
+                        (float) $pickup['longitude']
+                    );
+
+                    $suggestedBranch =
+                        $location['branch'] ?? null;
+
+                    $suggestedSubBranch =
+                        $location['sub_branch'] ?? null;
+
+                    if (! $merchant) {
+                        $merchant = new Merchant();
+
+                        $merchant->application_number =
+                            $applicationNumber;
+
+                        $merchant->code =
+                            $this->makeCode(
+                                $data['store']['name']
+                            );
+                    }
+
+                    $integrationPayload =
+                        $this->sanitizeIntegrationPayload(
+                            $data
+                        );
+
+                    $merchant->forceFill([
+                        'application_source' =>
+                            Merchant::SOURCE_STORE_MANAGER,
+
+                        'external_store_id' =>
+                            $data['store']['external_store_id'],
+
+                        'external_platform' =>
+                            $data['store']['platform'],
+
+                        'store_category' =>
+                            $data['store']['category'] ?? null,
+
+                        'store_url' =>
+                            $data['store']['url'] ?? null,
+
+                        'name' =>
+                            $data['store']['name'],
+
+                        'owner_name' =>
+                            $data['business']['owner_name'],
+
+                        'contact_person' =>
+                            $data['business']['contact_person']
+                            ?? $data['business']['owner_name'],
+
+                        'phone' =>
+                            $data['business']['phone'],
+
+                        'email' =>
+                            strtolower(
+                                $data['business']['email']
+                            ),
+
+                        'website_url' =>
+                            $data['store']['url'] ?? null,
+
+                        'business_type' =>
+                            $data['business']['type'] ?? null,
+
+                        'pan_vat_number' =>
+                            $data['business']['pan_vat_number'],
+
+                        'registration_number' =>
+                            $data['business']['registration_number'],
+
+                        'address' =>
+                            $data['business']['registered_address'],
+
+                        'pickup_address' =>
+                            $pickup['address'] ?? null,
+
+                        'pickup_city' =>
+                            $pickup['city'] ?? null,
+
+                        'pickup_area' =>
+                            $pickup['area'] ?? null,
+
+                        'pickup_lat' =>
+                            $pickup['latitude'],
+
+                        'pickup_lng' =>
+                            $pickup['longitude'],
+
+                        'suggested_branch_id' =>
+                            $suggestedBranch?->id,
+
+                        'suggested_sub_branch_id' =>
+                            $suggestedSubBranch?->id,
+
+                        'requested_services' =>
+                            array_values(
+                                array_unique(
+                                    $data['requested_services']
+                                )
+                            ),
+
+                        'approved_services' => null,
+
+                        'integration_payload' =>
+                            $integrationPayload,
+
+                        'integration_callback_url' =>
+                            $data['callback']['url'],
+
+                        'integration_callback_secret' =>
+                            $data['callback']['secret'],
+
+                        'integration_status' =>
+                            'pending_review',
+
+                        'integration_callback_status' =>
+                            null,
+
+                        'submitted_at' => now(),
+
+                        'status' =>
+                            'pending_verification',
+
+                        'verification_status' =>
+                            'submitted',
+
+                        'more_info_message' =>
+                            null,
+
+                        'rejected_reason' =>
+                            null,
+                    ])->save();
+
+                    $this->savePickupLocation(
+                        $merchant,
+                        $pickup,
+                        $suggestedBranch?->id,
+                        $suggestedSubBranch?->id
+                    );
+
+                    $this->saveDocuments(
+                        $merchant,
+                        $documents,
+                        $newFiles,
+                        $oldFiles
+                    );
+
+                    return [
+                        'merchant' => $merchant->fresh([
+                            'documents',
+                            'pickupLocations',
+                            'suggestedBranch',
+                            'suggestedSubBranch',
+                        ]),
+
+                        'created' => $created,
+                    ];
+                }
+            );
         } catch (Throwable $exception) {
             $this->deleteFiles($newFiles);
+
             throw $exception;
         }
 
         /*
-         * Old files are removed only after the database transaction succeeds.
-         * This protects existing documents when a resubmission fails.
+         * Delete replaced documents only after transaction succeeds.
          */
         $this->deleteFiles($oldFiles);
 
@@ -209,16 +296,18 @@ class StoreIntegrationApplicationService
         string $applicationNumber
     ): void {
         $business = $data['business'];
-        $store    = $data['store'];
+
+        $store = $data['store'];
 
         $duplicate = Merchant::query()
             ->when(
                 $currentMerchantId,
-                fn($query) => $query->where(
-                    'id',
-                    '!=',
-                    $currentMerchantId
-                )
+                fn ($query) =>
+                    $query->where(
+                        'id',
+                        '!=',
+                        $currentMerchantId
+                    )
             )
             ->where(function ($query) use (
                 $business,
@@ -226,7 +315,10 @@ class StoreIntegrationApplicationService
                 $applicationNumber
             ) {
                 $query
-                    ->where('application_number', $applicationNumber)
+                    ->where(
+                        'application_number',
+                        $applicationNumber
+                    )
                     ->orWhere(function ($query) use ($store) {
                         $query
                             ->where(
@@ -252,7 +344,9 @@ class StoreIntegrationApplicationService
                     )
                     ->orWhere(
                         'email',
-                        strtolower($business['email'])
+                        strtolower(
+                            $business['email']
+                        )
                     );
             })
             ->first();
@@ -262,50 +356,64 @@ class StoreIntegrationApplicationService
         }
 
         throw ValidationException::withMessages([
-            'store'                => [
+            'store' => [
                 'A merchant or Store Manager application already exists with the submitted business information.',
             ],
+
             'existing_application' => [
-                $duplicate->application_number ?: (string) $duplicate->id,
+                $duplicate->application_number
+                    ?: (string) $duplicate->id,
             ],
         ]);
     }
 
+    /**
+     * Required groups must contain at least one document.
+     *
+     * Existing documents are considered during resubmission.
+     */
     private function ensureRequiredDocumentsExist(
         ?Merchant $merchant,
         array $incomingDocuments
     ): void {
         $existingTypes = $merchant
             ? $merchant->documents()
-            ->pluck('document_type')
-            ->all()
+                ->pluck('document_type')
+                ->unique()
+                ->values()
+                ->all()
             : [];
 
-        $incomingTypes = collect($incomingDocuments)
-            ->filter(function ($document) {
-                return is_array($document)
-                && ! empty($document['url']);
+        $incomingTypes = collect(
+            $incomingDocuments
+        )
+            ->filter(function ($documents) {
+                return is_array($documents)
+                    && count($documents) > 0;
             })
             ->keys()
             ->all();
 
         $availableTypes = collect([
-             ...$existingTypes,
+            ...$existingTypes,
             ...$incomingTypes,
-        ])->unique();
+        ])
+            ->unique();
 
-        $missing = collect(self::REQUIRED_DOCUMENTS)
+        $missing = collect(
+            self::REQUIRED_DOCUMENTS
+        )
             ->reject(
-                fn(string $type) =>
-                $availableTypes->contains($type)
+                fn (string $type) =>
+                    $availableTypes->contains($type)
             )
             ->values();
 
         if ($missing->isNotEmpty()) {
             throw ValidationException::withMessages([
                 'documents' => [
-                    'Missing required documents: ' .
-                    $missing->join(', '),
+                    'Missing required documents: '
+                    . $missing->join(', '),
                 ],
             ]);
         }
@@ -319,48 +427,160 @@ class StoreIntegrationApplicationService
     ): void {
         MerchantPickupLocation::updateOrCreate(
             [
-                'merchant_id' => $merchant->id,
-                'is_default'  => true,
+                'merchant_id' =>
+                    $merchant->id,
+
+                'is_default' =>
+                    true,
             ],
             [
-                'name'                    => $pickup['name'],
-                'contact_person'          => $pickup['contact_person'],
-                'phone'                   => $pickup['phone'],
-                'address'                 => $pickup['address'] ?? null,
-                'city'                    => $pickup['city'] ?? null,
-                'area'                    => $pickup['area'] ?? null,
-                'latitude'                => $pickup['latitude'],
-                'longitude'               => $pickup['longitude'],
-                'suggested_branch_id'     => $suggestedBranchId,
-                'suggested_sub_branch_id' => $suggestedSubBranchId,
-                'branch_id'               => null,
-                'sub_branch_id'           => null,
-                'status'                  => 'pending_verification',
+                'name' =>
+                    $pickup['name'],
+
+                'contact_person' =>
+                    $pickup['contact_person'] ?? null,
+
+                'phone' =>
+                    $pickup['phone'],
+
+                'address' =>
+                    $pickup['address'] ?? null,
+
+                'city' =>
+                    $pickup['city'] ?? null,
+
+                'area' =>
+                    $pickup['area'] ?? null,
+
+                'latitude' =>
+                    $pickup['latitude'],
+
+                'longitude' =>
+                    $pickup['longitude'],
+
+                'suggested_branch_id' =>
+                    $suggestedBranchId,
+
+                'suggested_sub_branch_id' =>
+                    $suggestedSubBranchId,
+
+                'branch_id' => null,
+
+                'sub_branch_id' => null,
+
+                'status' =>
+                    'pending_verification',
             ]
         );
     }
 
+    /**
+     * Save multiple documents per document type.
+     *
+     * Example:
+     *
+     * owner_id => [
+     *     file1,
+     *     file2,
+     *     file3,
+     * ]
+     */
     private function saveDocuments(
         Merchant $merchant,
         array $documents,
         array &$newFiles,
         array &$oldFiles
     ): void {
-        foreach ($documents as $type => $document) {
+        foreach ($documents as $type => $documentList) {
             if (
-                ! is_array($document) ||
-                empty($document['url'])
+                ! is_array($documentList) ||
+                empty($documentList)
             ) {
                 continue;
             }
 
-            $this->downloadAndStoreDocument(
+            /*
+             * Only accept known document groups.
+             */
+            if (
+                ! in_array(
+                    $type,
+                    self::DOCUMENT_TYPES,
+                    true
+                )
+            ) {
+                continue;
+            }
+
+            /*
+             * If this document group is submitted again,
+             * replace the old files for that group.
+             *
+             * Example:
+             *
+             * Existing owner_id:
+             *   A
+             *   B
+             *
+             * New owner_id:
+             *   C
+             *
+             * Result:
+             *   C
+             */
+            $this->removeExistingDocumentsForType(
                 $merchant,
                 (string) $type,
-                $document,
-                $newFiles,
                 $oldFiles
             );
+
+            foreach ($documentList as $document) {
+                if (
+                    ! is_array($document) ||
+                    empty($document['url'])
+                ) {
+                    continue;
+                }
+
+                $this->downloadAndStoreDocument(
+                    $merchant,
+                    (string) $type,
+                    $document,
+                    $newFiles
+                );
+            }
+        }
+    }
+
+    /**
+     * Mark old files for deletion and remove database records.
+     */
+    private function removeExistingDocumentsForType(
+        Merchant $merchant,
+        string $type,
+        array &$oldFiles
+    ): void {
+        $existingDocuments = $merchant
+            ->documents()
+            ->where(
+                'document_type',
+                $type
+            )
+            ->get();
+
+        foreach ($existingDocuments as $existing) {
+            if ($existing->file_path) {
+                $oldFiles[] = [
+                    'disk' =>
+                        $existing->disk
+                        ?: self::DOCUMENT_DISK,
+
+                    'path' =>
+                        $existing->file_path,
+                ];
+            }
+
+            $existing->delete();
         }
     }
 
@@ -368,8 +588,7 @@ class StoreIntegrationApplicationService
         Merchant $merchant,
         string $type,
         array $document,
-        array &$newFiles,
-        array &$oldFiles
+        array &$newFiles
     ): void {
         $sourceUrl = (string) $document['url'];
 
@@ -396,15 +615,22 @@ class StoreIntegrationApplicationService
                 $response = Http::connectTimeout(
                     self::CONNECT_TIMEOUT_SECONDS
                 )
-                    ->timeout(self::DOWNLOAD_TIMEOUT_SECONDS)
+                    ->timeout(
+                        self::DOWNLOAD_TIMEOUT_SECONDS
+                    )
                     ->retry(2, 500)
                     ->withOptions([
-                        'sink'            => $temporaryPath,
-                        'allow_redirects' => false,
-                        'verify'          => true,
+                        'sink' =>
+                            $temporaryPath,
+
+                        'allow_redirects' =>
+                            false,
+
+                        'verify' =>
+                            true,
                     ])
                     ->get($sourceUrl);
-            } catch (Throwable $exception) {
+            } catch (Throwable) {
                 throw ValidationException::withMessages([
                     "documents.{$type}.url" => [
                         'Tukaatu could not download this document URL.',
@@ -420,9 +646,14 @@ class StoreIntegrationApplicationService
                 ]);
             }
 
-            $fileSize = filesize($temporaryPath);
+            $fileSize = filesize(
+                $temporaryPath
+            );
 
-            if ($fileSize === false || $fileSize < 1) {
+            if (
+                $fileSize === false ||
+                $fileSize < 1
+            ) {
                 throw ValidationException::withMessages([
                     "documents.{$type}.url" => [
                         'The downloaded document is empty.',
@@ -430,7 +661,10 @@ class StoreIntegrationApplicationService
                 ]);
             }
 
-            if ($fileSize > self::MAX_DOCUMENT_BYTES) {
+            if (
+                $fileSize >
+                self::MAX_DOCUMENT_BYTES
+            ) {
                 throw ValidationException::withMessages([
                     "documents.{$type}.url" => [
                         'The downloaded document must not exceed 10 MB.',
@@ -440,7 +674,8 @@ class StoreIntegrationApplicationService
 
             if (
                 isset($document['size_bytes']) &&
-                (int) $document['size_bytes'] !== (int) $fileSize
+                (int) $document['size_bytes']
+                !== (int) $fileSize
             ) {
                 throw ValidationException::withMessages([
                     "documents.{$type}.size_bytes" => [
@@ -449,22 +684,32 @@ class StoreIntegrationApplicationService
                 ]);
             }
 
-            $mimeType = (new \finfo(
-                FILEINFO_MIME_TYPE
-            ))->file($temporaryPath);
+            $mimeType = (
+                new \finfo(
+                    FILEINFO_MIME_TYPE
+                )
+            )->file(
+                $temporaryPath
+            );
 
-            $allowedMimeTypes = $type === 'office_photo'
-                ? [
-                'image/jpeg',
-                'image/png',
-                'image/webp',
-            ]
-                : [
-                'application/pdf',
-                'image/jpeg',
-                'image/png',
-                'image/webp',
-            ];
+            /*
+             * All document groups can contain images.
+             *
+             * office_photo is image-only.
+             */
+            $allowedMimeTypes =
+                $type === 'office_photo'
+                    ? [
+                        'image/jpeg',
+                        'image/png',
+                        'image/webp',
+                    ]
+                    : [
+                        'application/pdf',
+                        'image/jpeg',
+                        'image/png',
+                        'image/webp',
+                    ];
 
             if (
                 ! $mimeType ||
@@ -489,8 +734,12 @@ class StoreIntegrationApplicationService
             if (
                 ! empty($document['sha256']) &&
                 ! hash_equals(
-                    strtolower((string) $document['sha256']),
-                    strtolower((string) $actualChecksum)
+                    strtolower(
+                        (string) $document['sha256']
+                    ),
+                    strtolower(
+                        (string) $actualChecksum
+                    )
                 )
             ) {
                 throw ValidationException::withMessages([
@@ -502,14 +751,19 @@ class StoreIntegrationApplicationService
 
             $extension = match ($mimeType) {
                 'application/pdf' => 'pdf',
-                'image/jpeg'      => 'jpg',
-                'image/png'       => 'png',
-                'image/webp'      => 'webp',
-                default           => throw new \RuntimeException(
-                    'Unsupported document MIME type.'
-                ),
+                'image/jpeg' => 'jpg',
+                'image/png' => 'png',
+                'image/webp' => 'webp',
+
+                default =>
+                    throw new \RuntimeException(
+                        'Unsupported document MIME type.'
+                    ),
             };
 
+            /*
+             * Every uploaded document gets its own UUID.
+             */
             $path = sprintf(
                 'merchant-documents/%d/%s-%s.%s',
                 $merchant->id,
@@ -518,7 +772,10 @@ class StoreIntegrationApplicationService
                 $extension
             );
 
-            $stream = fopen($temporaryPath, 'rb');
+            $stream = fopen(
+                $temporaryPath,
+                'rb'
+            );
 
             if ($stream === false) {
                 throw new \RuntimeException(
@@ -529,7 +786,10 @@ class StoreIntegrationApplicationService
             try {
                 $stored = Storage::disk(
                     self::DOCUMENT_DISK
-                )->put($path, $stream);
+                )->put(
+                    $path,
+                    $stream
+                );
             } finally {
                 fclose($stream);
             }
@@ -543,23 +803,31 @@ class StoreIntegrationApplicationService
             }
 
             $newFiles[] = [
-                'disk' => self::DOCUMENT_DISK,
-                'path' => $path,
+                'disk' =>
+                    self::DOCUMENT_DISK,
+
+                'path' =>
+                    $path,
             ];
 
-            $existing = $merchant->documents()
-                ->where('document_type', $type)
-                ->first();
-
-            $originalName = $this->sanitizeOriginalName(
-                $document['original_name'] ?? "{$type}.{$extension}"
-            );
+            $originalName =
+                $this->sanitizeOriginalName(
+                    $document['original_name']
+                    ?? "{$type}.{$extension}"
+                );
 
             $values = [
-                'file_path'     => $path,
-                'original_name' => $originalName,
-                'mime_type'     => $mimeType,
-                'status'        => 'pending',
+                'file_path' =>
+                    $path,
+
+                'original_name' =>
+                    $originalName,
+
+                'mime_type' =>
+                    $mimeType,
+
+                'status' =>
+                    'pending',
             ];
 
             if (
@@ -568,7 +836,8 @@ class StoreIntegrationApplicationService
                     'disk'
                 )
             ) {
-                $values['disk'] = self::DOCUMENT_DISK;
+                $values['disk'] =
+                    self::DOCUMENT_DISK;
             }
 
             if (
@@ -577,14 +846,16 @@ class StoreIntegrationApplicationService
                     'size_bytes'
                 )
             ) {
-                $values['size_bytes'] = $fileSize;
+                $values['size_bytes'] =
+                    $fileSize;
             } elseif (
                 Schema::hasColumn(
                     'merchant_documents',
                     'size'
                 )
             ) {
-                $values['size'] = $fileSize;
+                $values['size'] =
+                    $fileSize;
             }
 
             if (
@@ -593,7 +864,8 @@ class StoreIntegrationApplicationService
                     'checksum_sha256'
                 )
             ) {
-                $values['checksum_sha256'] = $actualChecksum;
+                $values['checksum_sha256'] =
+                    $actualChecksum;
             }
 
             if (
@@ -602,10 +874,11 @@ class StoreIntegrationApplicationService
                     'source_host'
                 )
             ) {
-                $values['source_host'] = parse_url(
-                    $sourceUrl,
-                    PHP_URL_HOST
-                );
+                $values['source_host'] =
+                    parse_url(
+                        $sourceUrl,
+                        PHP_URL_HOST
+                    );
             }
 
             if (
@@ -614,7 +887,8 @@ class StoreIntegrationApplicationService
                     'remarks'
                 )
             ) {
-                $values['remarks'] = null;
+                $values['remarks'] =
+                    null;
             }
 
             if (
@@ -623,7 +897,8 @@ class StoreIntegrationApplicationService
                     'verified_by'
                 )
             ) {
-                $values['verified_by'] = null;
+                $values['verified_by'] =
+                    null;
             }
 
             if (
@@ -632,26 +907,30 @@ class StoreIntegrationApplicationService
                     'verified_at'
                 )
             ) {
-                $values['verified_at'] = null;
+                $values['verified_at'] =
+                    null;
             }
 
-            MerchantDocument::updateOrCreate(
-                [
-                    'merchant_id'   => $merchant->id,
-                    'document_type' => $type,
-                ],
-                $values
-            );
+            /*
+             * IMPORTANT:
+             *
+             * create(), NOT updateOrCreate().
+             *
+             * This allows:
+             *
+             * owner_id #1
+             * owner_id #2
+             * owner_id #3
+             */
+            MerchantDocument::create([
+                'merchant_id' =>
+                    $merchant->id,
 
-            if (
-                $existing?->file_path &&
-                $existing->file_path !== $path
-            ) {
-                $oldFiles[] = [
-                    'disk' => $existing->disk ?? self::DOCUMENT_DISK,
-                    'path' => $existing->file_path,
-                ];
-            }
+                'document_type' =>
+                    $type,
+
+                ...$values,
+            ]);
         } finally {
             if (is_file($temporaryPath)) {
                 @unlink($temporaryPath);
@@ -659,11 +938,6 @@ class StoreIntegrationApplicationService
         }
     }
 
-    /**
-     * No environment allowlist is required for local development. However,
-     * private, loopback and reserved network addresses are always rejected
-     * to prevent the remote-document URL from reaching internal services.
-     */
     private function validateDocumentSourceUrl(
         string $url,
         string $documentType
@@ -671,11 +945,17 @@ class StoreIntegrationApplicationService
         $parts = parse_url($url);
 
         $scheme = strtolower(
-            (string) ($parts['scheme'] ?? '')
+            (string) (
+                $parts['scheme'] ?? ''
+            )
         );
+
         $host = strtolower(
-            (string) ($parts['host'] ?? '')
+            (string) (
+                $parts['host'] ?? ''
+            )
         );
+
         $port = isset($parts['port'])
             ? (int) $parts['port']
             : 443;
@@ -696,7 +976,12 @@ class StoreIntegrationApplicationService
 
         $addresses = [];
 
-        if (filter_var($host, FILTER_VALIDATE_IP)) {
+        if (
+            filter_var(
+                $host,
+                FILTER_VALIDATE_IP
+            )
+        ) {
             $addresses[] = $host;
         } else {
             $records = @dns_get_record(
@@ -707,17 +992,20 @@ class StoreIntegrationApplicationService
             if (is_array($records)) {
                 foreach ($records as $record) {
                     if (! empty($record['ip'])) {
-                        $addresses[] = $record['ip'];
+                        $addresses[] =
+                            $record['ip'];
                     }
 
                     if (! empty($record['ipv6'])) {
-                        $addresses[] = $record['ipv6'];
+                        $addresses[] =
+                            $record['ipv6'];
                     }
                 }
             }
 
             if (! $addresses) {
-                $ipv4Addresses = @gethostbynamel($host);
+                $ipv4Addresses =
+                    @gethostbynamel($host);
 
                 if (is_array($ipv4Addresses)) {
                     $addresses = array_merge(
@@ -741,7 +1029,11 @@ class StoreIntegrationApplicationService
         }
 
         foreach ($addresses as $address) {
-            if (! $this->isPublicIpAddress($address)) {
+            if (
+                ! $this->isPublicIpAddress(
+                    $address
+                )
+            ) {
                 throw ValidationException::withMessages([
                     "documents.{$documentType}.url" => [
                         'The document URL resolves to a private or reserved network address.',
@@ -751,8 +1043,9 @@ class StoreIntegrationApplicationService
         }
     }
 
-    private function isPublicIpAddress(string $address): bool
-    {
+    private function isPublicIpAddress(
+        string $address
+    ): bool {
         return filter_var(
             $address,
             FILTER_VALIDATE_IP,
@@ -761,85 +1054,157 @@ class StoreIntegrationApplicationService
         ) !== false;
     }
 
-    private function sanitizeIntegrationPayload(array $data): array
-    {
+    private function sanitizeIntegrationPayload(
+        array $data
+    ): array {
         $payload = $data;
 
-        unset($payload['callback']['secret']);
+        /*
+         * Never persist callback secret.
+         */
+        unset(
+            $payload['callback']['secret']
+        );
 
+        /*
+         * Remove source URLs from the integration JSON.
+         *
+         * The actual files are stored locally/S3 and tracked
+         * in merchant_documents.
+         */
         if (! empty($payload['documents'])) {
-            $payload['documents'] = collect(
-                $payload['documents']
-            )
-                ->map(function ($document) {
-                    if (! is_array($document)) {
-                        return null;
-                    }
+            $payload['documents'] =
+                collect(
+                    $payload['documents']
+                )
+                    ->map(
+                        function ($documents) {
+                            if (
+                                ! is_array(
+                                    $documents
+                                )
+                            ) {
+                                return null;
+                            }
 
-                    /*
-                     * Do not persist temporary presigned URLs or their query
-                     * signatures in the merchant integration JSON.
-                     */
-                    unset($document['url']);
+                            return collect(
+                                $documents
+                            )
+                                ->map(
+                                    function ($document) {
+                                        if (
+                                            ! is_array(
+                                                $document
+                                            )
+                                        ) {
+                                            return null;
+                                        }
 
-                    return $document;
-                })
-                ->filter()
-                ->all();
+                                        unset(
+                                            $document['url']
+                                        );
+
+                                        return $document;
+                                    }
+                                )
+                                ->filter()
+                                ->values()
+                                ->all();
+                        }
+                    )
+                    ->filter()
+                    ->all();
         }
 
         return $payload;
     }
 
-    private function sanitizeOriginalName(string $name): string
-    {
+    private function sanitizeOriginalName(
+        string $name
+    ): string {
         $name = basename(
-            str_replace('\\', '/', trim($name))
+            str_replace(
+                '\\',
+                '/',
+                trim($name)
+            )
         );
 
-        if ($name === '' || $name === '.' || $name === '..') {
+        if (
+            $name === '' ||
+            $name === '.' ||
+            $name === '..'
+        ) {
             return 'document';
         }
 
-        return Str::limit($name, 255, '');
+        return Str::limit(
+            $name,
+            255,
+            ''
+        );
     }
 
-    private function deleteFiles(array $files): void
-    {
+    private function deleteFiles(
+        array $files
+    ): void {
         foreach ($files as $file) {
-            $disk = $file['disk'] ?? self::DOCUMENT_DISK;
-            $path = $file['path'] ?? null;
+            $disk =
+                $file['disk']
+                ?? self::DOCUMENT_DISK;
+
+            $path =
+                $file['path']
+                ?? null;
 
             if (! $path) {
                 continue;
             }
 
             try {
-                Storage::disk($disk)->delete($path);
+                Storage::disk(
+                    $disk
+                )->delete($path);
             } catch (Throwable) {
                 /*
-                 * File cleanup failure must not reverse a successfully saved
-                 * merchant application. It can be handled by maintenance later.
+                 * Cleanup failure must not
+                 * reverse the successful application.
                  */
             }
         }
     }
 
-    private function makeCode(string $name): string
-    {
+    private function makeCode(
+        string $name
+    ): string {
         $base = strtoupper(
-            (string) str($name)->slug('-')
+            (string) str($name)
+                ->slug('-')
         );
-        $base    = substr($base, 0, 20) ?: 'STORE';
-        $code    = $base;
+
+        $base =
+            substr(
+                $base,
+                0,
+                20
+            ) ?: 'STORE';
+
+        $code = $base;
+
         $counter = 1;
 
         while (
             Merchant::query()
-            ->where('code', $code)
-            ->exists()
+                ->where(
+                    'code',
+                    $code
+                )
+                ->exists()
         ) {
-            $code = $base . '-' . $counter++;
+            $code =
+                $base .
+                '-' .
+                $counter++;
         }
 
         return $code;

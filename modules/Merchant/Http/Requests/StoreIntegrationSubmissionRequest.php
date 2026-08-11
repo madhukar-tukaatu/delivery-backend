@@ -4,7 +4,6 @@ namespace Modules\Merchant\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 
 class StoreIntegrationSubmissionRequest extends FormRequest
 {
@@ -16,10 +15,7 @@ class StoreIntegrationSubmissionRequest extends FormRequest
     protected function prepareForValidation(): void
     {
         /*
-         * Supports the new raw JSON request.
-         *
-         * Laravel normally parses JSON automatically when the header is:
-         * Content-Type: application/json
+         * Normal JSON request.
          */
         if ($this->isJson()) {
             $json = $this->json()->all();
@@ -30,13 +26,20 @@ class StoreIntegrationSubmissionRequest extends FormRequest
         }
 
         /*
-         * Fallback for older Postman/form-data requests that send:
+         * Backward compatibility for:
+         *
          * payload = JSON string
          */
         $payload = $this->input('payload');
 
-        if (is_string($payload) && trim($payload) !== '') {
-            $decoded = json_decode($payload, true);
+        if (
+            is_string($payload) &&
+            trim($payload) !== ''
+        ) {
+            $decoded = json_decode(
+                $payload,
+                true
+            );
 
             if (
                 json_last_error() === JSON_ERROR_NONE &&
@@ -47,12 +50,10 @@ class StoreIntegrationSubmissionRequest extends FormRequest
         }
 
         /*
-         * Final fallback:
-         * Parse raw JSON even when Postman accidentally sends
-         * the wrong Content-Type header.
+         * Final fallback for incorrectly sent raw JSON.
          */
         if (
-            !$this->has('store') &&
+            ! $this->has('store') &&
             trim((string) $this->getContent()) !== ''
         ) {
             $decoded = json_decode(
@@ -77,6 +78,9 @@ class StoreIntegrationSubmissionRequest extends FormRequest
     public function rules(): array
     {
         return [
+            /*
+             * Application
+             */
             'application_number' => [
                 'required',
                 'string',
@@ -85,7 +89,7 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             /*
-             * Store details
+             * Store
              */
             'store' => [
                 'required',
@@ -135,7 +139,7 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             /*
-             * Business details
+             * Business
              */
             'business' => [
                 'required',
@@ -318,33 +322,51 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             /*
-             * Document URLs
+             * Documents
+             *
+             * Every document type is an array.
+             *
+             * Therefore:
+             *
+             * owner_id => one or many
+             * pan_vat => one or many
+             * etc.
              */
             'documents' => [
                 'required',
                 'array',
             ],
 
+            /*
+             * Required document groups
+             */
             'documents.business_registration' => [
-                'nullable',
+                'required',
                 'array',
+                'min:1',
             ],
 
             'documents.pan_vat' => [
                 'required',
                 'array',
+                'min:1',
             ],
 
             'documents.owner_id' => [
                 'required',
                 'array',
+                'min:1',
             ],
 
             'documents.bank_proof' => [
-                'nullable',
+                'required',
                 'array',
+                'min:1',
             ],
 
+            /*
+             * Optional document groups
+             */
             'documents.office_photo' => [
                 'nullable',
                 'array',
@@ -355,30 +377,91 @@ class StoreIntegrationSubmissionRequest extends FormRequest
                 'array',
             ],
 
-            'documents.*.url' => [
+            'documents.additional_documents' => [
+                'nullable',
+                'array',
+            ],
+
+            /*
+             * Every individual document.
+             */
+            'documents.business_registration.*' => [
+                'required',
+                'array',
+            ],
+
+            'documents.pan_vat.*' => [
+                'required',
+                'array',
+            ],
+
+            'documents.owner_id.*' => [
+                'required',
+                'array',
+            ],
+
+            'documents.bank_proof.*' => [
+                'required',
+                'array',
+            ],
+
+            'documents.office_photo.*' => [
+                'required',
+                'array',
+            ],
+
+            'documents.authorisation_letter.*' => [
+                'required',
+                'array',
+            ],
+
+            'documents.additional_documents.*' => [
+                'required',
+                'array',
+            ],
+
+            /*
+             * Common document fields.
+             */
+            'documents.*.*.url' => [
                 'required',
                 'url',
                 'starts_with:https://',
                 'max:5000',
             ],
 
-            'documents.*.original_name' => [
+            'documents.*.*.original_name' => [
                 'nullable',
                 'string',
                 'max:255',
             ],
 
-            'documents.*.size_bytes' => [
+            'documents.*.*.size_bytes' => [
                 'nullable',
                 'integer',
                 'min:1',
                 'max:10485760',
             ],
 
-            'documents.*.sha256' => [
+            'documents.*.*.sha256' => [
                 'nullable',
                 'string',
                 'regex:/^[a-fA-F0-9]{64}$/',
+            ],
+
+            /*
+             * Optional metadata for additional documents.
+             */
+            'documents.additional_documents.*.name' => [
+                'nullable',
+                'string',
+                'max:255',
+            ],
+
+            'documents.additional_documents.*.description' => [
+                'nullable',
+                'string',
+                'max:1000',
             ],
 
             /*
@@ -424,6 +507,9 @@ class StoreIntegrationSubmissionRequest extends FormRequest
                 'max:500',
             ],
 
+            /*
+             * Terms
+             */
             'terms_accepted' => [
                 'accepted',
             ],
@@ -437,9 +523,21 @@ class StoreIntegrationSubmissionRequest extends FormRequest
                 'The Tukaatu Express terms must be accepted.',
 
             'documents.required' =>
-                'Store verification document URLs are required.',
+                'Store verification documents are required.',
 
-            'documents.*.url.starts_with' =>
+            'documents.business_registration.required' =>
+                'At least one business registration document is required.',
+
+            'documents.pan_vat.required' =>
+                'At least one PAN/VAT document is required.',
+
+            'documents.owner_id.required' =>
+                'At least one owner identification document is required.',
+
+            'documents.bank_proof.required' =>
+                'At least one bank proof document is required.',
+
+            'documents.*.*.url.starts_with' =>
                 'Every document URL must use HTTPS.',
         ];
     }

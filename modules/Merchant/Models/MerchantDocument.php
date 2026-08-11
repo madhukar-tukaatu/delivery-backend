@@ -24,6 +24,7 @@ class MerchantDocument extends Model
 
     protected $casts = [
         'verified_at' => 'datetime',
+        'size_bytes' => 'integer',
     ];
 
     protected $appends = [
@@ -32,26 +33,41 @@ class MerchantDocument extends Model
 
     public function merchant(): BelongsTo
     {
-        return $this->belongsTo(Merchant::class, 'merchant_id');
+        return $this->belongsTo(
+            Merchant::class,
+            'merchant_id'
+        );
     }
 
     public function verifier(): BelongsTo
     {
-        return $this->belongsTo(\App\Models\User::class, 'verified_by');
+        return $this->belongsTo(
+            \App\Models\User::class,
+            'verified_by'
+        );
     }
 
     public function getDownloadUrlAttribute(): ?string
     {
-        if (!$this->id) {
+        if (! $this->id) {
             return null;
         }
 
-        return url("/api/v1/merchant/documents/{$this->id}/download");
+        return url(
+            "/api/v1/merchant/documents/{$this->id}/download"
+        );
     }
 
     public function existsInStorage(): bool
     {
-        return $this->file_path
-            && Storage::disk($this->disk ?: 'local')->exists($this->file_path);
+        if (! $this->file_path) {
+            return false;
+        }
+
+        return Storage::disk(
+            $this->disk ?: 'local'
+        )->exists(
+            $this->file_path
+        );
     }
 }

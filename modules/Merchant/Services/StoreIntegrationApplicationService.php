@@ -19,7 +19,7 @@ class StoreIntegrationApplicationService
     /**
      * ONLY these document groups are mandatory.
      *
-     * pan_vat  -> required
+     * pan_vat -> required
      * owner_id -> required
      */
     private const REQUIRED_DOCUMENTS = [
@@ -41,6 +41,16 @@ class StoreIntegrationApplicationService
         'authorisation_letter',
         'additional_documents',
     ];
+
+    /**
+     * Incoming document contract:
+     *
+     * {
+     *     "url": "https://example.com/document.pdf"
+     * }
+     *
+     * Only URL is accepted from the external Store Manager.
+     */
 
     private const DOCUMENT_DISK = 'public';
 
@@ -93,9 +103,12 @@ class StoreIntegrationApplicationService
                     $created = ! $merchant;
 
                     /*
+                     * =====================================================
                      * Already approved/suspended applications
                      * cannot be submitted again.
+                     * =====================================================
                      */
+
                     if (
                         $merchant &&
                         in_array(
@@ -118,11 +131,8 @@ class StoreIntegrationApplicationService
                      * =====================================================
                      * Duplicate merchant validation
                      * =====================================================
-                     *
-                     * Nullable registration_number is handled safely.
-                     * A NULL registration number must NOT cause
-                     * duplicate matches.
                      */
+
                     $this->ensureNoDuplicateMerchant(
                         $data,
                         $merchant?->id,
@@ -132,7 +142,6 @@ class StoreIntegrationApplicationService
                     /*
                      * =====================================================
                      * Required documents
-                     * =====================================================
                      *
                      * ONLY:
                      *
@@ -140,18 +149,9 @@ class StoreIntegrationApplicationService
                      *   owner_id
                      *
                      * are mandatory.
-                     *
-                     * NOT required:
-                     *
-                     *   business_registration
-                     *   bank_proof
-                     *   office_photo
-                     *   authorisation_letter
-                     *   additional_documents
-                     *
-                     * Existing documents are considered during
-                     * resubmission.
+                     * =====================================================
                      */
+
                     $this->ensureRequiredDocumentsExist(
                         $merchant,
                         $documents
@@ -254,11 +254,6 @@ class StoreIntegrationApplicationService
                         'pan_vat_number' =>
                             $data['business']['pan_vat_number'],
 
-                        /*
-                         * registration_number is OPTIONAL.
-                         *
-                         * If it is not supplied, NULL is stored.
-                         */
                         'registration_number' =>
                             $data['business']['registration_number']
                             ?? null,
@@ -343,18 +338,13 @@ class StoreIntegrationApplicationService
                     /*
                      * =====================================================
                      * Save documents
+                     *
+                     * Incoming document contains ONLY:
+                     *
+                     * {
+                     *     "url": "https://..."
+                     * }
                      * =====================================================
-                     *
-                     * Required:
-                     *   pan_vat
-                     *   owner_id
-                     *
-                     * Optional:
-                     *   business_registration
-                     *   bank_proof
-                     *   office_photo
-                     *   authorisation_letter
-                     *   additional_documents
                      */
 
                     $this->saveDocuments(
@@ -384,7 +374,7 @@ class StoreIntegrationApplicationService
             );
         } catch (Throwable $exception) {
             /*
-             * If transaction fails, remove files that were uploaded
+             * If transaction fails, remove files uploaded
              * during this request.
              */
             $this->deleteFiles($newFiles);
@@ -393,7 +383,8 @@ class StoreIntegrationApplicationService
         }
 
         /*
-         * Delete replaced documents only after transaction succeeds.
+         * Delete replaced documents only after
+         * transaction succeeds.
          */
         $this->deleteFiles($oldFiles);
 
@@ -404,10 +395,6 @@ class StoreIntegrationApplicationService
      * Prevent duplicate merchant/application records.
      *
      * registration_number is nullable.
-     *
-     * IMPORTANT:
-     * We only check registration_number when it actually
-     * contains a value.
      */
     private function ensureNoDuplicateMerchant(
         array $data,
@@ -472,9 +459,7 @@ class StoreIntegrationApplicationService
                 });
 
                 /*
-                 * PAN/VAT number.
-                 *
-                 * This is required, so it is always checked.
+                 * PAN/VAT.
                  */
                 if (
                     ! empty(
@@ -488,14 +473,9 @@ class StoreIntegrationApplicationService
                 }
 
                 /*
-                 * Registration number is OPTIONAL.
+                 * Registration number.
                  *
-                 * DO NOT generate:
-                 *
-                 * registration_number = NULL
-                 *
-                 * because that would match every existing
-                 * NULL registration number.
+                 * Only check when supplied.
                  */
                 if (
                     $registrationNumber !== null &&
@@ -561,7 +541,7 @@ class StoreIntegrationApplicationService
             : [];
 
         /*
-         * Incoming document types that actually contain
+         * Incoming document types that contain
          * at least one document.
          */
         $incomingTypes = collect(
@@ -580,8 +560,7 @@ class StoreIntegrationApplicationService
         $availableTypes = collect([
             ...$existingTypes,
             ...$incomingTypes,
-        ])
-            ->unique();
+        ])->unique();
 
         /*
          * Find missing required types.
@@ -669,6 +648,12 @@ class StoreIntegrationApplicationService
 
     /**
      * Save multiple documents per document type.
+     *
+     * Each incoming document must contain ONLY:
+     *
+     * {
+     *     "url": "https://..."
+     * }
      */
     private function saveDocuments(
         Merchant $merchant,
@@ -697,11 +682,15 @@ class StoreIntegrationApplicationService
                     true
                 )
             ) {
-                continue;
+                throw ValidationException::withMessages([
+                    "documents.{$type}" => [
+                        'Unsupported document type.',
+                    ],
+                ]);
             }
 
             /*
-             * If a document group is submitted again,
+             * If the document group is submitted again,
              * replace the old files for that group.
              */
             $this->removeExistingDocumentsForType(
@@ -713,18 +702,48 @@ class StoreIntegrationApplicationService
             /*
              * Save each document.
              */
-            foreach ($documentList as $document) {
-                if (
-                    ! is_array($document) ||
-                    empty($document['url'])
-                ) {
-                    continue;
+            foreach ($documentList as $index => $document) {
+                if (! is_array($document)) {
+                    throw ValidationException::withMessages([
+                        "documents.{$type}.{$index}" => [
+                            'Each document must contain a URL.',
+                        ],
+                    ]);
                 }
 
+                /*
+                 * ONLY URL is accepted.
+                 */
+                $sourceUrl = trim(
+                    (string) ($document['url'] ?? '')
+                );
+
+                if ($sourceUrl === '') {
+                    throw ValidationException::withMessages([
+                        "documents.{$type}.{$index}.url" => [
+                            'The document URL is required.',
+                        ],
+                    ]);
+                }
+
+                /*
+                 * Ignore all other incoming fields.
+                 *
+                 * The service calculates:
+                 *
+                 * - filename
+                 * - size
+                 * - MIME type
+                 * - SHA-256
+                 *
+                 * internally.
+                 */
                 $this->downloadAndStoreDocument(
                     $merchant,
                     (string) $type,
-                    $document,
+                    [
+                        'url' => $sourceUrl,
+                    ],
                     $newFiles
                 );
             }
@@ -765,6 +784,12 @@ class StoreIntegrationApplicationService
 
     /**
      * Download document from source URL and store it.
+     *
+     * Incoming payload contains ONLY:
+     *
+     * {
+     *     "url": "https://..."
+     * }
      */
     private function downloadAndStoreDocument(
         Merchant $merchant,
@@ -772,7 +797,17 @@ class StoreIntegrationApplicationService
         array $document,
         array &$newFiles
     ): void {
-        $sourceUrl = (string) $document['url'];
+        $sourceUrl = trim(
+            (string) ($document['url'] ?? '')
+        );
+
+        if ($sourceUrl === '') {
+            throw ValidationException::withMessages([
+                "documents.{$type}.url" => [
+                    'The document URL is required.',
+                ],
+            ]);
+        }
 
         /*
          * Validate URL before making HTTP request.
@@ -849,6 +884,8 @@ class StoreIntegrationApplicationService
             /*
              * =========================================================
              * File size
+             *
+             * Calculated internally.
              * =========================================================
              */
 
@@ -879,22 +916,6 @@ class StoreIntegrationApplicationService
             }
 
             /*
-             * If sender supplied size_bytes,
-             * verify against actual downloaded file.
-             */
-            if (
-                isset($document['size_bytes']) &&
-                (int) $document['size_bytes']
-                !== (int) $fileSize
-            ) {
-                throw ValidationException::withMessages([
-                    "documents.{$type}.size_bytes" => [
-                        'The submitted document size does not match the downloaded file.',
-                    ],
-                ]);
-            }
-
-            /*
              * =========================================================
              * Detect MIME type
              * =========================================================
@@ -909,7 +930,7 @@ class StoreIntegrationApplicationService
             );
 
             /*
-             * Office photo is image-only.
+             * Office photos are image-only.
              *
              * Other document groups:
              *
@@ -949,7 +970,10 @@ class StoreIntegrationApplicationService
 
             /*
              * =========================================================
-             * SHA-256 checksum
+             * SHA-256
+             *
+             * Calculated internally.
+             * Client does NOT send this.
              * =========================================================
              */
 
@@ -957,24 +981,6 @@ class StoreIntegrationApplicationService
                 'sha256',
                 $temporaryPath
             );
-
-            if (
-                ! empty($document['sha256']) &&
-                ! hash_equals(
-                    strtolower(
-                        (string) $document['sha256']
-                    ),
-                    strtolower(
-                        (string) $actualChecksum
-                    )
-                )
-            ) {
-                throw ValidationException::withMessages([
-                    "documents.{$type}.sha256" => [
-                        'The document checksum does not match.',
-                    ],
-                ]);
-            }
 
             /*
              * =========================================================
@@ -1045,8 +1051,8 @@ class StoreIntegrationApplicationService
             }
 
             /*
-             * Keep track of newly created file so it can be
-             * removed if transaction fails.
+             * Keep track of newly created file so it can
+             * be removed if transaction fails.
              */
             $newFiles[] = [
                 'disk' =>
@@ -1059,14 +1065,17 @@ class StoreIntegrationApplicationService
             /*
              * =========================================================
              * Original filename
-             * =========================================================
              *
-             * OPTIONAL.
+             * Derived automatically from the URL.
+             * Client does NOT send original_name.
+             * =========================================================
              */
+
             $originalName =
-                $this->sanitizeOriginalName(
-                    $document['original_name']
-                    ?? "{$type}.{$extension}"
+                $this->getOriginalNameFromUrl(
+                    $sourceUrl,
+                    $type,
+                    $extension
                 );
 
             /*
@@ -1104,6 +1113,8 @@ class StoreIntegrationApplicationService
 
             /*
              * File size.
+             *
+             * Calculated internally.
              */
             if (
                 Schema::hasColumn(
@@ -1125,6 +1136,8 @@ class StoreIntegrationApplicationService
 
             /*
              * SHA-256 checksum.
+             *
+             * Calculated internally.
              */
             if (
                 Schema::hasColumn(
@@ -1218,13 +1231,55 @@ class StoreIntegrationApplicationService
     }
 
     /**
+     * Get original filename from URL.
+     *
+     * Example:
+     *
+     * https://example.com/files/pan-vat.pdf
+     *
+     * returns:
+     *
+     * pan-vat.pdf
+     */
+    private function getOriginalNameFromUrl(
+        string $url,
+        string $type,
+        string $extension
+    ): string {
+        $path = parse_url(
+            $url,
+            PHP_URL_PATH
+        );
+
+        $filename = $path
+            ? basename($path)
+            : '';
+
+        /*
+         * Remove any potentially unsafe path characters.
+         */
+        $filename = $this->sanitizeOriginalName(
+            $filename
+        );
+
+        if (
+            $filename === '' ||
+            $filename === 'document'
+        ) {
+            return "{$type}.{$extension}";
+        }
+
+        return $filename;
+    }
+
+    /**
      * Validate document source URL.
      *
      * Only:
      *
-     *   HTTPS
-     *   port 443
-     *   public IP
+     * HTTPS
+     * port 443
+     * public IP
      *
      * are allowed.
      */
@@ -1233,6 +1288,14 @@ class StoreIntegrationApplicationService
         string $documentType
     ): void {
         $parts = parse_url($url);
+
+        if ($parts === false) {
+            throw ValidationException::withMessages([
+                "documents.{$documentType}.url" => [
+                    'Invalid document URL.',
+                ],
+            ]);
+        }
 
         $scheme = strtolower(
             (string) (
@@ -1362,6 +1425,9 @@ class StoreIntegrationApplicationService
     /**
      * Remove sensitive and unnecessary data
      * before storing integration payload.
+     *
+     * Document URLs are also removed because the
+     * actual files are downloaded and stored locally/S3.
      */
     private function sanitizeIntegrationPayload(
         array $data
@@ -1376,10 +1442,11 @@ class StoreIntegrationApplicationService
         );
 
         /*
-         * Remove source document URLs.
+         * Remove source document URLs and
+         * all document metadata from stored payload.
          *
-         * Actual documents are stored locally/S3
-         * and tracked in merchant_documents.
+         * Documents are stored separately in
+         * merchant_documents.
          */
         if (! empty($payload['documents'])) {
             $payload['documents'] =
@@ -1396,33 +1463,18 @@ class StoreIntegrationApplicationService
                                 return null;
                             }
 
-                            return collect(
-                                $documents
-                            )
-                                ->map(
-                                    function ($document) {
-                                        if (
-                                            ! is_array(
-                                                $document
-                                            )
-                                        ) {
-                                            return null;
-                                        }
-
-                                        /*
-                                         * Do not store external
-                                         * source URL.
-                                         */
-                                        unset(
-                                            $document['url']
-                                        );
-
-                                        return $document;
-                                    }
-                                )
-                                ->filter()
-                                ->values()
-                                ->all();
+                            /*
+                             * Only preserve the number
+                             * of submitted documents.
+                             *
+                             * No external URL or metadata
+                             * is stored in integration_payload.
+                             */
+                            return array_fill(
+                                0,
+                                count($documents),
+                                []
+                            );
                         }
                     )
                     ->filter()
@@ -1434,8 +1486,6 @@ class StoreIntegrationApplicationService
 
     /**
      * Sanitize original document filename.
-     *
-     * Filename is optional.
      */
     private function sanitizeOriginalName(
         string $name

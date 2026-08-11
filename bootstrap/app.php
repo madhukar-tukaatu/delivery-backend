@@ -10,6 +10,7 @@ use App\Http\Middleware\RoleMiddleware;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Middleware\HandleCors;
 use Modules\Merchant\Http\Middleware\AuthenticateMerchantApiKey;
 use Modules\Merchant\Http\Middleware\AuthenticateStoreIntegrationToken;
 
@@ -38,15 +39,40 @@ return Application::configure(
 
         /*
         |--------------------------------------------------------------------------
+        | CORS
+        |--------------------------------------------------------------------------
+        |
+        | Remove Laravel's default HandleCors middleware.
+        |
+        | ApiCorsMiddleware is now responsible for CORS handling.
+        |
+        | This is important because the public pricing endpoint:
+        |
+        |     /api/v1/public/pricing/estimate
+        |
+        | must accept requests from arbitrary merchant storefronts such as:
+        |
+        |     https://lavishme.tukaatu.com
+        |     https://abcstore.com
+        |     https://store1.com
+        |     https://store2.com
+        |
+        | without adding every store domain to config/cors.php.
+        |
+        */
+
+        $middleware->remove(HandleCors::class);
+
+        /*
+        |--------------------------------------------------------------------------
         | API middleware
         |--------------------------------------------------------------------------
         |
-        | ApiCorsMiddleware extends Laravel's HandleCors.
+        | Our custom CORS middleware handles:
         |
-        | It gives /api/v1/public/pricing/estimate special
-        | ANY-ORIGIN CORS behavior.
-        |
-        | Everything else uses config/cors.php.
+        | 1. Dynamic CORS for public pricing estimate.
+        | 2. Restricted CORS for normal APIs.
+        | 3. OPTIONS preflight requests.
         |
         */
 
@@ -65,26 +91,19 @@ return Application::configure(
         $middleware->alias([
             'role' => RoleMiddleware::class,
 
-            'gateway.auth' =>
-                GatewayAuthMiddleware::class,
+            'gateway.auth' => GatewayAuthMiddleware::class,
 
-            'permission' =>
-                PermissionMiddleware::class,
+            'permission' => PermissionMiddleware::class,
 
-            'branch.scope' =>
-                BranchScopeMiddleware::class,
+            'branch.scope' => BranchScopeMiddleware::class,
 
-            'route.permission' =>
-                CheckRoutePermission::class,
+            'route.permission' => CheckRoutePermission::class,
 
-            'merchant.api-key' =>
-                AuthenticateMerchantApiKey::class,
+            'merchant.api-key' => AuthenticateMerchantApiKey::class,
 
-            'marketplace.api-key' =>
-                AuthenticateMarketplaceApiKey::class,
+            'marketplace.api-key' => AuthenticateMarketplaceApiKey::class,
 
-            'store.integration.token' =>
-                AuthenticateStoreIntegrationToken::class,
+            'store.integration.token' => AuthenticateStoreIntegrationToken::class,
         ]);
     })
 

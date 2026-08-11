@@ -29,12 +29,14 @@ return [
     | Allowed Origins
     |--------------------------------------------------------------------------
     |
-    | These are the trusted origins for the normal API.
+    | These are used by the application's normal/restricted API CORS
+    | handling.
     |
-    | DO NOT add merchant storefront domains here.
+    | DO NOT add merchant/storefront domains here.
     |
-    | The public pricing estimate endpoint has its own dynamic
-    | CORS middleware.
+    | The public pricing estimate endpoint is handled by
+    | ApiCorsMiddleware and dynamically reflects the requesting
+    | storefront Origin.
     |
     */
 
@@ -59,12 +61,6 @@ return [
     |--------------------------------------------------------------------------
     | Allowed Origin Patterns
     |--------------------------------------------------------------------------
-    |
-    | Keep empty.
-    |
-    | We are NOT using a wildcard pattern here because the public
-    | pricing endpoint is handled by ApiCorsMiddleware.
-    |
     */
 
     'allowed_origins_patterns' => [],
@@ -99,11 +95,6 @@ return [
     |--------------------------------------------------------------------------
     | Supports Credentials
     |--------------------------------------------------------------------------
-    |
-    | Normal authenticated APIs may use credentials where needed.
-    |
-    | The public pricing endpoint does NOT use credentials.
-    |
     */
 
     'supports_credentials' => true,

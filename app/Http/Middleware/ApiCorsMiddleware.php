@@ -9,13 +9,30 @@ use Symfony\Component\HttpFoundation\Response;
 class ApiCorsMiddleware
 {
     /**
-     * Routes that should allow dynamic storefront origins.
+     * Public endpoints that are allowed to be called
+     * from arbitrary merchant/storefront domains.
      */
-    private const PUBLIC_PRICING_PATH = 'api/v1/public/pricing/estimate';
+    private const PUBLIC_DYNAMIC_CORS_PATHS = [
+        'api/v1/public/pricing/estimate',
+    ];
 
     /**
-     * Handle the request.
+     * Fixed origins allowed for normal APIs.
      */
+    private const ALLOWED_ORIGINS = [
+        'https://tukaatuexpress.com',
+        'https://www.tukaatuexpress.com',
+        'https://tukaatu.com',
+        'https://fca.com.np',
+        'https://api.tukaatu.com',
+        'https://api.fca.com.np',
+
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'http://localhost:3002',
+        'http://localhost:3003',
+    ];
+
     public function handle(
         Request $request,
         Closure $next
@@ -23,29 +40,105 @@ class ApiCorsMiddleware
         $origin = $request->headers->get('Origin');
 
         /*
-         * Only apply unrestricted/dynamic CORS to the public
-         * pricing estimate endpoint.
-         *
-         * Do NOT globally reflect every Origin for the entire API.
+         * No Origin means this is not a browser CORS request.
          */
-        if (!$this->isPublicPricingEndpoint($request)) {
+        if (!$origin) {
             return $next($request);
         }
 
         /*
-         * Browser CORS preflight.
+         * Normalize the request path.
          *
-         * Return immediately so the request does not continue
-         * into Laravel's route/controller/throttle handling.
+         * Laravel's $request->path() does not contain
+         * the leading slash.
+         */
+        $path = trim($request->path(), '/');
+
+        $isDynamicPublicCorsEndpoint = in_array(
+            $path,
+            self::PUBLIC_DYNAMIC_CORS_PATHS,
+            true
+        );
+
+        /*
+         * ---------------------------------------------------------
+         * PUBLIC PRICING ENDPOINT
+         * ---------------------------------------------------------
+         *
+         * This endpoint is intentionally usable by arbitrary
+         * merchant storefronts.
+         *
+         * Example:
+         *
+         * https://lavishme.tukaatu.com
+         * https://abcstore.com
+         * https://mystore.com
+         * https://another-store.com
+         *
+         * No database/config allowlist is required.
+         */
+        if ($isDynamicPublicCorsEndpoint) {
+            return $this->handleDynamicPublicCors(
+                $request,
+                $next,
+                $origin
+            );
+        }
+
+        /*
+         * ---------------------------------------------------------
+         * NORMAL API CORS
+         * ---------------------------------------------------------
+         *
+         * Normal APIs remain restricted to known origins.
+         */
+        if (!in_array($origin, self::ALLOWED_ORIGINS, true)) {
+            /*
+             * Do NOT send Access-Control-Allow-Origin for an
+             * unapproved normal API origin.
+             *
+             * Let the request continue normally. The browser
+             * will enforce CORS.
+             */
+            return $next($request);
+        }
+
+        $response = $next($request);
+
+        $this->addNormalCorsHeaders(
+            $response,
+            $origin
+        );
+
+        return $response;
+    }
+
+    /**
+     * Handle the public pricing endpoint.
+     */
+    private function handleDynamicPublicCors(
+        Request $request,
+        Closure $next,
+        string $origin
+    ): Response {
+        /*
+         * Preflight request.
+         *
+         * IMPORTANT:
+         * Return here instead of calling $next().
+         *
+         * This guarantees Laravel's normal route handling does
+         * not interfere with the OPTIONS request.
          */
         if ($request->isMethod('OPTIONS')) {
             $response = response('', 204);
 
-            return $this->addCorsHeaders(
+            $this->addPublicCorsHeaders(
                 $response,
-                $origin,
-                $request
+                $origin
             );
+
+            return $response;
         }
 
         /*
@@ -53,105 +146,118 @@ class ApiCorsMiddleware
          */
         $response = $next($request);
 
-        return $this->addCorsHeaders(
+        $this->addPublicCorsHeaders(
             $response,
-            $origin,
-            $request
+            $origin
         );
+
+        return $response;
     }
 
     /**
-     * Determine whether the request is the public pricing endpoint.
+     * CORS headers for the public pricing endpoint.
      */
-    private function isPublicPricingEndpoint(
-        Request $request
-    ): bool {
-        return $request->is(self::PUBLIC_PRICING_PATH);
-    }
-
-    /**
-     * Add CORS response headers.
-     */
-    private function addCorsHeaders(
+    private function addPublicCorsHeaders(
         Response $response,
-        ?string $origin,
-        Request $request
-    ): Response {
+        string $origin
+    ): void {
         /*
-         * No Origin means this is not a browser CORS request.
-         */
-        if (!$origin) {
-            return $response;
-        }
-
-        /*
-         * IMPORTANT:
-         *
-         * We intentionally reflect the requesting Origin.
+         * Reflect the requesting storefront's origin.
          *
          * This allows:
          *
-         * https://abcstore.com
-         * https://xyzstore.com
-         * https://lavishme.tukaatu.com
-         * https://anything.example.com
+         * Origin: https://lavishme.tukaatu.com
          *
-         * without maintaining a database/config list of domains.
+         * to receive:
+         *
+         * Access-Control-Allow-Origin:
+         * https://lavishme.tukaatu.com
+         *
+         * And:
+         *
+         * Origin: https://abcstore.com
+         *
+         * to receive:
+         *
+         * Access-Control-Allow-Origin:
+         * https://abcstore.com
          */
         $response->headers->set(
             'Access-Control-Allow-Origin',
             $origin
         );
 
-        /*
-         * The response varies depending on Origin.
-         */
-        $response->headers->set(
-            'Vary',
-            'Origin'
-        );
-
-        /*
-         * Public pricing only needs POST and OPTIONS.
-         */
         $response->headers->set(
             'Access-Control-Allow-Methods',
             'POST, OPTIONS'
         );
 
-        /*
-         * Allow the headers browsers commonly send.
-         *
-         * "*" is also acceptable for non-credentialed CORS,
-         * but explicitly listing them is safer/predictable.
-         */
         $response->headers->set(
             'Access-Control-Allow-Headers',
             'Content-Type, Accept, Authorization, X-Requested-With'
         );
 
         /*
-         * Browser can cache the preflight result for 24 hours.
+         * Do not enable credentialed browser requests for this
+         * public endpoint unless the endpoint actually needs
+         * cookies/session authentication.
          */
+        $response->headers->remove(
+            'Access-Control-Allow-Credentials'
+        );
+
         $response->headers->set(
             'Access-Control-Max-Age',
             '86400'
         );
 
         /*
-         * IMPORTANT:
-         *
-         * This endpoint is public and should not use browser
-         * credentials/cookies.
-         *
-         * Therefore do NOT send:
-         *
-         * Access-Control-Allow-Credentials: true
+         * Very important when Access-Control-Allow-Origin is
+         * dynamically generated from Origin.
          */
-        $response->headers->remove(
-            'Access-Control-Allow-Credentials'
+        $response->headers->set(
+            'Vary',
+            'Origin',
+            false
+        );
+    }
+
+    /**
+     * CORS headers for normal restricted APIs.
+     */
+    private function addNormalCorsHeaders(
+        Response $response,
+        string $origin
+    ): void {
+        $response->headers->set(
+            'Access-Control-Allow-Origin',
+            $origin
         );
 
-        return $response;
+        $response->headers->set(
+            'Access-Control-Allow-Methods',
+            'GET, POST, PUT, PATCH, DELETE, OPTIONS'
+        );
+
+        $response->headers->set(
+            'Access-Control-Allow-Headers',
+            'Content-Type, Accept, Authorization, X-Requested-With'
+        );
+
+        $response->headers->set(
+            'Access-Control-Allow-Credentials',
+            'true'
+        );
+
+        $response->headers->set(
+            'Access-Control-Max-Age',
+            '86400'
+        );
+
+        $response->headers->set(
+            'Vary',
+            'Origin',
+            false
+        );
     }
 }

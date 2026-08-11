@@ -17,9 +17,10 @@ use Throwable;
 class StoreIntegrationApplicationService
 {
     /**
-     * Only these document groups are mandatory.
+     * ONLY these document groups are mandatory.
      *
-     * Each group may contain ONE OR MANY files.
+     * pan_vat  -> required
+     * owner_id -> required
      */
     private const REQUIRED_DOCUMENTS = [
         'pan_vat',
@@ -28,6 +29,8 @@ class StoreIntegrationApplicationService
 
     /**
      * All supported document groups.
+     *
+     * Everything except REQUIRED_DOCUMENTS is optional.
      */
     private const DOCUMENT_TYPES = [
         'business_registration',
@@ -115,8 +118,11 @@ class StoreIntegrationApplicationService
                      * =====================================================
                      * Duplicate merchant validation
                      * =====================================================
+                     *
+                     * Nullable registration_number is handled safely.
+                     * A NULL registration number must NOT cause
+                     * duplicate matches.
                      */
-
                     $this->ensureNoDuplicateMerchant(
                         $data,
                         $merchant?->id,
@@ -135,10 +141,17 @@ class StoreIntegrationApplicationService
                      *
                      * are mandatory.
                      *
+                     * NOT required:
+                     *
+                     *   business_registration
+                     *   bank_proof
+                     *   office_photo
+                     *   authorisation_letter
+                     *   additional_documents
+                     *
                      * Existing documents are considered during
                      * resubmission.
                      */
-
                     $this->ensureRequiredDocumentsExist(
                         $merchant,
                         $documents
@@ -199,7 +212,6 @@ class StoreIntegrationApplicationService
                      */
 
                     $merchant->forceFill([
-
                         'application_source' =>
                             Merchant::SOURCE_STORE_MANAGER,
 
@@ -242,8 +254,14 @@ class StoreIntegrationApplicationService
                         'pan_vat_number' =>
                             $data['business']['pan_vat_number'],
 
+                        /*
+                         * registration_number is OPTIONAL.
+                         *
+                         * If it is not supplied, NULL is stored.
+                         */
                         'registration_number' =>
-                            $data['business']['registration_number'],
+                            $data['business']['registration_number']
+                            ?? null,
 
                         'address' =>
                             $data['business']['registered_address'],
@@ -307,7 +325,6 @@ class StoreIntegrationApplicationService
 
                         'rejected_reason' =>
                             null,
-
                     ])->save();
 
                     /*
@@ -327,8 +344,6 @@ class StoreIntegrationApplicationService
                      * =====================================================
                      * Save documents
                      * =====================================================
-                     *
-                     * Optional groups are accepted if supplied.
                      *
                      * Required:
                      *   pan_vat
@@ -387,6 +402,12 @@ class StoreIntegrationApplicationService
 
     /**
      * Prevent duplicate merchant/application records.
+     *
+     * registration_number is nullable.
+     *
+     * IMPORTANT:
+     * We only check registration_number when it actually
+     * contains a value.
      */
     private function ensureNoDuplicateMerchant(
         array $data,
@@ -396,6 +417,15 @@ class StoreIntegrationApplicationService
         $business = $data['business'];
 
         $store = $data['store'];
+
+        $registrationNumber =
+            $business['registration_number']
+            ?? null;
+
+        $email =
+            strtolower(
+                $business['email']
+            );
 
         $duplicate = Merchant::query()
             ->when(
@@ -410,46 +440,82 @@ class StoreIntegrationApplicationService
             ->where(function ($query) use (
                 $business,
                 $store,
-                $applicationNumber
+                $applicationNumber,
+                $registrationNumber,
+                $email
             ) {
-                $query
-                    ->where(
-                        'application_number',
-                        $applicationNumber
-                    )
+                /*
+                 * Application number.
+                 */
+                $query->where(
+                    'application_number',
+                    $applicationNumber
+                );
 
-                    ->orWhere(function ($query) use ($store) {
-                        $query
-                            ->where(
-                                'application_source',
-                                Merchant::SOURCE_STORE_MANAGER
-                            )
-                            ->where(
-                                'external_store_id',
-                                $store['external_store_id']
-                            )
-                            ->where(
-                                'external_platform',
-                                $store['platform']
-                            );
-                    })
+                /*
+                 * Store Manager external store.
+                 */
+                $query->orWhere(function ($query) use ($store) {
+                    $query
+                        ->where(
+                            'application_source',
+                            Merchant::SOURCE_STORE_MANAGER
+                        )
+                        ->where(
+                            'external_store_id',
+                            $store['external_store_id']
+                        )
+                        ->where(
+                            'external_platform',
+                            $store['platform']
+                        );
+                });
 
-                    ->orWhere(
-                        'pan_vat_number',
+                /*
+                 * PAN/VAT number.
+                 *
+                 * This is required, so it is always checked.
+                 */
+                if (
+                    ! empty(
                         $business['pan_vat_number']
                     )
-
-                    ->orWhere(
-                        'registration_number',
-                        $business['registration_number']
-                    )
-
-                    ->orWhere(
-                        'email',
-                        strtolower(
-                            $business['email']
-                        )
+                ) {
+                    $query->orWhere(
+                        'pan_vat_number',
+                        $business['pan_vat_number']
                     );
+                }
+
+                /*
+                 * Registration number is OPTIONAL.
+                 *
+                 * DO NOT generate:
+                 *
+                 * registration_number = NULL
+                 *
+                 * because that would match every existing
+                 * NULL registration number.
+                 */
+                if (
+                    $registrationNumber !== null &&
+                    trim((string) $registrationNumber) !== ''
+                ) {
+                    $query->orWhere(
+                        'registration_number',
+                        trim((string) $registrationNumber)
+                    );
+                }
+
+                /*
+                 * Email.
+                 */
+                if ($email !== '') {
+                    $query->orWhere(
+                        'email',
+                        $email
+                    );
+                }
             })
             ->first();
 
@@ -603,14 +669,6 @@ class StoreIntegrationApplicationService
 
     /**
      * Save multiple documents per document type.
-     *
-     * Example:
-     *
-     * owner_id => [
-     *     file1,
-     *     file2,
-     *     file3,
-     * ]
      */
     private function saveDocuments(
         Merchant $merchant,
@@ -619,7 +677,6 @@ class StoreIntegrationApplicationService
         array &$oldFiles
     ): void {
         foreach ($documents as $type => $documentList) {
-
             /*
              * Ignore empty document groups.
              */
@@ -646,21 +703,6 @@ class StoreIntegrationApplicationService
             /*
              * If a document group is submitted again,
              * replace the old files for that group.
-             *
-             * Example:
-             *
-             * Existing owner_id:
-             *
-             *   A
-             *   B
-             *
-             * New owner_id:
-             *
-             *   C
-             *
-             * Result:
-             *
-             *   C
              */
             $this->removeExistingDocumentsForType(
                 $merchant,
@@ -672,7 +714,6 @@ class StoreIntegrationApplicationService
              * Save each document.
              */
             foreach ($documentList as $document) {
-
                 if (
                     ! is_array($document) ||
                     empty($document['url'])
@@ -707,7 +748,6 @@ class StoreIntegrationApplicationService
             ->get();
 
         foreach ($existingDocuments as $existing) {
-
             if ($existing->file_path) {
                 $oldFiles[] = [
                     'disk' =>
@@ -756,7 +796,6 @@ class StoreIntegrationApplicationService
         }
 
         try {
-
             /*
              * =========================================================
              * Download document
@@ -777,8 +816,6 @@ class StoreIntegrationApplicationService
 
                         /*
                          * Do not follow redirects automatically.
-                         *
-                         * This prevents redirect-based SSRF bypasses.
                          */
                         'allow_redirects' =>
                             false,
@@ -787,7 +824,6 @@ class StoreIntegrationApplicationService
                             true,
                     ])
                     ->get($sourceUrl);
-
             } catch (Throwable) {
                 throw ValidationException::withMessages([
                     "documents.{$type}.url" => [
@@ -843,8 +879,8 @@ class StoreIntegrationApplicationService
             }
 
             /*
-             * If the sender supplied size_bytes,
-             * verify it against the actual downloaded file.
+             * If sender supplied size_bytes,
+             * verify against actual downloaded file.
              */
             if (
                 isset($document['size_bytes']) &&
@@ -875,7 +911,7 @@ class StoreIntegrationApplicationService
             /*
              * Office photo is image-only.
              *
-             * Other document groups can contain:
+             * Other document groups:
              *
              * PDF
              * JPEG
@@ -1010,7 +1046,7 @@ class StoreIntegrationApplicationService
 
             /*
              * Keep track of newly created file so it can be
-             * removed if the transaction fails.
+             * removed if transaction fails.
              */
             $newFiles[] = [
                 'disk' =>
@@ -1025,11 +1061,8 @@ class StoreIntegrationApplicationService
              * Original filename
              * =========================================================
              *
-             * This is OPTIONAL.
-             *
-             * Office photo does NOT require a name.
+             * OPTIONAL.
              */
-
             $originalName =
                 $this->sanitizeOriginalName(
                     $document['original_name']
@@ -1163,11 +1196,7 @@ class StoreIntegrationApplicationService
              *
              * create(), NOT updateOrCreate().
              *
-             * This allows multiple documents:
-             *
-             * owner_id #1
-             * owner_id #2
-             * owner_id #3
+             * Multiple files per document type are supported.
              */
             MerchantDocument::create([
                 'merchant_id' =>
@@ -1178,9 +1207,7 @@ class StoreIntegrationApplicationService
 
                 ...$values,
             ]);
-
         } finally {
-
             /*
              * Always remove temporary file.
              */
@@ -1253,7 +1280,6 @@ class StoreIntegrationApplicationService
         ) {
             $addresses[] = $host;
         } else {
-
             $records = @dns_get_record(
                 $host,
                 DNS_A | DNS_AAAA
@@ -1261,7 +1287,6 @@ class StoreIntegrationApplicationService
 
             if (is_array($records)) {
                 foreach ($records as $record) {
-
                     if (! empty($record['ip'])) {
                         $addresses[] =
                             $record['ip'];
@@ -1306,7 +1331,6 @@ class StoreIntegrationApplicationService
          * Prevent private/reserved IP access.
          */
         foreach ($addresses as $address) {
-
             if (
                 ! $this->isPublicIpAddress(
                     $address
@@ -1358,14 +1382,12 @@ class StoreIntegrationApplicationService
          * and tracked in merchant_documents.
          */
         if (! empty($payload['documents'])) {
-
             $payload['documents'] =
                 collect(
                     $payload['documents']
                 )
                     ->map(
                         function ($documents) {
-
                             if (
                                 ! is_array(
                                     $documents
@@ -1379,7 +1401,6 @@ class StoreIntegrationApplicationService
                             )
                                 ->map(
                                     function ($document) {
-
                                         if (
                                             ! is_array(
                                                 $document
@@ -1449,7 +1470,6 @@ class StoreIntegrationApplicationService
         array $files
     ): void {
         foreach ($files as $file) {
-
             $disk =
                 $file['disk']
                 ?? self::DOCUMENT_DISK;

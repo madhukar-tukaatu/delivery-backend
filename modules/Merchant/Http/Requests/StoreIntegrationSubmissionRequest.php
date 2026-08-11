@@ -190,7 +190,7 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             'business.registration_number' => [
-                'required',
+                'nullable',
                 'string',
                 'max:100',
             ],

@@ -10,7 +10,6 @@ use App\Http\Middleware\RoleMiddleware;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
-use Illuminate\Http\Middleware\HandleCors;
 use Modules\Merchant\Http\Middleware\AuthenticateMerchantApiKey;
 use Modules\Merchant\Http\Middleware\AuthenticateStoreIntegrationToken;
 
@@ -39,40 +38,14 @@ return Application::configure(
 
         /*
         |--------------------------------------------------------------------------
-        | CORS
+        | API CORS
         |--------------------------------------------------------------------------
         |
-        | Remove Laravel's default HandleCors middleware.
+        | ApiCorsMiddleware handles:
         |
-        | ApiCorsMiddleware is now responsible for CORS handling.
-        |
-        | This is important because the public pricing endpoint:
-        |
-        |     /api/v1/public/pricing/estimate
-        |
-        | must accept requests from arbitrary merchant storefronts such as:
-        |
-        |     https://lavishme.tukaatu.com
-        |     https://abcstore.com
-        |     https://store1.com
-        |     https://store2.com
-        |
-        | without adding every store domain to config/cors.php.
-        |
-        */
-
-        $middleware->remove(HandleCors::class);
-
-        /*
-        |--------------------------------------------------------------------------
-        | API middleware
-        |--------------------------------------------------------------------------
-        |
-        | Our custom CORS middleware handles:
-        |
-        | 1. Dynamic CORS for public pricing estimate.
-        | 2. Restricted CORS for normal APIs.
-        | 3. OPTIONS preflight requests.
+        | 1. Normal API CORS
+        | 2. Dynamic public-store origins
+        | 3. Public pricing estimate CORS
         |
         */
 
@@ -89,21 +62,44 @@ return Application::configure(
         */
 
         $middleware->alias([
-            'role' => RoleMiddleware::class,
 
-            'gateway.auth' => GatewayAuthMiddleware::class,
+            /*
+            |--------------------------------------------------------------------------
+            | IMPORTANT
+            |--------------------------------------------------------------------------
+            | Some existing routes still use:
+            |
+            |     'api.cors'
+            |
+            | Register the alias so Laravel can resolve it.
+            */
 
-            'permission' => PermissionMiddleware::class,
+            'api.cors' =>
+                ApiCorsMiddleware::class,
 
-            'branch.scope' => BranchScopeMiddleware::class,
+            'role' =>
+                RoleMiddleware::class,
 
-            'route.permission' => CheckRoutePermission::class,
+            'gateway.auth' =>
+                GatewayAuthMiddleware::class,
 
-            'merchant.api-key' => AuthenticateMerchantApiKey::class,
+            'permission' =>
+                PermissionMiddleware::class,
 
-            'marketplace.api-key' => AuthenticateMarketplaceApiKey::class,
+            'branch.scope' =>
+                BranchScopeMiddleware::class,
 
-            'store.integration.token' => AuthenticateStoreIntegrationToken::class,
+            'route.permission' =>
+                CheckRoutePermission::class,
+
+            'merchant.api-key' =>
+                AuthenticateMerchantApiKey::class,
+
+            'marketplace.api-key' =>
+                AuthenticateMarketplaceApiKey::class,
+
+            'store.integration.token' =>
+                AuthenticateStoreIntegrationToken::class,
         ]);
     })
 

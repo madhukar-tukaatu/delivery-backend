@@ -421,10 +421,14 @@ Route::prefix('v1/marketplace/pricing')
 
 Route::prefix('v1/public/pricing')
     ->name('public.pricing.')
-    ->middleware('throttle:30,1')
+    ->middleware([
+        'api.cors',
+        'throttle:30,1',
+    ])
     ->group(function (): void {
 
-        Route::post(
+        Route::match(
+            ['POST', 'OPTIONS'],
             'estimate',
             PublicPricingEstimateController::class
         )->name('estimate');

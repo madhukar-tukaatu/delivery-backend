@@ -69,6 +69,9 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             }
         }
 
+        /*
+         * Always use the application number from the route.
+         */
         $this->merge([
             'application_number' =>
                 $this->route('applicationNumber'),
@@ -78,9 +81,13 @@ class StoreIntegrationSubmissionRequest extends FormRequest
     public function rules(): array
     {
         return [
+
             /*
+             * =========================================================
              * Application
+             * =========================================================
              */
+
             'application_number' => [
                 'required',
                 'string',
@@ -89,8 +96,11 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             /*
+             * =========================================================
              * Store
+             * =========================================================
              */
+
             'store' => [
                 'required',
                 'array',
@@ -139,8 +149,11 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             /*
+             * =========================================================
              * Business
+             * =========================================================
              */
+
             'business' => [
                 'required',
                 'array',
@@ -207,15 +220,18 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             /*
+             * =========================================================
              * Pickup location
+             * =========================================================
              */
+
             'pickup_location' => [
                 'required',
                 'array',
             ],
 
             'pickup_location.name' => [
-                'required',
+                'nullable',
                 'string',
                 'max:255',
             ],
@@ -322,29 +338,36 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             /*
+             * =========================================================
              * Documents
+             * =========================================================
              *
-             * Every document type is an array.
+             * REQUIRED:
              *
-             * Therefore:
+             *   pan_vat
+             *   owner_id
              *
-             * owner_id => one or many
-             * pan_vat => one or many
-             * etc.
+             * OPTIONAL:
+             *
+             *   business_registration
+             *   bank_proof
+             *   office_photo
+             *   authorisation_letter
+             *   additional_documents
+             *
+             * Every group can contain multiple documents.
              */
+
             'documents' => [
                 'required',
                 'array',
             ],
 
             /*
+             * ---------------------------------------------------------
              * Required document groups
+             * ---------------------------------------------------------
              */
-            'documents.business_registration' => [
-                'required',
-                'array',
-                'min:1',
-            ],
 
             'documents.pan_vat' => [
                 'required',
@@ -358,15 +381,22 @@ class StoreIntegrationSubmissionRequest extends FormRequest
                 'min:1',
             ],
 
-            'documents.bank_proof' => [
-                'required',
+            /*
+             * ---------------------------------------------------------
+             * Optional document groups
+             * ---------------------------------------------------------
+             */
+
+            'documents.business_registration' => [
+                'nullable',
                 'array',
-                'min:1',
             ],
 
-            /*
-             * Optional document groups
-             */
+            'documents.bank_proof' => [
+                'nullable',
+                'array',
+            ],
+
             'documents.office_photo' => [
                 'nullable',
                 'array',
@@ -383,12 +413,10 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             /*
-             * Every individual document.
+             * ---------------------------------------------------------
+             * Individual documents
+             * ---------------------------------------------------------
              */
-            'documents.business_registration.*' => [
-                'required',
-                'array',
-            ],
 
             'documents.pan_vat.*' => [
                 'required',
@@ -400,29 +428,41 @@ class StoreIntegrationSubmissionRequest extends FormRequest
                 'array',
             ],
 
+            'documents.business_registration.*' => [
+                'nullable',
+                'array',
+            ],
+
             'documents.bank_proof.*' => [
-                'required',
+                'nullable',
                 'array',
             ],
 
             'documents.office_photo.*' => [
-                'required',
+                'nullable',
                 'array',
             ],
 
             'documents.authorisation_letter.*' => [
-                'required',
+                'nullable',
                 'array',
             ],
 
             'documents.additional_documents.*' => [
-                'required',
+                'nullable',
                 'array',
             ],
 
             /*
-             * Common document fields.
+             * ---------------------------------------------------------
+             * Common document fields
+             * ---------------------------------------------------------
+             *
+             * URL is required for an actual document.
+             *
+             * The document name is NOT required.
              */
+
             'documents.*.*.url' => [
                 'required',
                 'url',
@@ -450,8 +490,13 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             /*
-             * Optional metadata for additional documents.
+             * ---------------------------------------------------------
+             * Additional document metadata
+             * ---------------------------------------------------------
+             *
+             * These are optional.
              */
+
             'documents.additional_documents.*.name' => [
                 'nullable',
                 'string',
@@ -465,8 +510,11 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             /*
+             * =========================================================
              * Services
+             * =========================================================
              */
+
             'requested_services' => [
                 'required',
                 'array',
@@ -487,8 +535,11 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             /*
+             * =========================================================
              * Callback
+             * =========================================================
              */
+
             'callback' => [
                 'required',
                 'array',
@@ -508,8 +559,11 @@ class StoreIntegrationSubmissionRequest extends FormRequest
             ],
 
             /*
+             * =========================================================
              * Terms
+             * =========================================================
              */
+
             'terms_accepted' => [
                 'accepted',
             ],
@@ -519,26 +573,51 @@ class StoreIntegrationSubmissionRequest extends FormRequest
     public function messages(): array
     {
         return [
+
             'terms_accepted.accepted' =>
                 'The Tukaatu Express terms must be accepted.',
 
+            /*
+             * Required documents.
+             */
             'documents.required' =>
                 'Store verification documents are required.',
 
-            'documents.business_registration.required' =>
-                'At least one business registration document is required.',
-
             'documents.pan_vat.required' =>
+                'At least one PAN/VAT document is required.',
+
+            'documents.pan_vat.min' =>
                 'At least one PAN/VAT document is required.',
 
             'documents.owner_id.required' =>
                 'At least one owner identification document is required.',
 
-            'documents.bank_proof.required' =>
-                'At least one bank proof document is required.',
+            'documents.owner_id.min' =>
+                'At least one owner identification document is required.',
+
+            /*
+             * Individual document validation.
+             */
+            'documents.pan_vat.*.required' =>
+                'Each PAN/VAT document must contain document information.',
+
+            'documents.owner_id.*.required' =>
+                'Each owner identification document must contain document information.',
+
+            'documents.*.*.url.required' =>
+                'Every document must contain a URL.',
+
+            'documents.*.*.url.url' =>
+                'Every document URL must be a valid URL.',
 
             'documents.*.*.url.starts_with' =>
                 'Every document URL must use HTTPS.',
+
+            'documents.*.*.size_bytes.max' =>
+                'Each document must not exceed 10 MB.',
+
+            'documents.*.*.sha256.regex' =>
+                'The document SHA-256 checksum is invalid.',
         ];
     }
 }

@@ -38,14 +38,16 @@ return Application::configure(
 
         /*
         |--------------------------------------------------------------------------
-        | API CORS
+        | API middleware
         |--------------------------------------------------------------------------
         |
-        | ApiCorsMiddleware handles:
+        | ApiCorsMiddleware is registered ONCE for the complete API stack.
         |
-        | 1. Normal API CORS
-        | 2. Dynamic public-store origins
-        | 3. Public pricing estimate CORS
+        | It handles:
+        | - Admin frontend CORS
+        | - External store CORS
+        | - Public pricing CORS
+        | - Normal API CORS
         |
         */
 
@@ -62,21 +64,6 @@ return Application::configure(
         */
 
         $middleware->alias([
-
-            /*
-            |--------------------------------------------------------------------------
-            | IMPORTANT
-            |--------------------------------------------------------------------------
-            | Some existing routes still use:
-            |
-            |     'api.cors'
-            |
-            | Register the alias so Laravel can resolve it.
-            */
-
-            'api.cors' =>
-                ApiCorsMiddleware::class,
-
             'role' =>
                 RoleMiddleware::class,
 

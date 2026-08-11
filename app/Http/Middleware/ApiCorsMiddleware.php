@@ -10,8 +10,9 @@ use Symfony\Component\HttpFoundation\Response;
 class ApiCorsMiddleware extends LaravelHandleCors
 {
     /**
-     * The endpoint that is allowed to be called
-     * from any browser origin.
+     * Public pricing endpoint.
+     *
+     * This endpoint is intentionally available from ANY browser origin.
      */
     private const PUBLIC_PRICING_PATH = 'api/v1/public/pricing/estimate';
 
@@ -23,37 +24,44 @@ class ApiCorsMiddleware extends LaravelHandleCors
         Closure $next
     ): Response {
         /*
-         * Only override Laravel's normal CORS behavior
-         * for the public pricing estimate endpoint.
+         * Special CORS handling for the public pricing endpoint.
          */
         if ($this->isPublicPricingEndpoint($request)) {
-            return $this->handlePublicPricingCors($request, $next);
+            return $this->handlePublicPricingCors(
+                $request,
+                $next
+            );
         }
 
         /*
-         * EVERYTHING ELSE continues to use Laravel's
-         * normal HandleCors implementation.
+         * Every other API continues through Laravel's
+         * standard HandleCors implementation.
          *
-         * That means config/cors.php continues to control
-         * the allowed origins for all other APIs.
+         * Therefore config/cors.php controls CORS for
+         * all other API endpoints.
          */
-        return parent::handle($request, $next);
+        return parent::handle(
+            $request,
+            $next
+        );
     }
 
     /**
-     * Determine whether the request is for the public
-     * pricing estimate endpoint.
+     * Check whether the request is for the public pricing
+     * estimate endpoint.
      */
-    private function isPublicPricingEndpoint(Request $request): bool
-    {
-        return $request->is(self::PUBLIC_PRICING_PATH);
+    private function isPublicPricingEndpoint(
+        Request $request
+    ): bool {
+        return $request->is(
+            self::PUBLIC_PRICING_PATH
+        );
     }
 
     /**
      * Handle CORS for the public pricing endpoint.
      *
-     * This endpoint intentionally accepts requests from
-     * any browser origin.
+     * ANY Origin is allowed.
      */
     private function handlePublicPricingCors(
         Request $request,
@@ -62,10 +70,10 @@ class ApiCorsMiddleware extends LaravelHandleCors
         $origin = $request->headers->get('Origin');
 
         /*
-         * Browser preflight request.
+         * Handle browser preflight.
          *
-         * We handle it here before Laravel tries to find
-         * a route for OPTIONS.
+         * This happens BEFORE Laravel attempts to resolve
+         * the POST route.
          */
         if ($request->isMethod('OPTIONS')) {
             $response = response('', 204);
@@ -83,6 +91,12 @@ class ApiCorsMiddleware extends LaravelHandleCors
          */
         $response = $next($request);
 
+        /*
+         * Add CORS headers to the actual response as well.
+         *
+         * This is important because fixing OPTIONS alone
+         * is not enough.
+         */
         $this->addPublicPricingCorsHeaders(
             $response,
             $origin
@@ -93,20 +107,42 @@ class ApiCorsMiddleware extends LaravelHandleCors
 
     /**
      * Add CORS headers for the public pricing endpoint.
+     *
+     * IMPORTANT:
+     *
+     * We do NOT use:
+     *
+     * Access-Control-Allow-Origin: *
+     *
+     * Instead, when the browser sends an Origin header,
+     * we echo that origin back.
+     *
+     * This effectively allows ANY origin.
      */
     private function addPublicPricingCorsHeaders(
         Response $response,
         ?string $origin
     ): void {
         /*
-         * If this is a browser request, echo its origin.
+         * Allow ANY browser origin.
          *
-         * This effectively allows ANY origin while remaining
-         * compatible with browsers that reject:
+         * Example:
          *
-         * Access-Control-Allow-Origin: *
+         * Origin: https://lavishme.tukaatu.com
          *
-         * when credentials are involved.
+         * becomes:
+         *
+         * Access-Control-Allow-Origin:
+         * https://lavishme.tukaatu.com
+         *
+         * Another website:
+         *
+         * Origin: https://example.com
+         *
+         * becomes:
+         *
+         * Access-Control-Allow-Origin:
+         * https://example.com
          */
         if ($origin !== null && $origin !== '') {
             $response->headers->set(
@@ -114,22 +150,38 @@ class ApiCorsMiddleware extends LaravelHandleCors
                 $origin
             );
 
+            /*
+             * Required when Access-Control-Allow-Origin
+             * changes depending on Origin.
+             */
             $response->headers->set(
                 'Vary',
                 'Origin'
             );
         }
 
+        /*
+         * Public pricing only needs POST + OPTIONS.
+         */
         $response->headers->set(
             'Access-Control-Allow-Methods',
             'POST, OPTIONS'
         );
 
+        /*
+         * Allow all request headers.
+         *
+         * This is useful because your frontend may send
+         * Content-Type, Accept, Authorization, etc.
+         */
         $response->headers->set(
             'Access-Control-Allow-Headers',
-            'Content-Type, Accept, Authorization, X-Requested-With'
+            '*'
         );
 
+        /*
+         * Cache successful preflight responses.
+         */
         $response->headers->set(
             'Access-Control-Max-Age',
             '86400'

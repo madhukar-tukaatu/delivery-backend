@@ -9,270 +9,136 @@ use Symfony\Component\HttpFoundation\Response;
 class ApiCorsMiddleware
 {
     /**
-     * Public endpoints that can be called by external storefronts.
+     * Public endpoints that any external storefront may call.
+     * These endpoints reflect the requesting Origin.
      */
     private const PUBLIC_DYNAMIC_CORS_PATHS = [
         'api/v1/public/pricing/estimate',
     ];
 
     /**
-     * Fixed origins allowed for normal/admin APIs.
+     * Fixed origins allowed for normal / admin APIs.
      */
     private const ALLOWED_ORIGINS = [
         'https://tukaatuexpress.com',
         'https://www.tukaatuexpress.com',
-
         'https://tukaatu.com',
         'https://www.tukaatu.com',
-
         'https://fca.com.np',
         'https://www.fca.com.np',
-
         'https://api.tukaatu.com',
         'https://api.fca.com.np',
-
-        'https://tukaatuexpress.com',
-        'https://www.tukaatuexpress.com',
-
         'http://localhost:3000',
         'http://localhost:3001',
         'http://localhost:3002',
         'http://localhost:3003',
-
         'http://127.0.0.1:3000',
         'http://127.0.0.1:3001',
         'http://127.0.0.1:3002',
         'http://127.0.0.1:3003',
     ];
 
-    public function handle(
-        Request $request,
-        Closure $next
-    ): Response {
+    public function handle(Request $request, Closure $next): Response
+    {
         $origin = $request->headers->get('Origin');
 
-        /*
-        |--------------------------------------------------------------------------
-        | Non-browser request
-        |--------------------------------------------------------------------------
-        */
-
+        // Non-browser request – just continue
         if (!$origin) {
             return $next($request);
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Normalize path
-        |--------------------------------------------------------------------------
-        */
-
-        $path = trim($request->path(), '/');
-
-        /*
-        |--------------------------------------------------------------------------
-        | PUBLIC EXTERNAL STORE PRICING
-        |--------------------------------------------------------------------------
-        |
-        | Example:
-        |
-        | https://lavishme.tukaatu.com
-        |
-        | can call:
-        |
-        | POST /api/v1/public/pricing/estimate
-        |
-        */
-
-        if (in_array(
-            $path,
-            self::PUBLIC_DYNAMIC_CORS_PATHS,
-            true
-        )) {
-            return $this->handlePublicPricingCors(
-                $request,
-                $next,
-                $origin
-            );
+        // -------------------------------------------------
+        // PUBLIC EXTERNAL STOREFRONT ENDPOINTS
+        // -------------------------------------------------
+        // Any origin is allowed (lavishme.tukaatu.com, acstore.com, …)
+        if ($this->isPublicPricingPath($request)) {
+            return $this->handlePublicPricingCors($request, $next, $origin);
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | NORMAL API CORS
-        |--------------------------------------------------------------------------
-        */
-
+        // -------------------------------------------------
+        // NORMAL / ADMIN API CORS
+        // -------------------------------------------------
         if (!in_array($origin, self::ALLOWED_ORIGINS, true)) {
-            /*
-             * Do not add CORS headers for unknown normal API origins.
-             *
-             * The request itself is still allowed to continue.
-             * The browser will block access to the response.
-             */
+            // Unknown origin → no CORS headers (browser will block)
             return $next($request);
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | OPTIONS
-        |--------------------------------------------------------------------------
-        */
-
         if ($request->isMethod('OPTIONS')) {
             $response = response('', 204);
-
-            $this->addNormalCorsHeaders(
-                $response,
-                $origin
-            );
-
+            $this->addNormalCorsHeaders($response, $origin);
             return $response;
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Normal request
-        |--------------------------------------------------------------------------
-        */
-
         $response = $next($request);
-
-        $this->addNormalCorsHeaders(
-            $response,
-            $origin
-        );
-
+        $this->addNormalCorsHeaders($response, $origin);
         return $response;
     }
 
     /**
-     * Handle external storefront pricing CORS.
+     * Robust path check – works with or without leading slash / api prefix issues.
      */
+    private function isPublicPricingPath(Request $request): bool
+    {
+        // Most reliable Laravel helper
+        if ($request->is('api/v1/public/pricing/estimate')) {
+            return true;
+        }
+
+        // Fallback for edge cases
+        $path = trim($request->path(), '/');
+        return $path === 'api/v1/public/pricing/estimate'
+            || str_ends_with($path, '/api/v1/public/pricing/estimate');
+    }
+
     private function handlePublicPricingCors(
         Request $request,
         Closure $next,
         string $origin
     ): Response {
-        /*
-        |--------------------------------------------------------------------------
-        | Preflight
-        |--------------------------------------------------------------------------
-        */
-
+        // Preflight
         if ($request->isMethod('OPTIONS')) {
             $response = response('', 204);
-
-            $this->addPublicCorsHeaders(
-                $response,
-                $origin
-            );
-
+            $this->addPublicCorsHeaders($response, $origin);
             return $response;
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Actual POST
-        |--------------------------------------------------------------------------
-        */
-
+        // Actual request
         $response = $next($request);
-
-        $this->addPublicCorsHeaders(
-            $response,
-            $origin
-        );
-
+        $this->addPublicCorsHeaders($response, $origin);
         return $response;
     }
 
     /**
-     * CORS headers for the public pricing endpoint.
+     * CORS headers for public pricing – any origin is reflected.
      */
-    private function addPublicCorsHeaders(
-        Response $response,
-        string $origin
-    ): void {
-        $response->headers->set(
-            'Access-Control-Allow-Origin',
-            $origin
-        );
-
-        $response->headers->set(
-            'Access-Control-Allow-Methods',
-            'POST, OPTIONS'
-        );
-
+    private function addPublicCorsHeaders(Response $response, string $origin): void
+    {
+        $response->headers->set('Access-Control-Allow-Origin', $origin);
+        $response->headers->set('Access-Control-Allow-Methods', 'POST, OPTIONS');
         $response->headers->set(
             'Access-Control-Allow-Headers',
-            'Content-Type, Accept, Authorization, X-Requested-With'
+            'Content-Type, Accept, Authorization, X-Requested-With, X-Requested-With'
         );
+        $response->headers->set('Access-Control-Max-Age', '86400');
+        $response->headers->set('Vary', 'Origin');
 
-        /*
-        |--------------------------------------------------------------------------
-        | Credentials
-        |--------------------------------------------------------------------------
-        |
-        | Public pricing does not require browser cookies.
-        |
-        */
-
-        $response->headers->remove(
-            'Access-Control-Allow-Credentials'
-        );
-
-        $response->headers->set(
-            'Access-Control-Max-Age',
-            '86400'
-        );
-
-        /*
-        |--------------------------------------------------------------------------
-        | Dynamic origin requires Vary
-        |--------------------------------------------------------------------------
-        */
-
-        $response->headers->set(
-            'Vary',
-            'Origin'
-        );
+        // Public endpoint must never send credentials
+        $response->headers->remove('Access-Control-Allow-Credentials');
     }
 
-    /**
-     * CORS headers for normal APIs.
-     */
-    private function addNormalCorsHeaders(
-        Response $response,
-        string $origin
-    ): void {
-        $response->headers->set(
-            'Access-Control-Allow-Origin',
-            $origin
-        );
-
+    private function addNormalCorsHeaders(Response $response, string $origin): void
+    {
+        $response->headers->set('Access-Control-Allow-Origin', $origin);
         $response->headers->set(
             'Access-Control-Allow-Methods',
             'GET, POST, PUT, PATCH, DELETE, OPTIONS'
         );
-
         $response->headers->set(
             'Access-Control-Allow-Headers',
             'Content-Type, Accept, Authorization, X-Requested-With'
         );
-
-        $response->headers->set(
-            'Access-Control-Allow-Credentials',
-            'true'
-        );
-
-        $response->headers->set(
-            'Access-Control-Max-Age',
-            '86400'
-        );
-
-        $response->headers->set(
-            'Vary',
-            'Origin'
-        );
+        $response->headers->set('Access-Control-Allow-Credentials', 'true');
+        $response->headers->set('Access-Control-Max-Age', '86400');
+        $response->headers->set('Vary', 'Origin');
     }
 }

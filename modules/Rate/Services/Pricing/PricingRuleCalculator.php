@@ -213,6 +213,24 @@ final class PricingRuleCalculator
         $afterSameDay = $beforeSameDay * $sameDayMultiplier;
         $sameDayCharge = $afterSameDay - $beforeSameDay;
 
+        // Express
+        $expressEnabled = (bool) ($settings->express_enabled ?? true);
+        $expressRequested = $serviceType === 'express';
+        $expressApplied = $expressEnabled && $expressRequested;
+        $expressMultiplier = 1.0;
+
+        if ($expressApplied) {
+            $expressMultiplier = $sameBranch
+                ? max(1, (float) ($settings->local_express_multiplier ?? 1.2))
+                : max(1, (float) ($settings->transfer_express_multiplier ?? 1.3));
+        }
+
+        $afterExpress = $beforeSameDay * $expressMultiplier;
+        $expressCharge = $afterExpress - $beforeSameDay;
+
+        // Use whichever service surcharge applies (express or same_day, not both)
+        $serviceCharge = $sameDayApplied ? $afterSameDay : ($expressApplied ? $afterExpress : $beforeSameDay);
+
         $pickupChargeEnabled = (bool) (
             $settings->pickup_charge_enabled ?? true
         );
@@ -238,7 +256,7 @@ final class PricingRuleCalculator
         }
 
         $subtotalBeforeVat =
-            $afterSameDay + $smallPickupCharge;
+            $serviceCharge + $smallPickupCharge;
 
         $vatEnabled = (bool) (
             $settings->vat_enabled ?? true
@@ -313,6 +331,13 @@ final class PricingRuleCalculator
                     $settings->same_day_cutoff_time
                     ?? '12:00'
                 ),
+            ],
+            'express' => [
+                'enabled' => $expressEnabled,
+                'requested' => $expressRequested,
+                'applied' => $expressApplied,
+                'multiplier' => round($expressMultiplier, 4),
+                'charge' => $this->money($expressCharge),
             ],
             'pickup_minimum' => [
                 'enabled' => $pickupChargeEnabled,

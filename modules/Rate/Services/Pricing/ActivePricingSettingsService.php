@@ -10,8 +10,7 @@ final class ActivePricingSettingsService
     public function active(): PricingSetting
     {
         $settings = PricingSetting::query()
-            ->global()
-            ->active()
+            ->where('is_active', true)
             ->latest('id')
             ->first();
 

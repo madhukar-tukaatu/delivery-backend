@@ -27,6 +27,9 @@ return [
         'local_same_day_multiplier' => 1.5000,
         'transfer_same_day_multiplier' => 2.0000,
 
+        'local_express_multiplier' => 1.2000,
+        'transfer_express_multiplier' => 1.3000,
+
         'same_day_cutoff_time' => '12:00',
 
         'minimum_free_pickup_packets' => 3,
@@ -41,6 +44,7 @@ return [
 
         'fragile_enabled' => true,
         'same_day_enabled' => true,
+        'express_enabled' => true,
         'pickup_charge_enabled' => true,
         'vat_enabled' => true,
     ],

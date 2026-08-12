@@ -26,14 +26,10 @@ final class AdminPricingSettingsController extends Controller
         );
 
         $history = DB::table('pricing_settings')
-            ->where('scope_type', 'global')
-            ->whereNull('branch_transfer_route_id')
             ->orderByDesc('id')
             ->paginate($perPage);
 
         $active = DB::table('pricing_settings')
-            ->where('scope_type', 'global')
-            ->whereNull('branch_transfer_route_id')
             ->where('is_active', true)
             ->orderByDesc('id')
             ->first();
@@ -59,14 +55,12 @@ final class AdminPricingSettingsController extends Controller
     {
         $setting = DB::table('pricing_settings')
             ->where('id', $pricingSetting)
-            ->where('scope_type', 'global')
-            ->whereNull('branch_transfer_route_id')
             ->first();
 
         if (!$setting) {
             return response()->json([
                 'success' => false,
-                'message' => 'Global pricing settings version not found.',
+                'message' => 'Pricing settings version not found.',
             ], 404);
         }
 
@@ -92,14 +86,12 @@ final class AdminPricingSettingsController extends Controller
     ): JsonResponse {
         $existing = DB::table('pricing_settings')
             ->where('id', $pricingSetting)
-            ->where('scope_type', 'global')
-            ->whereNull('branch_transfer_route_id')
             ->first();
 
         if (!$existing) {
             return response()->json([
                 'success' => false,
-                'message' => 'Global pricing settings version not found.',
+                'message' => 'Pricing settings version not found.',
             ], 404);
         }
 
@@ -116,14 +108,12 @@ final class AdminPricingSettingsController extends Controller
     ): JsonResponse {
         $setting = DB::table('pricing_settings')
             ->where('id', $pricingSetting)
-            ->where('scope_type', 'global')
-            ->whereNull('branch_transfer_route_id')
             ->first();
 
         if (!$setting) {
             return response()->json([
                 'success' => false,
-                'message' => 'Global pricing settings version not found.',
+                'message' => 'Pricing settings version not found.',
             ], 404);
         }
 
@@ -156,14 +146,12 @@ final class AdminPricingSettingsController extends Controller
     {
         $setting = DB::table('pricing_settings')
             ->where('id', $pricingSetting)
-            ->where('scope_type', 'global')
-            ->whereNull('branch_transfer_route_id')
             ->first();
 
         if (!$setting) {
             return response()->json([
                 'success' => false,
-                'message' => 'Global pricing settings version not found.',
+                'message' => 'Pricing settings version not found.',
             ], 404);
         }
 
@@ -195,8 +183,6 @@ final class AdminPricingSettingsController extends Controller
         $activate = (bool) ($validated['activate'] ?? false);
         unset($validated['activate']);
 
-        $validated['scope_type'] = 'global';
-        $validated['branch_transfer_route_id'] = null;
         $validated['vat_inclusive'] = true;
 
         $userId = $request->user()?->id;
@@ -252,8 +238,6 @@ final class AdminPricingSettingsController extends Controller
         ?int $userId
     ): void {
         DB::table('pricing_settings')
-            ->where('scope_type', 'global')
-            ->whereNull('branch_transfer_route_id')
             ->where('is_active', true)
             ->update([
                 'is_active' => false,

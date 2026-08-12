@@ -16,8 +16,6 @@ final class BranchTransferRoute extends Model
         'origin_branch_id',
         'destination_branch_id',
         'service_type',
-        'base_rate',
-        'currency',
         'transfer_count',
         'transit_count',
         'total_distance_km',
@@ -29,16 +27,15 @@ final class BranchTransferRoute extends Model
     ];
 
     protected $casts = [
-        'origin_branch_id' => 'integer',
+        'origin_branch_id'      => 'integer',
         'destination_branch_id' => 'integer',
-        'base_rate' => 'decimal:2',
-        'transfer_count' => 'integer',
-        'transit_count' => 'integer',
-        'total_distance_km' => 'decimal:2',
+        'transfer_count'        => 'integer',
+        'transit_count'         => 'integer',
+        'total_distance_km'     => 'decimal:2',
         'total_estimated_hours' => 'integer',
-        'priority' => 'integer',
-        'is_default' => 'boolean',
-        'is_active' => 'boolean',
+        'priority'              => 'integer',
+        'is_default'            => 'boolean',
+        'is_active'             => 'boolean',
     ];
 
     public function originBranch(): BelongsTo

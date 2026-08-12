@@ -10,8 +10,6 @@ use Modules\Rate\Http\Controllers\Api\Admin\AdminPricingReturnRuleController;
 use Modules\Rate\Http\Controllers\Api\Admin\AdminPricingSettingsController;
 use Modules\Rate\Http\Controllers\Api\Admin\AdminPricingTestController;
 use Modules\Rate\Http\Controllers\Api\Admin\AdminServiceTypeController;
-use Modules\Rate\Http\Controllers\Api\Admin\AdminTransferRoutePricingProfileController;
-use Modules\Rate\Http\Controllers\Api\Admin\AdminTransferRoutePricingSettingsController;
 use Modules\Rate\Http\Controllers\Api\MarketplacePricingQuoteController;
 use Modules\Rate\Http\Controllers\Api\PublicPricingEstimateController;
 use Modules\Rate\Http\Controllers\Api\PublicPricingQuoteController;
@@ -34,17 +32,10 @@ Route::middleware('auth:sanctum')
 
         Route::get(
             '/branch-transfer-lanes',
-            [
-                AdminBranchTransferLaneController::class,
-                'index',
-            ]
+            [AdminBranchTransferLaneController::class, 'index']
         )
-            ->middleware(
-                'permission:pricing.transfer_lanes.view'
-            )
-            ->name(
-                'admin.pricing.transfer-lanes.index'
-            )
+            ->middleware('permission:pricing.transfer_lanes.view')
+            ->name('admin.pricing.transfer-lanes.index')
             ->adminMenu(
                 label: 'Transfer Lanes',
                 frontendRoute: '/admin/branch-transfer-lanes',
@@ -54,59 +45,31 @@ Route::middleware('auth:sanctum')
 
         Route::post(
             '/branch-transfer-lanes',
-            [
-                AdminBranchTransferLaneController::class,
-                'store',
-            ]
+            [AdminBranchTransferLaneController::class, 'store']
         )
-            ->middleware(
-                'permission:pricing.transfer_lanes.create'
-            )
-            ->name(
-                'admin.pricing.transfer-lanes.store'
-            );
+            ->middleware('permission:pricing.transfer_lanes.create')
+            ->name('admin.pricing.transfer-lanes.store');
 
         Route::put(
             '/branch-transfer-lanes/{lane}',
-            [
-                AdminBranchTransferLaneController::class,
-                'update',
-            ]
+            [AdminBranchTransferLaneController::class, 'update']
         )
-            ->middleware(
-                'permission:pricing.transfer_lanes.update'
-            )
-            ->name(
-                'admin.pricing.transfer-lanes.update'
-            );
+            ->middleware('permission:pricing.transfer_lanes.update')
+            ->name('admin.pricing.transfer-lanes.update');
 
         Route::patch(
             '/branch-transfer-lanes/{lane}/status',
-            [
-                AdminBranchTransferLaneController::class,
-                'updateStatus',
-            ]
+            [AdminBranchTransferLaneController::class, 'updateStatus']
         )
-            ->middleware(
-                'permission:pricing.transfer_lanes.status'
-            )
-            ->name(
-                'admin.pricing.transfer-lanes.status'
-            );
+            ->middleware('permission:pricing.transfer_lanes.status')
+            ->name('admin.pricing.transfer-lanes.status');
 
         Route::delete(
             '/branch-transfer-lanes/{lane}',
-            [
-                AdminBranchTransferLaneController::class,
-                'destroy',
-            ]
+            [AdminBranchTransferLaneController::class, 'destroy']
         )
-            ->middleware(
-                'permission:pricing.transfer_lanes.delete'
-            )
-            ->name(
-                'admin.pricing.transfer-lanes.destroy'
-            );
+            ->middleware('permission:pricing.transfer_lanes.delete')
+            ->name('admin.pricing.transfer-lanes.destroy');
 
         /*
         |--------------------------------------------------------------------------
@@ -116,17 +79,10 @@ Route::middleware('auth:sanctum')
 
         Route::get(
             '/branch-transfer-routes',
-            [
-                AdminBranchTransferRouteController::class,
-                'index',
-            ]
+            [AdminBranchTransferRouteController::class, 'index']
         )
-            ->middleware(
-                'permission:pricing.transfer_routes.view'
-            )
-            ->name(
-                'admin.pricing.transfer-routes.index'
-            )
+            ->middleware('permission:pricing.transfer_routes.view')
+            ->name('admin.pricing.transfer-routes.index')
             ->adminMenu(
                 label: 'Transfer Routes',
                 frontendRoute: '/admin/branch-transfer-routes',
@@ -136,151 +92,46 @@ Route::middleware('auth:sanctum')
 
         Route::post(
             '/branch-transfer-routes/preview',
-            [
-                AdminBranchTransferRouteController::class,
-                'preview',
-            ]
+            [AdminBranchTransferRouteController::class, 'preview']
         )
-            ->middleware(
-                'permission:pricing.transfer_routes.view'
-            )
-            ->name(
-                'admin.pricing.transfer-routes.preview'
-            );
+            ->middleware('permission:pricing.transfer_routes.view')
+            ->name('admin.pricing.transfer-routes.preview');
 
         Route::post(
             '/branch-transfer-routes',
-            [
-                AdminBranchTransferRouteController::class,
-                'store',
-            ]
+            [AdminBranchTransferRouteController::class, 'store']
         )
-            ->middleware(
-                'permission:pricing.transfer_routes.create'
-            )
-            ->name(
-                'admin.pricing.transfer-routes.store'
-            );
+            ->middleware('permission:pricing.transfer_routes.create')
+            ->name('admin.pricing.transfer-routes.store');
 
         Route::get(
             '/branch-transfer-routes/{transferRoute}',
-            [
-                AdminBranchTransferRouteController::class,
-                'show',
-            ]
+            [AdminBranchTransferRouteController::class, 'show']
         )
             ->whereNumber('transferRoute')
-            ->middleware(
-                'permission:pricing.transfer_routes.view'
-            )
-            ->name(
-                'admin.pricing.transfer-routes.show'
-            );
+            ->middleware('permission:pricing.transfer_routes.view')
+            ->name('admin.pricing.transfer-routes.show');
 
         Route::put(
             '/branch-transfer-routes/{transferRoute}',
-            [
-                AdminBranchTransferRouteController::class,
-                'update',
-            ]
+            [AdminBranchTransferRouteController::class, 'update']
         )
-            ->middleware(
-                'permission:pricing.transfer_routes.update'
-            )
-            ->name(
-                'admin.pricing.transfer-routes.update'
-            );
+            ->middleware('permission:pricing.transfer_routes.update')
+            ->name('admin.pricing.transfer-routes.update');
 
         Route::patch(
             '/branch-transfer-routes/{transferRoute}/status',
-            [
-                AdminBranchTransferRouteController::class,
-                'updateStatus',
-            ]
+            [AdminBranchTransferRouteController::class, 'updateStatus']
         )
-            ->middleware(
-                'permission:pricing.transfer_routes.status'
-            )
-            ->name(
-                'admin.pricing.transfer-routes.status'
-            );
+            ->middleware('permission:pricing.transfer_routes.status')
+            ->name('admin.pricing.transfer-routes.status');
 
         Route::delete(
             '/branch-transfer-routes/{transferRoute}',
-            [
-                AdminBranchTransferRouteController::class,
-                'destroy',
-            ]
+            [AdminBranchTransferRouteController::class, 'destroy']
         )
-            ->middleware(
-                'permission:pricing.transfer_routes.delete'
-            )
-            ->name(
-                'admin.pricing.transfer-routes.destroy'
-            );
-
-        Route::get(
-            '/branch-transfer-routes/{branchTransferRoute}/pricing-settings',
-            [
-                AdminTransferRoutePricingSettingsController::class,
-                'index',
-            ]
-        )->whereNumber('branchTransferRoute');
-
-        Route::post(
-            '/branch-transfer-routes/{branchTransferRoute}/pricing-settings',
-            [
-                AdminTransferRoutePricingSettingsController::class,
-                'store',
-            ]
-        )->whereNumber('branchTransferRoute');
-
-        Route::get(
-            '/branch-transfer-routes/{branchTransferRoute}/pricing-profile',
-            [
-                AdminTransferRoutePricingProfileController::class,
-                'show',
-            ]
-        )->whereNumber('branchTransferRoute');
-
-        Route::put(
-            '/branch-transfer-routes/{branchTransferRoute}/pricing-profile',
-            [
-                AdminTransferRoutePricingProfileController::class,
-                'update',
-            ]
-        )->whereNumber('branchTransferRoute');
-
-        /*
- * Keep use-global before routes containing {pricingSetting}.
- */
-        Route::post(
-            '/branch-transfer-routes/{branchTransferRoute}/pricing-settings/use-global',
-            [
-                AdminTransferRoutePricingSettingsController::class,
-                'useGlobal',
-            ]
-        )->whereNumber('branchTransferRoute');
-
-        Route::post(
-            '/branch-transfer-routes/{branchTransferRoute}/pricing-settings/{pricingSetting}/activate',
-            [
-                AdminTransferRoutePricingSettingsController::class,
-                'activate',
-            ]
-        )
-            ->whereNumber('branchTransferRoute')
-            ->whereNumber('pricingSetting');
-
-        Route::delete(
-            '/branch-transfer-routes/{branchTransferRoute}/pricing-settings/{pricingSetting}',
-            [
-                AdminTransferRoutePricingSettingsController::class,
-                'destroy',
-            ]
-        )
-            ->whereNumber('branchTransferRoute')
-            ->whereNumber('pricingSetting');
+            ->middleware('permission:pricing.transfer_routes.delete')
+            ->name('admin.pricing.transfer-routes.destroy');
     });
 
 Route::prefix('v1/admin')
@@ -323,60 +174,19 @@ Route::prefix('v1/admin')
         Route::get('pricing-quotes/{pricingQuote}', [AdminPricingQuoteController::class, 'show'])->name('pricing-quotes.show');
         Route::delete('pricing-quotes/{pricingQuote}', [AdminPricingQuoteController::class, 'destroy'])->name('pricing-quotes.destroy');
 
-        Route::get(
-            'pricing-defaults/preview',
-            [AdminPricingDefaultsController::class, 'preview']
-        )->name('pricing-defaults.preview');
+        Route::get('pricing-defaults/preview', [AdminPricingDefaultsController::class, 'preview'])->name('pricing-defaults.preview');
+        Route::post('pricing-defaults/import', [AdminPricingDefaultsController::class, 'import'])->name('pricing-defaults.import');
 
-        Route::post(
-            'pricing-defaults/import',
-            [AdminPricingDefaultsController::class, 'import']
-        )->name('pricing-defaults.import');
+        Route::get('pricing-return-rules', [AdminPricingReturnRuleController::class, 'index'])->name('pricing-return-rules.index');
+        Route::put('pricing-return-rules/{pricingReturnRule}', [AdminPricingReturnRuleController::class, 'update'])->name('pricing-return-rules.update');
 
-        Route::get(
-            'pricing-return-rules',
-            [AdminPricingReturnRuleController::class, 'index']
-        )->name('pricing-return-rules.index');
-
-        Route::put(
-            'pricing-return-rules/{pricingReturnRule}',
-            [AdminPricingReturnRuleController::class, 'update']
-        )->name('pricing-return-rules.update');
-
-        Route::get(
-            'branch-transfer-lanes/branches',
-            [AdminBranchTransferLaneController::class, 'branches']
-        )->name('branch-transfer-lanes.branches');
-
-        Route::get(
-            'branch-transfer-lanes',
-            [AdminBranchTransferLaneController::class, 'index']
-        )->name('branch-transfer-lanes.index');
-
-        Route::post(
-            'branch-transfer-lanes',
-            [AdminBranchTransferLaneController::class, 'store']
-        )->name('branch-transfer-lanes.store');
-
-        Route::get(
-            'branch-transfer-lanes/{branchTransferLane}',
-            [AdminBranchTransferLaneController::class, 'show']
-        )->name('branch-transfer-lanes.show');
-
-        Route::put(
-            'branch-transfer-lanes/{branchTransferLane}',
-            [AdminBranchTransferLaneController::class, 'update']
-        )->name('branch-transfer-lanes.update');
-
-        Route::patch(
-            'branch-transfer-lanes/{branchTransferLane}/status',
-            [AdminBranchTransferLaneController::class, 'toggle']
-        )->name('branch-transfer-lanes.status');
-
-        Route::delete(
-            'branch-transfer-lanes/{branchTransferLane}',
-            [AdminBranchTransferLaneController::class, 'destroy']
-        )->name('branch-transfer-lanes.destroy');
+        Route::get('branch-transfer-lanes/branches', [AdminBranchTransferLaneController::class, 'branches'])->name('branch-transfer-lanes.branches');
+        Route::get('branch-transfer-lanes', [AdminBranchTransferLaneController::class, 'index'])->name('branch-transfer-lanes.index');
+        Route::post('branch-transfer-lanes', [AdminBranchTransferLaneController::class, 'store'])->name('branch-transfer-lanes.store');
+        Route::get('branch-transfer-lanes/{branchTransferLane}', [AdminBranchTransferLaneController::class, 'show'])->name('branch-transfer-lanes.show');
+        Route::put('branch-transfer-lanes/{branchTransferLane}', [AdminBranchTransferLaneController::class, 'update'])->name('branch-transfer-lanes.update');
+        Route::patch('branch-transfer-lanes/{branchTransferLane}/status', [AdminBranchTransferLaneController::class, 'toggle'])->name('branch-transfer-lanes.status');
+        Route::delete('branch-transfer-lanes/{branchTransferLane}', [AdminBranchTransferLaneController::class, 'destroy'])->name('branch-transfer-lanes.destroy');
     });
 
 /*
@@ -426,11 +236,9 @@ Route::prefix('v1/public/pricing')
         'throttle:30,1',
     ])
     ->group(function (): void {
-
         Route::match(
             ['POST', 'OPTIONS'],
             'estimate',
             PublicPricingEstimateController::class
         )->name('estimate');
-
     });

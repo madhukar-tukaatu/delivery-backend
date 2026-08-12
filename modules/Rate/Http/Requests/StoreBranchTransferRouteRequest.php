@@ -15,16 +15,8 @@ class StoreBranchTransferRouteRequest extends FormRequest
     protected function prepareForValidation(): void
     {
         $this->merge([
-            'route_type' => 'transfer',
-
             'transit_branch_ids' => array_values(
-                array_map(
-                    'intval',
-                    $this->input(
-                        'transit_branch_ids',
-                        []
-                    )
-                )
+                array_map('intval', $this->input('transit_branch_ids', []))
             ),
         ]);
     }
@@ -32,12 +24,6 @@ class StoreBranchTransferRouteRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'route_type' => [
-                'required',
-                'string',
-                Rule::in(['transfer']),
-            ],
-
             'route_code' => [
                 'required',
                 'string',
@@ -79,23 +65,7 @@ class StoreBranchTransferRouteRequest extends FormRequest
 
             'service_type' => [
                 'required',
-                Rule::in([
-                    'standard',
-                    'express',
-                    'same_day',
-                ]),
-            ],
-
-            'base_rate' => [
-                'required',
-                'numeric',
-                'min:0',
-            ],
-
-            'currency' => [
-                'nullable',
-                'string',
-                'size:3',
+                Rule::in(['standard', 'express', 'same_day']),
             ],
 
             'priority' => [
@@ -125,42 +95,18 @@ class StoreBranchTransferRouteRequest extends FormRequest
     public function withValidator($validator): void
     {
         $validator->after(function ($validator): void {
-            $origin = (int) $this->input(
-                'origin_branch_id'
-            );
+            $origin      = (int) $this->input('origin_branch_id');
+            $destination = (int) $this->input('destination_branch_id');
+            $transits    = array_map('intval', $this->input('transit_branch_ids', []));
 
-            $destination = (int) $this->input(
-                'destination_branch_id'
-            );
-
-            $transits = array_map(
-                'intval',
-                $this->input(
-                    'transit_branch_ids',
-                    []
-                )
-            );
-
-            if (
-                in_array(
-                    $origin,
-                    $transits,
-                    true
-                )
-            ) {
+            if (in_array($origin, $transits, true)) {
                 $validator->errors()->add(
                     'transit_branch_ids',
                     'The origin branch cannot be a transit branch.'
                 );
             }
 
-            if (
-                in_array(
-                    $destination,
-                    $transits,
-                    true
-                )
-            ) {
+            if (in_array($destination, $transits, true)) {
                 $validator->errors()->add(
                     'transit_branch_ids',
                     'The destination branch cannot be a transit branch.'

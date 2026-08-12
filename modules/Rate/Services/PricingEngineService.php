@@ -416,19 +416,21 @@ final class PricingEngineService
         /*
          * Step 9: Low-packet pickup charge applies once.
          */
-        $minimumPacketCharge =
-            $this->minimumPacketCharge(
-                packetCount:
-                    $packetCount,
-                settings:
-                    $settings
-            );
+        
+        // $minimumPacketCharge =
+        //     $this->minimumPacketCharge(
+        //         packetCount:
+        //             $packetCount,
+        //         settings:
+        //             $settings
+        //     );
 
-        $finalPrice = round(
-            $subtotalAfterSameDay +
-            $minimumPacketCharge['total'],
-            2
-        );
+        // $finalPrice = round(
+        //     $subtotalAfterSameDay +
+        //     $minimumPacketCharge['total'],
+        //     2
+        // );
+        $finalPrice = $subtotalAfterSameDay;
 
         $estimatedHours = $transferRoute !== null
             ? max(
@@ -722,9 +724,8 @@ final class PricingEngineService
                         $subtotalAfterSameDay,
                         2
                     ),
-
-                'minimum_packet_charge' =>
-                    $minimumPacketCharge,
+                // 'minimum_packet_charge' =>
+                //     $minimumPacketCharge,
 
                 'final_price' =>
                     $finalPrice,

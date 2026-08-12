@@ -138,21 +138,19 @@ final class BranchTransferRouteService
             }
 
             $routeData = [
-                'route_code' => strtoupper(trim((string) $data['route_code'])),
-                'name' => trim((string) $data['name']),
-                'origin_branch_id' => $originBranchId,
+                'route_code'            => strtoupper(trim((string) $data['route_code'])),
+                'name'                  => trim((string) $data['name']),
+                'origin_branch_id'      => $originBranchId,
                 'destination_branch_id' => $destinationBranchId,
-                'service_type' => $serviceType,
-                'base_rate' => round((float) $data['base_rate'], 2),
-                'currency' => strtoupper((string) ($data['currency'] ?? 'NPR')),
-                'transfer_count' => count($lanes),
-                'transit_count' => count($transitBranchIds),
-                'total_distance_km' => round($totalDistanceKm, 2),
+                'service_type'          => $serviceType,
+                'transfer_count'        => count($lanes),
+                'transit_count'         => count($transitBranchIds),
+                'total_distance_km'     => round($totalDistanceKm, 2),
                 'total_estimated_hours' => $totalEstimatedHours,
-                'priority' => max(1, (int) ($data['priority'] ?? 100)),
-                'is_default' => $isDefault,
-                'is_active' => (bool) ($data['is_active'] ?? true),
-                'notes' => $data['notes'] ?? null,
+                'priority'              => max(1, (int) ($data['priority'] ?? 100)),
+                'is_default'            => $isDefault,
+                'is_active'             => (bool) ($data['is_active'] ?? true),
+                'notes'                 => $data['notes'] ?? null,
             ];
 
             if ($route === null) {
@@ -166,7 +164,7 @@ final class BranchTransferRouteService
             foreach ($lanes as $index => $lane) {
                 $route->routeLanes()->create([
                     'branch_transfer_lane_id' => $lane->id,
-                    'sequence_number' => $index + 1,
+                    'sequence_number'         => $index + 1,
                 ]);
             }
 

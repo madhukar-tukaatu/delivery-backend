@@ -396,22 +396,32 @@ final class PricingEngineService
             $distance['total'];
 
         /*
-         * Step 8: Same-day multiplier applies once to the shipment.
+         * Step 8: Same-day / Express multiplier applies once to the shipment.
+         * Toggles come from the branch route rate, not global settings.
          */
         $sameDay = $this->sameDayCharge(
-            serviceCode:
-                (string) $serviceType->code,
-            calculationBase:
-                $subtotalBeforeSameDay,
-            isSameBranch:
-                $isSameBranch,
-            settings:
-                $settings
+            serviceCode:      (string) $serviceType->code,
+            calculationBase:  $subtotalBeforeSameDay,
+            isSameBranch:     $isSameBranch,
+            settings:         $settings,
+            routeRate:        $routeRate
         );
 
+        $express = $this->expressCharge(
+            serviceCode:      (string) $serviceType->code,
+            calculationBase:  $subtotalBeforeSameDay,
+            isSameBranch:     $isSameBranch,
+            settings:         $settings,
+            routeRate:        $routeRate
+        );
+
+        // Only one service surcharge applies at a time
+        $serviceCharge = $sameDay['applied']
+            ? $sameDay['total']
+            : $express['total'];
+
         $subtotalAfterSameDay =
-            $subtotalBeforeSameDay +
-            $sameDay['total'];
+            $subtotalBeforeSameDay + $serviceCharge;
 
         /*
          * Step 9: Low-packet pickup charge applies once.
@@ -718,6 +728,9 @@ final class PricingEngineService
 
                 'same_day' =>
                     $sameDay,
+
+                'express' =>
+                    $express,
 
                 'subtotal_after_same_day' =>
                     round(
@@ -1628,101 +1641,103 @@ final class PricingEngineService
 
     /**
      * Apply the same-day multiplier once to the shipment.
+     * The toggle is checked on the branch route rate first.
      */
     private function sameDayCharge(
         string $serviceCode,
         float $calculationBase,
         bool $isSameBranch,
-        object $settings
+        object $settings,
+        ?object $routeRate = null
     ): array {
-        $normalizedCode = strtolower(
-            trim($serviceCode)
-        );
+        $normalizedCode = strtolower(trim($serviceCode));
+
+        $notApplied = [
+            'applied'          => false,
+            'route_type'       => $isSameBranch ? 'same_branch' : 'other_branch',
+            'multiplier'       => 1.0,
+            'calculation_base' => round($calculationBase, 2),
+            'total'            => 0.0,
+        ];
 
         if ($normalizedCode !== 'same_day') {
-            return [
-                'applied' =>
-                    false,
+            return $notApplied;
+        }
 
-                'route_type' =>
-                    $isSameBranch
-                        ? 'same_branch'
-                        : 'other_branch',
-
-                'multiplier' =>
-                    1.0,
-
-                'calculation_base' =>
-                    round(
-                        $calculationBase,
-                        2
-                    ),
-
-                'total' =>
-                    0.0,
-            ];
+        // Branch-level toggle overrides global
+        if ($routeRate !== null && isset($routeRate->same_day_enabled) && !(bool) $routeRate->same_day_enabled) {
+            throw ValidationException::withMessages([
+                'service_type' => ['Same-day delivery is not available for this route.'],
+            ]);
         }
 
         $this->validateSameDayCutoff(
-            (string) (
-                $settings->same_day_cutoff_time
-                ?? '12:00:00'
-            )
+            (string) ($settings->same_day_cutoff_time ?? '12:00:00')
         );
 
         $multiplier = $isSameBranch
-            ? max(
-                1,
-                (float) (
-                    $settings->same_branch_sdd_multiplier
-                    ?? 1.5
-                )
-            )
-            : max(
-                1,
-                (float) (
-                    $settings->other_branch_sdd_multiplier
-                    ?? 2
-                )
-            );
+            ? max(1, (float) ($settings->same_branch_sdd_multiplier ?? 1.5))
+            : max(1, (float) ($settings->other_branch_sdd_multiplier ?? 2));
 
-        $multipliedAmount =
-            $calculationBase *
-            $multiplier;
-
-        $charge =
-            $multipliedAmount -
-            $calculationBase;
+        $multipliedAmount = $calculationBase * $multiplier;
+        $charge = $multipliedAmount - $calculationBase;
 
         return [
-            'applied' =>
-                true,
+            'applied'           => true,
+            'route_type'        => $isSameBranch ? 'same_branch' : 'other_branch',
+            'multiplier'        => $multiplier,
+            'calculation_base'  => round($calculationBase, 2),
+            'multiplied_amount' => round($multipliedAmount, 2),
+            'total'             => round($charge, 2),
+        ];
+    }
 
-            'route_type' =>
-                $isSameBranch
-                    ? 'same_branch'
-                    : 'other_branch',
+    /**
+     * Apply the express multiplier once to the shipment.
+     * The toggle is checked on the branch route rate first.
+     */
+    private function expressCharge(
+        string $serviceCode,
+        float $calculationBase,
+        bool $isSameBranch,
+        object $settings,
+        ?object $routeRate = null
+    ): array {
+        $normalizedCode = strtolower(trim($serviceCode));
 
-            'multiplier' =>
-                $multiplier,
+        $notApplied = [
+            'applied'          => false,
+            'route_type'       => $isSameBranch ? 'same_branch' : 'other_branch',
+            'multiplier'       => 1.0,
+            'calculation_base' => round($calculationBase, 2),
+            'total'            => 0.0,
+        ];
 
-            'calculation_base' =>
-                round(
-                    $calculationBase,
-                    2
-                ),
+        if ($normalizedCode !== 'express') {
+            return $notApplied;
+        }
 
-            'multiplied_amount' =>
-                round(
-                    $multipliedAmount,
-                    2
-                ),
+        // Branch-level toggle overrides global
+        if ($routeRate !== null && isset($routeRate->express_enabled) && !(bool) $routeRate->express_enabled) {
+            throw ValidationException::withMessages([
+                'service_type' => ['Express delivery is not available for this route.'],
+            ]);
+        }
 
-            'total' =>
-                round(
-                    $charge,
-                    2
-                ),
+        $multiplier = $isSameBranch
+            ? max(1, (float) ($settings->local_express_multiplier ?? 1.2))
+            : max(1, (float) ($settings->transfer_express_multiplier ?? 1.3));
+
+        $multipliedAmount = $calculationBase * $multiplier;
+        $charge = $multipliedAmount - $calculationBase;
+
+        return [
+            'applied'           => true,
+            'route_type'        => $isSameBranch ? 'same_branch' : 'other_branch',
+            'multiplier'        => $multiplier,
+            'calculation_base'  => round($calculationBase, 2),
+            'multiplied_amount' => round($multipliedAmount, 2),
+            'total'             => round($charge, 2),
         ];
     }
 

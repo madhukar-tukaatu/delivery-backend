@@ -21,12 +21,14 @@ final class AdminBranchRouteRateController extends Controller
     {
         $branches = DB::table('branches')
             ->whereNull('parent_id')
-            ->where('is_active', true)
+            ->whereIn('status', ['active', 'approved'])
             ->orderBy('name')
             ->get([
                 'id',
                 'name',
                 'code',
+                'latitude',
+                'longitude',
             ]);
 
         return response()->json([
@@ -56,6 +58,8 @@ final class AdminBranchRouteRateController extends Controller
                 'rates.delivery_branch_id',
                 'rates.base_rate',
                 'rates.is_active',
+                'rates.express_enabled',
+                'rates.same_day_enabled',
                 'rates.created_at',
                 'rates.updated_at',
                 'pickup.name as pickup_branch_name',
@@ -159,7 +163,9 @@ final class AdminBranchRouteRateController extends Controller
                 pickupBranchId: (int) $data['pickup_branch_id'],
                 deliveryBranchId: (int) $data['delivery_branch_id'],
                 baseRate: (float) $data['base_rate'],
-                isActive: (bool) $data['is_active']
+                isActive: (bool) $data['is_active'],
+                expressEnabled: (bool) $data['express_enabled'],
+                sameDayEnabled: (bool) $data['same_day_enabled']
             );
 
             $reverseId = null;
@@ -173,7 +179,9 @@ final class AdminBranchRouteRateController extends Controller
                     pickupBranchId: (int) $data['delivery_branch_id'],
                     deliveryBranchId: (int) $data['pickup_branch_id'],
                     baseRate: (float) $data['reverse_base_rate'],
-                    isActive: (bool) $data['is_active']
+                    isActive: (bool) $data['is_active'],
+                    expressEnabled: (bool) $data['express_enabled'],
+                    sameDayEnabled: (bool) $data['same_day_enabled']
                 );
             }
 
@@ -234,9 +242,11 @@ final class AdminBranchRouteRateController extends Controller
         DB::table('branch_route_rates')
             ->where('id', $branchRouteRate)
             ->update([
-                'base_rate' => $data['base_rate'],
-                'is_active' => $data['is_active'],
-                'updated_at' => now(),
+                'base_rate'        => $data['base_rate'],
+                'is_active'        => $data['is_active'],
+                'express_enabled'  => $data['express_enabled'],
+                'same_day_enabled' => $data['same_day_enabled'],
+                'updated_at'       => now(),
             ]);
 
         $this->cache->forgetRoute(
@@ -325,7 +335,9 @@ final class AdminBranchRouteRateController extends Controller
         int $pickupBranchId,
         int $deliveryBranchId,
         float $baseRate,
-        bool $isActive
+        bool $isActive,
+        bool $expressEnabled = true,
+        bool $sameDayEnabled = true
     ): int {
         $existing = DB::table('branch_route_rates')
             ->where('pickup_branch_id', $pickupBranchId)
@@ -336,9 +348,11 @@ final class AdminBranchRouteRateController extends Controller
             DB::table('branch_route_rates')
                 ->where('id', $existing->id)
                 ->update([
-                    'base_rate' => $baseRate,
-                    'is_active' => $isActive,
-                    'updated_at' => now(),
+                    'base_rate'        => $baseRate,
+                    'is_active'        => $isActive,
+                    'express_enabled'  => $expressEnabled,
+                    'same_day_enabled' => $sameDayEnabled,
+                    'updated_at'       => now(),
                 ]);
 
             return (int) $existing->id;
@@ -346,12 +360,14 @@ final class AdminBranchRouteRateController extends Controller
 
         return DB::table('branch_route_rates')
             ->insertGetId([
-                'pickup_branch_id' => $pickupBranchId,
+                'pickup_branch_id'   => $pickupBranchId,
                 'delivery_branch_id' => $deliveryBranchId,
-                'base_rate' => $baseRate,
-                'is_active' => $isActive,
-                'created_at' => now(),
-                'updated_at' => now(),
+                'base_rate'          => $baseRate,
+                'is_active'          => $isActive,
+                'express_enabled'    => $expressEnabled,
+                'same_day_enabled'   => $sameDayEnabled,
+                'created_at'         => now(),
+                'updated_at'         => now(),
             ]);
     }
 }

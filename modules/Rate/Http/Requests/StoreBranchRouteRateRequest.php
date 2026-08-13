@@ -16,7 +16,9 @@ class StoreBranchRouteRateRequest extends FormRequest
     protected function prepareForValidation(): void
     {
         $this->merge([
-            'is_active' => $this->boolean('is_active', true),
+            'is_active'            => $this->boolean('is_active', true),
+            'express_enabled'      => $this->boolean('express_enabled', true),
+            'same_day_enabled'     => $this->boolean('same_day_enabled', true),
             'create_reverse_route' => $this->boolean('create_reverse_route'),
         ]);
     }
@@ -34,8 +36,10 @@ class StoreBranchRouteRateRequest extends FormRequest
                 'integer',
                 Rule::exists('branches', 'id')->whereNull('parent_id'),
             ],
-            'base_rate' => ['required', 'numeric', 'gte:0'],
-            'is_active' => ['required', 'boolean'],
+            'base_rate'  => ['required', 'numeric', 'gte:0'],
+            'is_active'  => ['required', 'boolean'],
+            'express_enabled'  => ['required', 'boolean'],
+            'same_day_enabled' => ['required', 'boolean'],
 
             'create_reverse_route' => ['required', 'boolean'],
             'reverse_base_rate' => [

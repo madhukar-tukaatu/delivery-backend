@@ -17,13 +17,17 @@ class BranchRouteRate extends Model
         'delivery_branch_id',
         'base_rate',
         'is_active',
+        'express_enabled',
+        'same_day_enabled',
     ];
 
     protected $casts = [
-        'pickup_branch_id' => 'integer',
+        'pickup_branch_id'   => 'integer',
         'delivery_branch_id' => 'integer',
-        'base_rate' => 'decimal:2',
-        'is_active' => 'boolean',
+        'base_rate'          => 'decimal:2',
+        'is_active'          => 'boolean',
+        'express_enabled'    => 'boolean',
+        'same_day_enabled'   => 'boolean',
     ];
 
     public function pickupBranch()

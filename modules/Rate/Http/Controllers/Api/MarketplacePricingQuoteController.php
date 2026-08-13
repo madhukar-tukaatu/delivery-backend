@@ -11,7 +11,6 @@ use Illuminate\Validation\ValidationException;
 use JsonException;
 use Modules\Rate\Http\Requests\StoreMultiStorePricingQuoteRequest;
 use Modules\Rate\Services\MultiStorePricingService;
-use Throwable;
 
 final class MarketplacePricingQuoteController extends Controller
 {
@@ -36,16 +35,10 @@ final class MarketplacePricingQuoteController extends Controller
                     'Marketplace pricing and transfer routes calculated successfully.',
                 'data' => $this->serialiseDates($result),
             ]);
-        } catch (ValidationException $exception) {
-            throw $exception;
         } catch (Throwable $exception) {
-            report($exception);
-
-            return $this->errorResponse(
-                'Unable to calculate marketplace pricing.',
-                $exception,
-                422
-            );
+            throw ValidationException::withMessages([
+                'pricing' => [$exception->getMessage()],
+            ]);
         }
     }
 
@@ -67,16 +60,10 @@ final class MarketplacePricingQuoteController extends Controller
                     'Marketplace checkout quote created successfully.',
                 'data' => $this->serialiseDates($result),
             ], 201);
-        } catch (ValidationException $exception) {
-            throw $exception;
         } catch (Throwable $exception) {
-            report($exception);
-
-            return $this->errorResponse(
-                'Unable to create marketplace checkout quote.',
-                $exception,
-                422
-            );
+            throw ValidationException::withMessages([
+                'pricing' => [$exception->getMessage()],
+            ]);
         }
     }
 
@@ -289,19 +276,4 @@ final class MarketplacePricingQuoteController extends Controller
         return $value;
     }
 
-    private function errorResponse(
-        string $message,
-        Throwable $exception,
-        int $status
-    ): JsonResponse {
-        return response()->json([
-            'success' => false,
-            'message' => app()->isLocal()
-                ? $exception->getMessage()
-                : $message,
-            'error_code' => app()->isLocal()
-                ? class_basename($exception)
-                : null,
-        ], $status);
-    }
 }

@@ -36,5 +36,6 @@ return [
     |--------------------------------------------------------------------------
     */
 
-    'base_rate_mode' => 'configured_transfer_route',
+    'base_rate_mode' => 'branch_route',
+    // 'base_rate_mode' => 'configured_transfer_route',
 ];

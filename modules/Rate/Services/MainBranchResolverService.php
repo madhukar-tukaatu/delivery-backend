@@ -140,22 +140,39 @@ final class MainBranchResolverService
         }
 
         if ($matches === []) {
-            $nearestZone = $nearest['zone'] ?? null;
-            $nearestDistance = $nearest['distance_km'] ?? null;
+            // Location is outside all coverage radii.
+            // Fall back to the nearest zone's branch — that branch will
+            // handle pickup and delivery regardless of distance.
+            if ($nearest !== null) {
+                $nearestZone = $nearest['zone'];
 
-            throw ValidationException::withMessages([
-                'address' => [
-                    $nearestZone
-                        ? sprintf(
-                            'The location is outside active delivery coverage. Nearest zone is %s (%s), %.2f km away with a %.2f km radius.',
-                            (string) $nearestZone->name,
-                            (string) $nearestZone->code,
-                            (float) $nearestDistance,
-                            (float) $nearestZone->coverage_radius_km
-                        )
-                        : 'The location is outside active delivery coverage.',
-                ],
-            ]);
+                $responsibility = $this->resolveResponsibility(
+                    zone: $nearestZone,
+                    zones: $zones,
+                    zonesById: $zonesById,
+                    branchesById: $branchesById,
+                    branchesByCoverageLocationId: $branchesByCoverageLocationId
+                );
+
+                if ($responsibility !== null) {
+                    $matches[] = [
+                        'matched_zone'        => $nearestZone,
+                        'matched_distance_km' => $nearest['distance_km'],
+                        'main_zone'           => $responsibility['main_zone'],
+                        'main_branch'         => $responsibility['main_branch'],
+                        'specificity'         => 1,
+                    ];
+                }
+            }
+
+            // If the nearest zone is also unmapped, nothing can be done
+            if ($matches === []) {
+                throw ValidationException::withMessages([
+                    'address' => [
+                        'No branch could be resolved for this location.',
+                    ],
+                ]);
+            }
         }
 
         usort(

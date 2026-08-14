@@ -42,9 +42,15 @@ final class PublicWebsitePricingEstimateRequest extends FormRequest
             default => $parcelType,
         };
 
+        $weight = $this->input('actual_weight_kg');
+        $weight = ($weight !== null && $weight !== '' && (float) $weight > 0)
+            ? (float) $weight
+            : 1.5;
+
         $this->merge([
-            'service_type' => $serviceType,
-            'parcel_type' => $parcelType,
+            'service_type'     => $serviceType,
+            'parcel_type'      => $parcelType,
+            'actual_weight_kg' => $weight,
         ]);
     }
 

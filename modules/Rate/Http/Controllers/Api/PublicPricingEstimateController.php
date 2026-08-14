@@ -27,9 +27,7 @@ final class PublicPricingEstimateController extends Controller
             // Weight & dimensions – either actual weight OR complete dimensions
             // (or both; engine takes the higher value)
             // ------------------------------------------------------------------
-            $actualWeightKg = array_key_exists('actual_weight_kg', $data)
-                ? round((float) $data['actual_weight_kg'], 3)
-                : null;
+            $actualWeightKg = round((float) ($data['actual_weight_kg'] ?? 1.0), 3);
 
             $rawLength = data_get($data, 'parcel_dimensions.length_cm');
             $rawWidth  = data_get($data, 'parcel_dimensions.width_cm');
@@ -65,14 +63,8 @@ final class PublicPricingEstimateController extends Controller
                 ]);
             }
 
-            // At least one of weight or complete dimensions must be present
-            if (($actualWeightKg === null || $actualWeightKg <= 0) && ! $hasCompleteDimensions) {
-                throw ValidationException::withMessages([
-                    'actual_weight_kg' => [
-                        'Provide either a positive actual weight or complete parcel dimensions.',
-                    ],
-                ]);
-            }
+            // actual_weight_kg is always present — defaulted to 1.0 kg in the request
+            // when the caller omits it. Dimensions are optional on top of that.
 
             // Engine requires actual_weight_kg > 0.
             // When only dimensions are supplied we pass a tiny placeholder;

@@ -4,16 +4,11 @@ declare(strict_types=1);
 
 namespace Modules\Rate\Services;
 
-use Illuminate\Support\Collection;
 use Illuminate\Validation\ValidationException;
-use Modules\Rate\Models\BranchTransferLane;
 use Modules\Rate\Models\BranchTransferRoute;
 
 final class ConfiguredTransferRouteService
 {
-    /**
-     * Resolve an already configured complete transfer route.
-     */
     public function resolve(
         int $originBranchId,
         int $destinationBranchId,
@@ -22,12 +17,7 @@ final class ConfiguredTransferRouteService
         $serviceType = $this->normalizeServiceType($serviceType);
 
         $route = BranchTransferRoute::query()
-            ->with([
-                'originBranch',
-                'destinationBranch',
-                'routeLanes.lane.fromBranch',
-                'routeLanes.lane.toBranch',
-            ])
+            ->with(['originBranch', 'destinationBranch'])
             ->where('origin_branch_id', $originBranchId)
             ->where('destination_branch_id', $destinationBranchId)
             ->where('service_type', $serviceType)
@@ -41,7 +31,7 @@ final class ConfiguredTransferRouteService
             throw ValidationException::withMessages([
                 'transfer_route' => [
                     sprintf(
-                        'No active complete transfer route is configured from branch %d to branch %d for %s service.',
+                        'No active transfer route is configured from branch %d to branch %d for %s service.',
                         $originBranchId,
                         $destinationBranchId,
                         $serviceType
@@ -50,173 +40,56 @@ final class ConfiguredTransferRouteService
             ]);
         }
 
-        $routeLanes = $route->routeLanes
-            ->sortBy('sequence_number')
-            ->values();
-
-        if ($routeLanes->isEmpty()) {
-            throw ValidationException::withMessages([
-                'transfer_route' => [
-                    'The configured transfer route has no lane mappings.',
-                ],
-            ]);
-        }
-
-        if ($routeLanes->count() !== (int) $route->transfer_count) {
-            throw ValidationException::withMessages([
-                'transfer_route' => [
-                    'The configured transfer route contains missing lane mappings.',
-                ],
-            ]);
-        }
-
-        $laneMappings = $routeLanes
-            ->map(static fn ($routeLane) => $routeLane->lane)
-            ->filter()
-            ->values();
-
-        return $this->validateAndCalculateLanes(
-            $laneMappings,
-            $originBranchId,
-            $destinationBranchId,
-            $serviceType
-        ) + [
-            'route_id'   => (int) $route->id,
-            'route_code' => (string) $route->route_code,
-            'route_name' => (string) $route->name,
-        ];
+        return $this->formatRoute($route);
     }
 
-    /**
-     * Validate direct transfer lanes and calculate route path, distance, and ETA.
-     */
-    public function validateAndCalculateLanes(
-        Collection|array $laneMappings,
-        int $originBranchId,
-        int $destinationBranchId,
-        string $serviceType = 'standard'
-    ): array {
-        $serviceType = $this->normalizeServiceType($serviceType);
+    public function formatRoute(BranchTransferRoute $route): array
+    {
+        $route->loadMissing(['originBranch', 'destinationBranch']);
 
-        $lanes = $laneMappings instanceof Collection
-            ? $laneMappings->values()
-            : collect($laneMappings)->values();
+        $stops = is_array($route->stops) ? $route->stops : [];
 
-        if ($lanes->isEmpty()) {
-            throw ValidationException::withMessages([
-                'transfer_route' => [
-                    'At least one active transfer lane is required.',
-                ],
-            ]);
-        }
+        // Build full path: origin → stops → destination
+        $path = [];
 
-        $path         = [];
-        $laneResponse = [];
+        $path[] = [
+            'id'   => (int) $route->origin_branch_id,
+            'name' => $route->originBranch?->name,
+            'code' => $route->originBranch?->code,
+        ];
 
-        $totalDistance       = 0.0;
-        $totalEstimatedHours = 0;
-
-        $expectedFromBranchId = $originBranchId;
-
-        foreach ($lanes as $index => $lane) {
-            if (!$lane instanceof BranchTransferLane) {
-                throw ValidationException::withMessages([
-                    'transfer_route' => ['Invalid transfer lane supplied.'],
-                ]);
-            }
-
-            if (!(bool) $lane->is_active) {
-                throw ValidationException::withMessages([
-                    'transfer_route' => [
-                        sprintf('Transfer lane %d is inactive.', (int) $lane->id),
-                    ],
-                ]);
-            }
-
-            if (strtolower(trim((string) $lane->service_type)) !== $serviceType) {
-                throw ValidationException::withMessages([
-                    'transfer_route' => [
-                        sprintf(
-                            'Transfer lane %d uses service type %s instead of %s.',
-                            (int) $lane->id,
-                            (string) $lane->service_type,
-                            $serviceType
-                        ),
-                    ],
-                ]);
-            }
-
-            if ((int) $lane->from_branch_id !== $expectedFromBranchId) {
-                throw ValidationException::withMessages([
-                    'transfer_route' => [
-                        sprintf(
-                            'Transfer lane sequence is disconnected. Expected branch %d but lane %d starts from branch %d.',
-                            $expectedFromBranchId,
-                            (int) $lane->id,
-                            (int) $lane->from_branch_id
-                        ),
-                    ],
-                ]);
-            }
-
-            if ($index === 0) {
-                $path[] = [
-                    'id'   => (int) $lane->from_branch_id,
-                    'name' => $lane->fromBranch?->name,
-                    'code' => $lane->fromBranch?->code,
-                ];
-            }
-
+        foreach ($stops as $stop) {
             $path[] = [
-                'id'   => (int) $lane->to_branch_id,
-                'name' => $lane->toBranch?->name,
-                'code' => $lane->toBranch?->code,
+                'id'              => (int) $stop['branch_id'],
+                'name'            => $stop['name'] ?? null,
+                'code'            => null,
+                'sequence'        => (int) $stop['sequence'],
+                'distance_km'     => (float) ($stop['distance_km'] ?? 0),
+                'estimated_hours' => (int) ($stop['estimated_hours'] ?? 0),
+                'transport_mode'  => $stop['transport_mode'] ?? null,
             ];
-
-            $distanceKm      = (float) ($lane->distance_km ?? 0);
-            $estimatedHours  = (int) ($lane->estimated_hours ?? 0);
-
-            $totalDistance       += $distanceKm;
-            $totalEstimatedHours += $estimatedHours;
-
-            $laneResponse[] = [
-                'sequence'       => $index + 1,
-                'lane_id'        => (int) $lane->id,
-                'from_branch_id' => (int) $lane->from_branch_id,
-                'from_branch_name' => $lane->fromBranch?->name,
-                'to_branch_id'   => (int) $lane->to_branch_id,
-                'to_branch_name' => $lane->toBranch?->name,
-                'service_type'   => $serviceType,
-                'transport_mode' => $lane->transport_mode,
-                'distance_km'    => $distanceKm,
-                'estimated_hours' => $estimatedHours,
-            ];
-
-            $expectedFromBranchId = (int) $lane->to_branch_id;
         }
 
-        if ($expectedFromBranchId !== $destinationBranchId) {
-            throw ValidationException::withMessages([
-                'transfer_route' => [
-                    sprintf(
-                        'The transfer route ends at branch %d but destination branch %d was requested.',
-                        $expectedFromBranchId,
-                        $destinationBranchId
-                    ),
+        $path[] = [
+            'id'   => (int) $route->destination_branch_id,
+            'name' => $route->destinationBranch?->name,
+            'code' => $route->destinationBranch?->code,
+        ];
+
+        $transitBranches = count($stops) > 0
+            ? array_values(array_map(
+                static fn (array $stop, int $i): array => [
+                    'sequence'        => $i + 1,
+                    'branch_id'       => (int) $stop['branch_id'],
+                    'name'            => $stop['name'] ?? null,
+                    'distance_km'     => (float) ($stop['distance_km'] ?? 0),
+                    'estimated_hours' => (int) ($stop['estimated_hours'] ?? 0),
+                    'transport_mode'  => $stop['transport_mode'] ?? null,
                 ],
-            ]);
-        }
-
-        $transitBranches = [];
-
-        if (count($path) > 2) {
-            $transitBranches = array_slice($path, 1, count($path) - 2);
-            $transitBranches = array_values(array_map(
-                static fn (array $branch, int $i): array => ['sequence' => $i + 1, ...$branch],
-                $transitBranches,
-                array_keys($transitBranches)
-            ));
-        }
+                $stops,
+                array_keys($stops)
+            ))
+            : [];
 
         $pathText = implode(
             ' -> ',
@@ -224,18 +97,21 @@ final class ConfiguredTransferRouteService
         );
 
         return [
-            'origin_branch_id'      => $originBranchId,
-            'destination_branch_id' => $destinationBranchId,
-            'service_type'          => $serviceType,
-            'lane_count'            => $lanes->count(),
-            'transfer_count'        => $lanes->count(),
-            'transit_count'         => count($transitBranches),
-            'total_distance_km'     => round($totalDistance, 2),
-            'total_estimated_hours' => $totalEstimatedHours,
+            'route_id'              => (int) $route->id,
+            'route_code'            => (string) $route->route_code,
+            'route_name'            => (string) $route->name,
+            'origin_branch_id'      => (int) $route->origin_branch_id,
+            'destination_branch_id' => (int) $route->destination_branch_id,
+            'service_type'          => (string) $route->service_type,
+            'transfer_count'        => (int) $route->transfer_count,
+            'transit_count'         => count($stops),
+            'lane_count'            => (int) $route->transfer_count,
+            'total_distance_km'     => (float) $route->total_distance_km,
+            'total_estimated_hours' => (int) $route->total_estimated_hours,
+            'base_rate'             => (float) ($route->base_rate ?? 0),
             'path'                  => $path,
             'path_text'             => $pathText,
             'transit_branches'      => $transitBranches,
-            'lanes'                 => $laneResponse,
         ];
     }
 

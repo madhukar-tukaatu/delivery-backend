@@ -6,12 +6,11 @@ namespace Modules\Rate\Services;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
-use Modules\Rate\Models\BranchTransferLane;
 use Modules\Rate\Models\BranchTransferRoute;
 
 final class BranchTransferRouteService
 {
-    private const MAXIMUM_TRANSFERS = 4;
+    private const MAX_STOPS = 5;
 
     public function create(array $data): BranchTransferRoute
     {
@@ -30,95 +29,22 @@ final class BranchTransferRouteService
         ?BranchTransferRoute $route
     ): BranchTransferRoute {
         return DB::transaction(function () use ($data, $route): BranchTransferRoute {
-            $originBranchId = (int) $data['origin_branch_id'];
+            $originBranchId      = (int) $data['origin_branch_id'];
             $destinationBranchId = (int) $data['destination_branch_id'];
-            $serviceType = strtolower(trim(
-                (string) ($data['service_type'] ?? 'standard')
-            ));
+            $serviceType         = strtolower(trim((string) ($data['service_type'] ?? 'standard')));
 
-            $transitBranchIds = array_values(array_map(
-                'intval',
-                is_array($data['transit_branch_ids'] ?? null)
-                    ? $data['transit_branch_ids']
-                    : []
-            ));
-
-            $branchPath = [
+            $stops = $this->buildStops(
+                (array) ($data['stops'] ?? []),
                 $originBranchId,
-                ...$transitBranchIds,
-                $destinationBranchId,
-            ];
-
-            if (count($branchPath) !== count(array_unique($branchPath))) {
-                throw ValidationException::withMessages([
-                    'transit_branch_ids' => [
-                        'A transfer route cannot contain the same branch more than once.',
-                    ],
-                ]);
-            }
-
-            $transferCount = count($branchPath) - 1;
-
-            if ($transferCount < 1) {
-                throw ValidationException::withMessages([
-                    'destination_branch_id' => [
-                        'Origin and destination branches must be different.',
-                    ],
-                ]);
-            }
-
-            if ($transferCount > self::MAXIMUM_TRANSFERS) {
-                throw ValidationException::withMessages([
-                    'transit_branch_ids' => [
-                        'A route can contain a maximum of four transfer lanes.',
-                    ],
-                ]);
-            }
-
-            $lanes = [];
-
-            for ($index = 0; $index < count($branchPath) - 1; $index++) {
-                $fromBranchId = $branchPath[$index];
-                $toBranchId = $branchPath[$index + 1];
-
-                $lane = BranchTransferLane::query()
-                    ->where('from_branch_id', $fromBranchId)
-                    ->where('to_branch_id', $toBranchId)
-                    ->where('service_type', $serviceType)
-                    ->where('is_active', true)
-                    ->orderBy('priority')
-                    ->orderBy('id')
-                    ->first();
-
-                if (!$lane) {
-                    throw ValidationException::withMessages([
-                        'transit_branch_ids' => [
-                            sprintf(
-                                'No active %s direct transfer lane exists from branch %d to branch %d.',
-                                $serviceType,
-                                $fromBranchId,
-                                $toBranchId
-                            ),
-                        ],
-                    ]);
-                }
-
-                $lanes[] = $lane;
-            }
-
-            $totalDistanceKm = array_reduce(
-                $lanes,
-                static fn (float $total, BranchTransferLane $lane): float =>
-                    $total + (float) ($lane->distance_km ?? 0),
-                0.0
+                $destinationBranchId
             );
 
-            $totalEstimatedHours = array_reduce(
-                $lanes,
-                static fn (int $total, BranchTransferLane $lane): int =>
-                    $total + (int) ($lane->estimated_hours ?? 0),
-                0
-            );
+            $transitCount    = count($stops);
+            $transferCount   = $transitCount + 1;
+            $totalDistance   = array_sum(array_column($stops, 'distance_km'))
+                + (float) ($data['destination_distance_km'] ?? 0);
+            $totalHours      = array_sum(array_column($stops, 'estimated_hours'))
+                + (int) ($data['destination_estimated_hours'] ?? 0);
 
             $isDefault = (bool) ($data['is_default'] ?? true);
 
@@ -129,12 +55,9 @@ final class BranchTransferRouteService
                     ->where('service_type', $serviceType)
                     ->when(
                         $route !== null,
-                        static fn ($query) => $query->where('id', '!=', $route->id)
+                        static fn ($q) => $q->where('id', '!=', $route->id)
                     )
-                    ->update([
-                        'is_default' => false,
-                        'updated_at' => now(),
-                    ]);
+                    ->update(['is_default' => false, 'updated_at' => now()]);
             }
 
             $routeData = [
@@ -143,10 +66,11 @@ final class BranchTransferRouteService
                 'origin_branch_id'      => $originBranchId,
                 'destination_branch_id' => $destinationBranchId,
                 'service_type'          => $serviceType,
-                'transfer_count'        => count($lanes),
-                'transit_count'         => count($transitBranchIds),
-                'total_distance_km'     => round($totalDistanceKm, 2),
-                'total_estimated_hours' => $totalEstimatedHours,
+                'transfer_count'        => $transferCount,
+                'transit_count'         => $transitCount,
+                'stops'                 => $stops ?: null,
+                'total_distance_km'     => round($totalDistance, 2),
+                'total_estimated_hours' => $totalHours,
                 'priority'              => max(1, (int) ($data['priority'] ?? 100)),
                 'is_default'            => $isDefault,
                 'is_active'             => (bool) ($data['is_active'] ?? true),
@@ -159,21 +83,70 @@ final class BranchTransferRouteService
                 $route->update($routeData);
             }
 
-            $route->routeLanes()->delete();
+            return $route->fresh(['originBranch', 'destinationBranch']);
+        }, 3);
+    }
 
-            foreach ($lanes as $index => $lane) {
-                $route->routeLanes()->create([
-                    'branch_transfer_lane_id' => $lane->id,
-                    'sequence_number'         => $index + 1,
+    private function buildStops(
+        array $stops,
+        int $originBranchId,
+        int $destinationBranchId
+    ): array {
+        if (empty($stops)) {
+            return [];
+        }
+
+        if (count($stops) > self::MAX_STOPS) {
+            throw ValidationException::withMessages([
+                'stops' => ['A route can have a maximum of ' . self::MAX_STOPS . ' transit stops.'],
+            ]);
+        }
+
+        $branchIds = array_column($stops, 'branch_id');
+
+        if (in_array($originBranchId, $branchIds, true)) {
+            throw ValidationException::withMessages([
+                'stops' => ['Origin branch cannot be a transit stop.'],
+            ]);
+        }
+
+        if (in_array($destinationBranchId, $branchIds, true)) {
+            throw ValidationException::withMessages([
+                'stops' => ['Destination branch cannot be a transit stop.'],
+            ]);
+        }
+
+        if (count($branchIds) !== count(array_unique($branchIds))) {
+            throw ValidationException::withMessages([
+                'stops' => ['Each transit stop must be a unique branch.'],
+            ]);
+        }
+
+        $branchNames = DB::table('branches')
+            ->whereIn('id', $branchIds)
+            ->pluck('name', 'id');
+
+        $built = [];
+
+        foreach (array_values($stops) as $index => $stop) {
+            $branchId = (int) $stop['branch_id'];
+
+            if (!$branchNames->has($branchId)) {
+                throw ValidationException::withMessages([
+                    "stops.{$index}.branch_id" => ["Branch {$branchId} does not exist."],
                 ]);
             }
 
-            return $route->fresh([
-                'originBranch',
-                'destinationBranch',
-                'routeLanes.lane.fromBranch',
-                'routeLanes.lane.toBranch',
-            ]);
-        }, 3);
+            $built[] = [
+                'sequence'        => $index + 1,
+                'branch_id'       => $branchId,
+                'name'            => $branchNames->get($branchId),
+                'distance_km'     => max(0, (float) ($stop['distance_km'] ?? 0)),
+                'estimated_hours' => max(0, (int) ($stop['estimated_hours'] ?? 0)),
+                'transport_mode'  => $stop['transport_mode'] ?? null,
+            ];
+        }
+
+        return $built;
     }
 }

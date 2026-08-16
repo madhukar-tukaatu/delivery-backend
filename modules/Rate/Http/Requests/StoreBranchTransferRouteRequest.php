@@ -12,15 +12,6 @@ class StoreBranchTransferRouteRequest extends FormRequest
         return true;
     }
 
-    protected function prepareForValidation(): void
-    {
-        $this->merge([
-            'transit_branch_ids' => array_values(
-                array_map('intval', $this->input('transit_branch_ids', []))
-            ),
-        ]);
-    }
-
     public function rules(): array
     {
         return [
@@ -31,11 +22,7 @@ class StoreBranchTransferRouteRequest extends FormRequest
                 'unique:branch_transfer_routes,route_code',
             ],
 
-            'name' => [
-                'required',
-                'string',
-                'max:255',
-            ],
+            'name' => ['required', 'string', 'max:255'],
 
             'origin_branch_id' => [
                 'required',
@@ -50,68 +37,28 @@ class StoreBranchTransferRouteRequest extends FormRequest
                 'exists:branches,id',
             ],
 
-            'transit_branch_ids' => [
-                'nullable',
-                'array',
-                'max:3',
-            ],
+            /*
+             * 0 stops = direct route (origin → destination)
+             * 1–5 stops = transit hubs in order
+             */
+            'stops'                          => ['nullable', 'array', 'max:5'],
+            'stops.*.branch_id'              => ['required', 'integer', 'exists:branches,id'],
+            'stops.*.distance_km'            => ['nullable', 'numeric', 'min:0'],
+            'stops.*.estimated_hours'        => ['nullable', 'integer', 'min:0'],
+            'stops.*.transport_mode'         => ['nullable', 'string', 'max:50'],
 
-            'transit_branch_ids.*' => [
-                'required',
-                'integer',
-                'distinct',
-                'exists:branches,id',
-            ],
+            /*
+             * Distance and hours for the final leg (last stop → destination).
+             * Only relevant when stops are provided.
+             */
+            'destination_distance_km'        => ['nullable', 'numeric', 'min:0'],
+            'destination_estimated_hours'    => ['nullable', 'integer', 'min:0'],
 
-            'service_type' => [
-                'required',
-                Rule::in(['standard', 'express', 'same_day']),
-            ],
-
-            'priority' => [
-                'nullable',
-                'integer',
-                'min:1',
-            ],
-
-            'is_default' => [
-                'nullable',
-                'boolean',
-            ],
-
-            'is_active' => [
-                'nullable',
-                'boolean',
-            ],
-
-            'notes' => [
-                'nullable',
-                'string',
-                'max:2000',
-            ],
+            'service_type' => ['required', Rule::in(['standard', 'express', 'same_day'])],
+            'priority'     => ['nullable', 'integer', 'min:1'],
+            'is_default'   => ['nullable', 'boolean'],
+            'is_active'    => ['nullable', 'boolean'],
+            'notes'        => ['nullable', 'string', 'max:2000'],
         ];
-    }
-
-    public function withValidator($validator): void
-    {
-        $validator->after(function ($validator): void {
-            $origin      = (int) $this->input('origin_branch_id');
-            $destination = (int) $this->input('destination_branch_id');
-            $transits    = array_map('intval', $this->input('transit_branch_ids', []));
-
-            if (in_array($origin, $transits, true)) {
-                $validator->errors()->add(
-                    'transit_branch_ids',
-                    'The origin branch cannot be a transit branch.'
-                );
-            }
-
-            if (in_array($destination, $transits, true)) {
-                $validator->errors()->add(
-                    'transit_branch_ids',
-                    'The destination branch cannot be a transit branch.'
-                );
-            }
-        });
     }
 }

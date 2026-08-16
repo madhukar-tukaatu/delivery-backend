@@ -41,6 +41,12 @@ class StoreBranchRouteRateRequest extends FormRequest
             'express_enabled'  => ['required', 'boolean'],
             'same_day_enabled' => ['required', 'boolean'],
 
+            'branch_transfer_route_id' => [
+                'nullable',
+                'integer',
+                Rule::exists('branch_transfer_routes', 'id'),
+            ],
+
             'create_reverse_route' => ['required', 'boolean'],
             'reverse_base_rate' => [
                 'nullable',

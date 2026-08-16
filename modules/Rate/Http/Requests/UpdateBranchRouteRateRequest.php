@@ -3,6 +3,7 @@
 namespace Modules\Rate\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
 class UpdateBranchRouteRateRequest extends FormRequest
 {
@@ -31,6 +32,12 @@ class UpdateBranchRouteRateRequest extends FormRequest
             'is_active'        => ['required', 'boolean'],
             'express_enabled'  => ['required', 'boolean'],
             'same_day_enabled' => ['required', 'boolean'],
+
+            'branch_transfer_route_id' => [
+                'nullable',
+                'integer',
+                Rule::exists('branch_transfer_routes', 'id'),
+            ],
         ];
     }
 }

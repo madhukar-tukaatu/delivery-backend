@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Http\Middleware;
 
 use Closure;
@@ -27,22 +26,62 @@ class ApiCorsMiddleware
         'http://127.0.0.1:3003',
     ];
 
+    // public function handle(Request $request, Closure $next): Response
+    // {
+    //     $origin = $request->headers->get('Origin');
+
+    //     // Always treat the public pricing estimate as open to any origin
+    //     if ($this->isPublicPricingPath($request)) {
+    //         return $this->handlePublicPricingCors($request, $next, $origin ?? '*');
+    //     }
+
+    //     // Non-browser request
+    //     if (!$origin) {
+    //         return $next($request);
+    //     }
+
+    //     // Normal / admin APIs – only allow listed origins
+    //     if (!in_array($origin, self::ALLOWED_ORIGINS, true)) {
+    //         return $next($request);
+    //     }
+
+    //     if ($request->isMethod('OPTIONS')) {
+    //         $response = response('', 204);
+    //         $this->addNormalCorsHeaders($response, $origin);
+    //         return $response;
+    //     }
+
+    //     $response = $next($request);
+    //     $this->addNormalCorsHeaders($response, $origin);
+    //     return $response;
+    // }
+
+    /**
+     * Very aggressive path detection – catches any variation.
+     */
+
     public function handle(Request $request, Closure $next): Response
     {
         $origin = $request->headers->get('Origin');
 
-        // Always treat the public pricing estimate as open to any origin
         if ($this->isPublicPricingPath($request)) {
-            return $this->handlePublicPricingCors($request, $next, $origin ?? '*');
+            // Answer OPTIONS immediately — never let it reach throttle or other middleware
+            if ($request->isMethod('OPTIONS')) {
+                $response = response('', 204);
+                $this->addPublicCorsHeaders($response, $origin ?? '*');
+                return $response;
+            }
+
+            $response = $next($request);
+            $this->addPublicCorsHeaders($response, $origin ?? '*');
+            return $response;
         }
 
-        // Non-browser request
-        if (!$origin) {
+        if (! $origin) {
             return $next($request);
         }
 
-        // Normal / admin APIs – only allow listed origins
-        if (!in_array($origin, self::ALLOWED_ORIGINS, true)) {
+        if (! in_array($origin, self::ALLOWED_ORIGINS, true)) {
             return $next($request);
         }
 
@@ -56,19 +95,15 @@ class ApiCorsMiddleware
         $this->addNormalCorsHeaders($response, $origin);
         return $response;
     }
-
-    /**
-     * Very aggressive path detection – catches any variation.
-     */
     private function isPublicPricingPath(Request $request): bool
     {
         $path = trim($request->path(), '/');
         $uri  = $request->getRequestUri();
 
         return $request->is('api/v1/public/pricing/estimate')
-            || $path === 'api/v1/public/pricing/estimate'
-            || str_contains($path, 'public/pricing/estimate')
-            || str_contains($uri, '/api/v1/public/pricing/estimate');
+        || $path === 'api/v1/public/pricing/estimate'
+        || str_contains($path, 'public/pricing/estimate')
+        || str_contains($uri, '/api/v1/public/pricing/estimate');
     }
 
     private function handlePublicPricingCors(

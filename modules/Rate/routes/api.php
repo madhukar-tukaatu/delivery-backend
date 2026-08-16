@@ -115,10 +115,10 @@ Route::prefix('v1/admin')
         Route::get('branch-route-rates/matrix', [AdminBranchRouteRateController::class, 'matrix'])->name('branch-route-rates.matrix');
         Route::get('branch-route-rates', [AdminBranchRouteRateController::class, 'index'])->name('branch-route-rates.index');
         Route::post('branch-route-rates', [AdminBranchRouteRateController::class, 'store'])->name('branch-route-rates.store');
-        Route::get('branch-route-rates/{branchRouteRate}', [AdminBranchRouteRateController::class, 'show'])->name('branch-route-rates.show');
-        Route::put('branch-route-rates/{branchRouteRate}', [AdminBranchRouteRateController::class, 'update'])->name('branch-route-rates.update');
-        Route::patch('branch-route-rates/{branchRouteRate}/status', [AdminBranchRouteRateController::class, 'toggle'])->name('branch-route-rates.status');
-        Route::delete('branch-route-rates/{branchRouteRate}', [AdminBranchRouteRateController::class, 'destroy'])->name('branch-route-rates.destroy');
+        Route::get('branch-route-rates/{branchRouteRate}', [AdminBranchRouteRateController::class, 'show'])->whereNumber('branchRouteRate')->name('branch-route-rates.show');
+        Route::put('branch-route-rates/{branchRouteRate}', [AdminBranchRouteRateController::class, 'update'])->whereNumber('branchRouteRate')->name('branch-route-rates.update');
+        Route::patch('branch-route-rates/{branchRouteRate}/status', [AdminBranchRouteRateController::class, 'toggle'])->whereNumber('branchRouteRate')->name('branch-route-rates.status');
+        Route::delete('branch-route-rates/{branchRouteRate}', [AdminBranchRouteRateController::class, 'destroy'])->whereNumber('branchRouteRate')->name('branch-route-rates.destroy');
 
         Route::post('pricing-simulator', [AdminPricingTestController::class, 'calculate'])->name('pricing-simulator.calculate');
         Route::post('pricing-test', [AdminPricingTestController::class, 'calculate'])->name('pricing-test.calculate');

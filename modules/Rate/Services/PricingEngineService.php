@@ -33,39 +33,33 @@ final class PricingEngineService
         );
 
         /*
-         * Main branches control route pricing. Subbranches may handle
-         * operations, but they do not create separate route prices.
+         * Main coverage locations control route pricing.
+         * Branches are operational only.
          */
-        $pickupBranch = $this->branchResolver->resolve(
+        $pickupLocation = $this->branchResolver->resolve(
             (float) ($data['pickup_latitude'] ?? 0),
             (float) ($data['pickup_longitude'] ?? 0)
         );
 
-        $deliveryBranch = $this->branchResolver->resolve(
+        $deliveryLocation = $this->branchResolver->resolve(
             (float) ($data['delivery_latitude'] ?? 0),
             (float) ($data['delivery_longitude'] ?? 0)
         );
 
-        $pickupBranchId = (int) $pickupBranch->id;
-        $deliveryBranchId = (int) $deliveryBranch->id;
+        $pickupBranchId   = (int) $pickupLocation->id;
+        $deliveryBranchId = (int) $deliveryLocation->id;
 
         $isSameBranch =
             $pickupBranchId === $deliveryBranchId;
 
         $pickupDistanceKm = max(
             0,
-            (float) (
-                $pickupBranch->resolved_distance_km
-                ?? 0
-            )
+            (float) ($pickupLocation->resolved_distance_km ?? 0)
         );
 
         $deliveryDistanceKm = max(
             0,
-            (float) (
-                $deliveryBranch->resolved_distance_km
-                ?? 0
-            )
+            (float) ($deliveryLocation->resolved_distance_km ?? 0)
         );
 
         /*
@@ -501,8 +495,8 @@ final class PricingEngineService
 
                 'name' =>
                     (string) (
-                        $pickupBranch->name
-                        ?? "Branch {$pickupBranchId}"
+                        $pickupLocation->name
+                        ?? "Zone {$pickupBranchId}"
                     ),
 
                 'distance_km' =>
@@ -518,8 +512,8 @@ final class PricingEngineService
 
                 'name' =>
                     (string) (
-                        $deliveryBranch->name
-                        ?? "Branch {$deliveryBranchId}"
+                        $deliveryLocation->name
+                        ?? "Zone {$deliveryBranchId}"
                     ),
 
                 'distance_km' =>
@@ -815,39 +809,21 @@ final class PricingEngineService
      * direction as a fallback when necessary.
      */
     private function routeBaseRate(
-        int $pickupBranchId,
-        int $deliveryBranchId
+        int $pickupLocationId,
+        int $deliveryLocationId
     ): object {
         $rule = DB::table('branch_route_rates')
-            ->where(
-                'pickup_branch_id',
-                $pickupBranchId
-            )
-            ->where(
-                'delivery_branch_id',
-                $deliveryBranchId
-            )
-            ->where(
-                'is_active',
-                true
-            )
+            ->where('pickup_coverage_location_id', $pickupLocationId)
+            ->where('delivery_coverage_location_id', $deliveryLocationId)
+            ->where('is_active', true)
             ->orderByDesc('id')
             ->first();
 
         if (!$rule) {
             $rule = DB::table('branch_route_rates')
-                ->where(
-                    'pickup_branch_id',
-                    $deliveryBranchId
-                )
-                ->where(
-                    'delivery_branch_id',
-                    $pickupBranchId
-                )
-                ->where(
-                    'is_active',
-                    true
-                )
+                ->where('pickup_coverage_location_id', $deliveryLocationId)
+                ->where('delivery_coverage_location_id', $pickupLocationId)
+                ->where('is_active', true)
                 ->orderByDesc('id')
                 ->first();
         }
@@ -855,7 +831,7 @@ final class PricingEngineService
         if (!$rule) {
             throw ValidationException::withMessages([
                 'delivery_address' => [
-                    'Base rate is not configured for the selected branch route.',
+                    'Base rate is not configured for the selected coverage route.',
                 ],
             ]);
         }

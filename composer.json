@@ -1,7 +1,7 @@
 {
-    "name": "tukaatu/courier-delivery-gateway",
+    "name": "tukaatu/delivery-express",
     "type": "project",
-    "description": "Laravel 12 API backend for a courier delivery gateway platform.",
+    "description": "Tukaatu Express",
     "keywords": ["laravel", "courier", "delivery", "gateway", "merchant", "nwidart"],
     "license": "MIT",
     "require": {

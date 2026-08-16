@@ -98,6 +98,7 @@ class AdminCoverageLocationController extends Controller
             ], 422);
         }
 
+        $data['code'] = $this->generateCode($data['name'], $data['type']);
         $data['created_by'] = $request->user()?->id;
         $data['updated_by'] = $request->user()?->id;
 
@@ -124,6 +125,8 @@ class AdminCoverageLocationController extends Controller
     public function update(Request $request, CoverageLocation $coverageLocation): JsonResponse
     {
         $data = $this->validatedData($request, $coverageLocation);
+
+        unset($data['code']);
 
         if ($data['type'] === CoverageLocation::TYPE_MAIN_BRANCH_ZONE) {
             $data['parent_id'] = null;
@@ -178,6 +181,69 @@ class AdminCoverageLocationController extends Controller
         ]);
     }
 
+    private function generateCode(string $name, string $type): string
+    {
+        $abbrMap = [
+            'kathmandu'      => 'KTM', 'lalitpur'       => 'LTP', 'bhaktapur'      => 'BKT',
+            'kavrepalanchok' => 'KVR', 'sindhupalchok'  => 'SPL', 'sindhuli'       => 'SDL',
+            'ramechhap'      => 'RMP', 'dolakha'        => 'DLK', 'nuwakot'        => 'NWT',
+            'rasuwa'         => 'RSW', 'dhading'        => 'DHD', 'makwanpur'      => 'MKP',
+            'chitwan'        => 'CTW', 'kaski'          => 'PKR', 'pokhara'        => 'PKR',
+            'tanahun'        => 'TNH', 'syangja'        => 'SYJ', 'lamjung'        => 'LMJ',
+            'gorkha'         => 'GRK', 'manang'         => 'MNG', 'mustang'        => 'MST',
+            'myagdi'         => 'MYG', 'parbat'         => 'PRB', 'baglung'        => 'BGL',
+            'nawalpur'       => 'NWP', 'morang'         => 'MRG', 'biratnagar'     => 'BTN',
+            'sunsari'        => 'SNS', 'dhankuta'       => 'DNK', 'terhathum'      => 'TRT',
+            'sankhuwasabha'  => 'SKS', 'bhojpur'        => 'BJP', 'solukhumbu'     => 'SLK',
+            'okhaldhunga'    => 'OKH', 'khotang'        => 'KHT', 'udayapur'       => 'UDP',
+            'taplejung'      => 'TPL', 'panchthar'      => 'PCT', 'ilam'           => 'ILM',
+            'jhapa'          => 'JHP', 'saptari'        => 'SPT', 'siraha'         => 'SRH',
+            'dhanusha'       => 'DNS', 'mahottari'      => 'MHT', 'sarlahi'        => 'SRL',
+            'rautahat'       => 'RTH', 'bara'           => 'BRA', 'parsa'          => 'PRS',
+            'birgunj'        => 'BGJ', 'rupandehi'      => 'RPD', 'butwal'         => 'BTW',
+            'bhairahawa'     => 'BHW', 'kapilvastu'     => 'KPV', 'palpa'          => 'PLP',
+            'arghakhanchi'   => 'AGK', 'gulmi'          => 'GLM', 'dang'           => 'DNG',
+            'banke'          => 'BNK', 'nepalgunj'      => 'NPG', 'bardiya'        => 'BRD',
+            'rolpa'          => 'RLP', 'pyuthan'        => 'PYT', 'rukum east'     => 'RKE',
+            'surkhet'        => 'SKT', 'birendranagar'  => 'BRN', 'dailekh'        => 'DLH',
+            'jajarkot'       => 'JJK', 'dolpa'          => 'DLP', 'jumla'          => 'JML',
+            'mugu'           => 'MGU', 'humla'          => 'HML', 'kalikot'        => 'KLK',
+            'salyan'         => 'SLN', 'rukum west'     => 'RKW', 'kailali'        => 'KLL',
+            'dhangadhi'      => 'DHG', 'kanchanpur'     => 'KCP', 'mahendranagar'  => 'MHN',
+            'dadeldhura'     => 'DDH', 'baitadi'        => 'BTD', 'darchula'       => 'DCL',
+            'achham'         => 'ACH', 'doti'           => 'DTI', 'bajura'         => 'BJR',
+            'bajhang'        => 'BJH',
+        ];
+
+        $key = strtolower(trim($name));
+        $firstWord = strtolower(explode(' ', $key)[0]);
+        $abbr = $abbrMap[$key] ?? $abbrMap[$firstWord] ?? strtoupper(substr(preg_replace('/[^a-z]/i', '', $firstWord), 0, 3));
+
+        $words = array_values(array_filter(
+            array_map(
+                fn($w) => strtoupper(preg_replace('/[^A-Za-z0-9]/', '', $w)),
+                explode(' ', trim($name))
+            )
+        ));
+
+        if ($type === CoverageLocation::TYPE_MAIN_BRANCH_ZONE) {
+            $baseCode = "TUK-{$abbr}-MAIN";
+        } else {
+            $rest = implode('-', array_slice($words, 1)) ?: ($words[0] ?? 'SUB');
+            $baseCode = "TUK-{$abbr}-SUB-{$rest}";
+        }
+
+        $code = $baseCode;
+        $suffix = 2;
+
+        while (CoverageLocation::query()->where('code', $code)->exists()) {
+            $code = "{$baseCode}-{$suffix}";
+            $suffix++;
+        }
+
+        return $code;
+    }
+
     private function validatedData(Request $request, ?CoverageLocation $coverageLocation = null): array
     {
         $ignoreId = $coverageLocation?->id;
@@ -186,10 +252,9 @@ class AdminCoverageLocationController extends Controller
             'name' => ['required', 'string', 'max:150'],
 
             'code' => [
-                'required',
+                'nullable',
                 'string',
                 'max:80',
-                Rule::unique('coverage_locations', 'code')->ignore($ignoreId),
             ],
 
             'type' => [

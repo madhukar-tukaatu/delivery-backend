@@ -58,6 +58,16 @@ class BranchTeamProvisioner
             ]);
         }
 
+        // Also guard against a leftover position_code from a previous
+        // partially-committed transaction attempt.
+        if (BranchTeamPosition::query()->where('position_code', $username)->exists()) {
+            throw ValidationException::withMessages([
+                'email' => [
+                    'A branch manager account with this branch code already exists. The previous creation may have partially succeeded — please check existing branches or contact support.',
+                ],
+            ]);
+        }
+
         $contactPerson = trim(
             (string) ($branchData['contact_person'] ?? '')
         );
@@ -95,15 +105,24 @@ class BranchTeamProvisioner
             'assigned_at' => now(),
         ]);
 
-        BranchTeamPosition::create([
-            'branch_id' => $branch->id,
-            'user_id' => $manager->id,
-            'role' => $managerRole,
-            'position_code' => $username,
-            'position_number' => 1,
-            'staffing_status' => BranchTeamPosition::STATUS_ASSIGNED,
-            'assigned_at' => now(),
-        ]);
+        // Guard against duplicate position if a previous transaction
+        // rolled back after the user was created but before the position
+        // was committed (or if the user already holds a position).
+        $existingPosition = BranchTeamPosition::query()
+            ->where('user_id', $manager->id)
+            ->first();
+
+        if (!$existingPosition) {
+            BranchTeamPosition::create([
+                'branch_id' => $branch->id,
+                'user_id' => $manager->id,
+                'role' => $managerRole,
+                'position_code' => $username,
+                'position_number' => 1,
+                'staffing_status' => BranchTeamPosition::STATUS_ASSIGNED,
+                'assigned_at' => now(),
+            ]);
+        }
 
         return $manager;
     }
@@ -146,7 +165,11 @@ class BranchTeamProvisioner
                     'assigned_at' => null,
                 ]);
 
-                $teamPosition = BranchTeamPosition::create([
+                $existingStaffPosition = BranchTeamPosition::query()
+                    ->where('user_id', $user->id)
+                    ->first();
+
+                $teamPosition = $existingStaffPosition ?? BranchTeamPosition::create([
                     'branch_id' => $branch->id,
                     'user_id' => $user->id,
                     'role' => $definition['role'],

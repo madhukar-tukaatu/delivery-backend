@@ -111,7 +111,7 @@ Route::prefix('v1/admin')
         Route::patch('service-types/{serviceType}/status', [AdminServiceTypeController::class, 'toggle'])->name('service-types.status');
         Route::delete('service-types/{serviceType}', [AdminServiceTypeController::class, 'destroy'])->name('service-types.destroy');
 
-        Route::get('branch-route-rates/branches', [AdminBranchRouteRateController::class, 'branches'])->name('branch-route-rates.branches');
+        Route::get('branch-route-rates/coverage-locations', [AdminBranchRouteRateController::class, 'coverageLocations'])->name('branch-route-rates.coverage-locations');
         Route::get('branch-route-rates/matrix', [AdminBranchRouteRateController::class, 'matrix'])->name('branch-route-rates.matrix');
         Route::get('branch-route-rates', [AdminBranchRouteRateController::class, 'index'])->name('branch-route-rates.index');
         Route::post('branch-route-rates', [AdminBranchRouteRateController::class, 'store'])->name('branch-route-rates.store');

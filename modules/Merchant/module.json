@@ -1,6 +1,6 @@
 {
   "name": "Merchant",
   "alias": "merchant",
-  "description": "Merchant module for Courier Delivery Gateway",
+  "description": "Merchant module for Tukaatu Express",
   "active": true
 }

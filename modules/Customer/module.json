@@ -1,6 +1,6 @@
 {
   "name": "Customer",
   "alias": "customer",
-  "description": "Customer module for Courier Delivery Gateway",
+  "description": "Customer module for Tukaatu Express",
   "active": true
 }

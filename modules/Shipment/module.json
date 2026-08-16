@@ -1,6 +1,6 @@
 {
   "name": "Shipment",
   "alias": "shipment",
-  "description": "Shipment module for Courier Delivery Gateway",
+  "description": "Shipment module for Tukaatu Express",
   "active": true
 }

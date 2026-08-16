@@ -1,6 +1,6 @@
 {
   "name": "Auth",
   "alias": "auth",
-  "description": "Auth module for Courier Delivery Gateway",
+  "description": "Auth module for Tukaatu Express",
   "active": true
 }

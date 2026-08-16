@@ -26,15 +26,15 @@ class StoreBranchRouteRateRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'pickup_branch_id' => [
+            'pickup_coverage_location_id' => [
                 'required',
                 'integer',
-                Rule::exists('branches', 'id')->whereNull('parent_id'),
+                Rule::exists('coverage_locations', 'id')->where('type', 'main_branch_zone'),
             ],
-            'delivery_branch_id' => [
+            'delivery_coverage_location_id' => [
                 'required',
                 'integer',
-                Rule::exists('branches', 'id')->whereNull('parent_id'),
+                Rule::exists('coverage_locations', 'id')->where('type', 'main_branch_zone'),
             ],
             'base_rate'  => ['required', 'numeric', 'gte:0'],
             'is_active'  => ['required', 'boolean'],
@@ -61,8 +61,8 @@ class StoreBranchRouteRateRequest extends FormRequest
     {
         return [
             function (Validator $validator): void {
-                $pickup = (int) $this->input('pickup_branch_id');
-                $delivery = (int) $this->input('delivery_branch_id');
+                $pickup = (int) $this->input('pickup_coverage_location_id');
+                $delivery = (int) $this->input('delivery_coverage_location_id');
 
                 if (
                     $pickup === $delivery &&
@@ -70,7 +70,7 @@ class StoreBranchRouteRateRequest extends FormRequest
                 ) {
                     $validator->errors()->add(
                         'create_reverse_route',
-                        'A same-branch rate cannot create a separate reverse route.'
+                        'A same-zone rate cannot create a separate reverse route.'
                     );
                 }
             },

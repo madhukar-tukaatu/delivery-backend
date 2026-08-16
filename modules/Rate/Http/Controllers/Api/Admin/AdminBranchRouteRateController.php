@@ -17,11 +17,11 @@ final class AdminBranchRouteRateController extends Controller
         private readonly PricingCacheService $cache
     ) {}
 
-    public function branches(): JsonResponse
+    public function coverageLocations(): JsonResponse
     {
-        $branches = DB::table('branches')
-            ->whereNull('parent_id')
-            ->whereIn('status', ['active', 'approved'])
+        $locations = DB::table('coverage_locations')
+            ->where('status', 'active')
+            ->where('type', 'main_branch_zone')
             ->orderBy('name')
             ->get([
                 'id',
@@ -33,7 +33,7 @@ final class AdminBranchRouteRateController extends Controller
 
         return response()->json([
             'success' => true,
-            'data' => $branches,
+            'data' => $locations,
         ]);
     }
 
@@ -41,16 +41,16 @@ final class AdminBranchRouteRateController extends Controller
     {
         $query = DB::table('branch_route_rates as rates')
             ->join(
-                'branches as pickup',
+                'coverage_locations as pickup',
                 'pickup.id',
                 '=',
-                'rates.pickup_branch_id'
+                'rates.pickup_coverage_location_id'
             )
             ->join(
-                'branches as delivery',
+                'coverage_locations as delivery',
                 'delivery.id',
                 '=',
-                'rates.delivery_branch_id'
+                'rates.delivery_coverage_location_id'
             )
             ->leftJoin(
                 'branch_transfer_routes as tr',
@@ -60,8 +60,8 @@ final class AdminBranchRouteRateController extends Controller
             )
             ->select([
                 'rates.id',
-                'rates.pickup_branch_id',
-                'rates.delivery_branch_id',
+                'rates.pickup_coverage_location_id',
+                'rates.delivery_coverage_location_id',
                 'rates.branch_transfer_route_id',
                 'rates.base_rate',
                 'rates.is_active',
@@ -77,17 +77,17 @@ final class AdminBranchRouteRateController extends Controller
                 'tr.name as transfer_route_name',
             ]);
 
-        if ($request->filled('pickup_branch_id')) {
+        if ($request->filled('pickup_coverage_location_id')) {
             $query->where(
-                'rates.pickup_branch_id',
-                (int) $request->query('pickup_branch_id')
+                'rates.pickup_coverage_location_id',
+                (int) $request->query('pickup_coverage_location_id')
             );
         }
 
-        if ($request->filled('delivery_branch_id')) {
+        if ($request->filled('delivery_coverage_location_id')) {
             $query->where(
-                'rates.delivery_branch_id',
-                (int) $request->query('delivery_branch_id')
+                'rates.delivery_coverage_location_id',
+                (int) $request->query('delivery_coverage_location_id')
             );
         }
 
@@ -126,29 +126,25 @@ final class AdminBranchRouteRateController extends Controller
 
     public function matrix(): JsonResponse
     {
-        $branches = DB::table('branches')
-            ->whereNull('parent_id')
-            ->where('is_active', true)
+        $locations = DB::table('coverage_locations')
+            ->where('status', 'active')
+            ->where('type', 'main_branch_zone')
             ->orderBy('name')
-            ->get([
-                'id',
-                'name',
-                'code',
-            ]);
+            ->get(['id', 'name', 'code']);
 
         $rates = DB::table('branch_route_rates')
-            ->whereIn('pickup_branch_id', $branches->pluck('id'))
-            ->whereIn('delivery_branch_id', $branches->pluck('id'))
+            ->whereIn('pickup_coverage_location_id', $locations->pluck('id'))
+            ->whereIn('delivery_coverage_location_id', $locations->pluck('id'))
             ->get([
                 'id',
-                'pickup_branch_id',
-                'delivery_branch_id',
+                'pickup_coverage_location_id',
+                'delivery_coverage_location_id',
                 'base_rate',
                 'is_active',
             ])
             ->mapWithKeys(
                 fn(object $rate): array => [
-                    "{$rate->pickup_branch_id}:{$rate->delivery_branch_id}" =>
+                    "{$rate->pickup_coverage_location_id}:{$rate->delivery_coverage_location_id}" =>
                         $rate,
                 ]
             );
@@ -156,7 +152,7 @@ final class AdminBranchRouteRateController extends Controller
         return response()->json([
             'success' => true,
             'data' => [
-                'branches' => $branches,
+                'branches' => $locations,
                 'rates' => $rates,
             ],
         ]);
@@ -169,8 +165,8 @@ final class AdminBranchRouteRateController extends Controller
 
         $result = DB::transaction(function () use ($data): array {
             $forwardId = $this->upsertRoute(
-                pickupBranchId: (int) $data['pickup_branch_id'],
-                deliveryBranchId: (int) $data['delivery_branch_id'],
+                pickupLocationId: (int) $data['pickup_coverage_location_id'],
+                deliveryLocationId: (int) $data['delivery_coverage_location_id'],
                 baseRate: (float) $data['base_rate'],
                 isActive: (bool) $data['is_active'],
                 expressEnabled: (bool) $data['express_enabled'],
@@ -184,12 +180,12 @@ final class AdminBranchRouteRateController extends Controller
 
             if (
                 (bool) $data['create_reverse_route'] &&
-                (int) $data['pickup_branch_id'] !==
-                    (int) $data['delivery_branch_id']
+                (int) $data['pickup_coverage_location_id'] !==
+                    (int) $data['delivery_coverage_location_id']
             ) {
                 $reverseId = $this->upsertRoute(
-                    pickupBranchId: (int) $data['delivery_branch_id'],
-                    deliveryBranchId: (int) $data['pickup_branch_id'],
+                    pickupLocationId: (int) $data['delivery_coverage_location_id'],
+                    deliveryLocationId: (int) $data['pickup_coverage_location_id'],
                     baseRate: (float) $data['reverse_base_rate'],
                     isActive: (bool) $data['is_active'],
                     expressEnabled: (bool) $data['express_enabled'],
@@ -204,8 +200,8 @@ final class AdminBranchRouteRateController extends Controller
         }, 3);
 
         $this->cache->forgetRoute(
-            (int) $data['pickup_branch_id'],
-            (int) $data['delivery_branch_id']
+            (int) $data['pickup_coverage_location_id'],
+            (int) $data['delivery_coverage_location_id']
         );
 
         return response()->json([
@@ -263,8 +259,8 @@ final class AdminBranchRouteRateController extends Controller
             ]);
 
         $this->cache->forgetRoute(
-            (int) $rate->pickup_branch_id,
-            (int) $rate->delivery_branch_id
+            (int) $rate->pickup_coverage_location_id,
+            (int) $rate->delivery_coverage_location_id
         );
 
         return response()->json([
@@ -304,8 +300,8 @@ final class AdminBranchRouteRateController extends Controller
             ]);
 
         $this->cache->forgetRoute(
-            (int) $rate->pickup_branch_id,
-            (int) $rate->delivery_branch_id
+            (int) $rate->pickup_coverage_location_id,
+            (int) $rate->delivery_coverage_location_id
         );
 
         return response()->json([
@@ -334,8 +330,8 @@ final class AdminBranchRouteRateController extends Controller
             ->delete();
 
         $this->cache->forgetRoute(
-            (int) $rate->pickup_branch_id,
-            (int) $rate->delivery_branch_id
+            (int) $rate->pickup_coverage_location_id,
+            (int) $rate->delivery_coverage_location_id
         );
 
         return response()->json([
@@ -345,8 +341,8 @@ final class AdminBranchRouteRateController extends Controller
     }
 
     private function upsertRoute(
-        int $pickupBranchId,
-        int $deliveryBranchId,
+        int $pickupLocationId,
+        int $deliveryLocationId,
         float $baseRate,
         bool $isActive,
         bool $expressEnabled = true,
@@ -354,8 +350,8 @@ final class AdminBranchRouteRateController extends Controller
         ?int $transferRouteId = null
     ): int {
         $existing = DB::table('branch_route_rates')
-            ->where('pickup_branch_id', $pickupBranchId)
-            ->where('delivery_branch_id', $deliveryBranchId)
+            ->where('pickup_coverage_location_id', $pickupLocationId)
+            ->where('delivery_coverage_location_id', $deliveryLocationId)
             ->first();
 
         if ($existing) {
@@ -375,15 +371,15 @@ final class AdminBranchRouteRateController extends Controller
 
         return DB::table('branch_route_rates')
             ->insertGetId([
-                'pickup_branch_id'         => $pickupBranchId,
-                'delivery_branch_id'       => $deliveryBranchId,
-                'branch_transfer_route_id' => $transferRouteId,
-                'base_rate'                => $baseRate,
-                'is_active'                => $isActive,
-                'express_enabled'          => $expressEnabled,
-                'same_day_enabled'         => $sameDayEnabled,
-                'created_at'               => now(),
-                'updated_at'               => now(),
+                'pickup_coverage_location_id'  => $pickupLocationId,
+                'delivery_coverage_location_id'=> $deliveryLocationId,
+                'branch_transfer_route_id'     => $transferRouteId,
+                'base_rate'                    => $baseRate,
+                'is_active'                    => $isActive,
+                'express_enabled'              => $expressEnabled,
+                'same_day_enabled'             => $sameDayEnabled,
+                'created_at'                   => now(),
+                'updated_at'                   => now(),
             ]);
     }
 }

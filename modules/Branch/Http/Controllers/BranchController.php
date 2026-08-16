@@ -230,9 +230,7 @@ class BranchController extends Controller
             ]);
         }
 
-        $data['code'] = trim(
-            (string) ($data['code'] ?? '')
-        ) ?: $this->generateBranchCode(
+        $data['code'] = $this->generateBranchCode(
             $data['name'],
             $data['type']
         );
@@ -487,28 +485,28 @@ class BranchController extends Controller
         string $name,
         string $type
     ): string {
-        $prefix = $this->isHeadBranchType($type)
-            ? 'BR'
-            : 'SUB';
+        $normalizedType = $this->normalizeBranchType($type);
 
-        $slug = Str::of($name)
-            ->upper()
-            ->replaceMatches('/[^A-Z0-9]+/', '-')
-            ->trim('-');
+        $prefix = match ($normalizedType) {
+            Branch::TYPE_HEAD_BRANCH, Branch::TYPE_FRANCHISE_BRANCH, 'main_branch', 'branch' => 'BR',
+            Branch::TYPE_SUB_BRANCH => 'SB',
+            Branch::TYPE_PICKUP_POINT => 'PP',
+            Branch::TYPE_DELIVERY_HUB => 'DH',
+            default => 'BR',
+        };
 
-        if ($slug->isEmpty()) {
-            $slug = Str::of('BRANCH');
+        $firstWord = preg_replace('/[^A-Za-z]/', '', explode(' ', trim($name))[0] ?? '');
+        $short = strtoupper(substr($firstWord, 0, 5));
+
+        if ($short === '') {
+            $short = 'BR';
         }
 
-        $baseCode = "{$prefix}-{$slug}";
-        $code = (string) $baseCode;
-        $suffix = 1;
+        $baseCode = "NP-{$prefix}-{$short}";
+        $code = $baseCode;
+        $suffix = 2;
 
-        while (
-            Branch::query()
-            ->where('code', $code)
-            ->exists()
-        ) {
+        while (Branch::query()->where('code', $code)->exists()) {
             $code = "{$baseCode}-{$suffix}";
             $suffix++;
         }
@@ -550,6 +548,8 @@ class BranchController extends Controller
          * validated and only changed fields should be sent by the client.
          */
         $data = $this->validatedData($request, $branch);
+
+        unset($data['code']);
 
         if ($data === []) {
             return response()->json([

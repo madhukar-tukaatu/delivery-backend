@@ -1,18 +1,8 @@
 <?php
 
-use App\Http\Middleware\ApiCorsMiddleware;
-use App\Http\Middleware\AuthenticateMarketplaceApiKey;
-use App\Http\Middleware\BranchScopeMiddleware;
-use App\Http\Middleware\CheckRoutePermission;
-use App\Http\Middleware\GatewayAuthMiddleware;
-use App\Http\Middleware\PermissionMiddleware;
-use App\Http\Middleware\RoleMiddleware;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
-use Illuminate\Http\Middleware\HandleCors;
-use Modules\Merchant\Http\Middleware\AuthenticateMerchantApiKey;
-use Modules\Merchant\Http\Middleware\AuthenticateStoreIntegrationToken;
 
 return Application::configure(
     basePath: dirname(__DIR__)
@@ -27,7 +17,7 @@ return Application::configure(
     ->withBroadcasting(
         __DIR__ . '/../routes/channels.php',
         [
-            'prefix' => 'api',
+            'prefix'     => 'api',
             'middleware' => [
                 'api',
                 'auth:sanctum',
@@ -37,74 +27,30 @@ return Application::configure(
 
     ->withMiddleware(function (Middleware $middleware): void {
 
-        /*
-        |--------------------------------------------------------------------------
-        | CORS
-        |--------------------------------------------------------------------------
-        |
-        | ApiCorsMiddleware is the ONLY CORS middleware we use for the API.
-        |
-        | IMPORTANT:
-        | Laravel's default HandleCors is removed from the API group below.
-        |
-        */
+        // Force CORS middleware first
+        $middleware->prepend(\App\Http\Middleware\ApiCorsMiddleware::class);
 
         $middleware->api(
             prepend: [
-                ApiCorsMiddleware::class,
+                \App\Http\Middleware\ApiCorsMiddleware::class,
             ],
             remove: [
-                HandleCors::class,
+                \Illuminate\Http\Middleware\HandleCors::class,
             ],
         );
 
-        /*
-        |--------------------------------------------------------------------------
-        | Middleware aliases
-        |--------------------------------------------------------------------------
-        */
-
         $middleware->alias([
-
-            /*
-            |--------------------------------------------------------------------------
-            | Legacy CORS alias
-            |--------------------------------------------------------------------------
-            |
-            | Some existing routes still use:
-            |
-            |     ->middleware('api.cors')
-            |
-            | Keep this temporarily so those routes do not crash.
-            |
-            */
-
-            'api.cors' => ApiCorsMiddleware::class,
-
-            /*
-            |--------------------------------------------------------------------------
-            | Application middleware
-            |--------------------------------------------------------------------------
-            */
-
-            'role' => RoleMiddleware::class,
-
-            'gateway.auth' => GatewayAuthMiddleware::class,
-
-            'permission' => PermissionMiddleware::class,
-
-            'branch.scope' => BranchScopeMiddleware::class,
-
-            'route.permission' => CheckRoutePermission::class,
-
-            'merchant.api-key' => AuthenticateMerchantApiKey::class,
-
-            'marketplace.api-key' => AuthenticateMarketplaceApiKey::class,
-
-            'store.integration.token' => AuthenticateStoreIntegrationToken::class,
+            'api.cors'                => \App\Http\Middleware\ApiCorsMiddleware::class,
+            'role'                    => \App\Http\Middleware\RoleMiddleware::class,
+            'gateway.auth'            => \App\Http\Middleware\GatewayAuthMiddleware::class,
+            'permission'              => \App\Http\Middleware\PermissionMiddleware::class,
+            'branch.scope'            => \App\Http\Middleware\BranchScopeMiddleware::class,
+            'route.permission'        => \App\Http\Middleware\CheckRoutePermission::class,
+            'merchant.api-key'        => \Modules\Merchant\Http\Middleware\AuthenticateMerchantApiKey::class,
+            'marketplace.api-key'     => \App\Http\Middleware\AuthenticateMarketplaceApiKey::class,
+            'store.integration.token' => \Modules\Merchant\Http\Middleware\AuthenticateStoreIntegrationToken::class,
         ]);
     })
-
     ->withExceptions(function (Exceptions $exceptions): void {
         //
     })

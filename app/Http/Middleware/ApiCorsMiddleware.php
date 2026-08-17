@@ -1,4 +1,5 @@
 <?php
+
 namespace App\Http\Middleware;
 
 use Closure;
@@ -26,120 +27,78 @@ class ApiCorsMiddleware
         'http://127.0.0.1:3003',
     ];
 
-    // public function handle(Request $request, Closure $next): Response
-    // {
-    //     $origin = $request->headers->get('Origin');
-
-    //     // Always treat the public pricing estimate as open to any origin
-    //     if ($this->isPublicPricingPath($request)) {
-    //         return $this->handlePublicPricingCors($request, $next, $origin ?? '*');
-    //     }
-
-    //     // Non-browser request
-    //     if (!$origin) {
-    //         return $next($request);
-    //     }
-
-    //     // Normal / admin APIs – only allow listed origins
-    //     if (!in_array($origin, self::ALLOWED_ORIGINS, true)) {
-    //         return $next($request);
-    //     }
-
-    //     if ($request->isMethod('OPTIONS')) {
-    //         $response = response('', 204);
-    //         $this->addNormalCorsHeaders($response, $origin);
-    //         return $response;
-    //     }
-
-    //     $response = $next($request);
-    //     $this->addNormalCorsHeaders($response, $origin);
-    //     return $response;
-    // }
-
-    /**
-     * Very aggressive path detection – catches any variation.
-     */
-
     public function handle(Request $request, Closure $next): Response
     {
         $origin = $request->headers->get('Origin');
 
+        // 1. Public pricing estimate → completely open (any origin)
         if ($this->isPublicPricingPath($request)) {
-            // Answer OPTIONS immediately — never let it reach throttle or other middleware
             if ($request->isMethod('OPTIONS')) {
-                $response = response('', 204);
-                $this->addPublicCorsHeaders($response, $origin ?? '*');
-                return $response;
+                return $this->publicPreflightResponse($origin);
             }
 
             $response = $next($request);
-            $this->addPublicCorsHeaders($response, $origin ?? '*');
-            return $response;
+            return $this->addPublicCorsHeaders($response, $origin);
         }
 
-        if (! $origin) {
+        // 2. No Origin header (server-to-server, Postman, curl, etc.)
+        if (!$origin) {
             return $next($request);
         }
 
-        if (! in_array($origin, self::ALLOWED_ORIGINS, true)) {
+        // 3. Origin not in allow-list → just continue (no CORS headers)
+        if (!in_array($origin, self::ALLOWED_ORIGINS, true)) {
             return $next($request);
         }
 
+        // 4. Allowed origin
         if ($request->isMethod('OPTIONS')) {
-            $response = response('', 204);
-            $this->addNormalCorsHeaders($response, $origin);
-            return $response;
+            return $this->normalPreflightResponse($origin);
         }
 
         $response = $next($request);
-        $this->addNormalCorsHeaders($response, $origin);
-        return $response;
+        return $this->addNormalCorsHeaders($response, $origin);
     }
+
     private function isPublicPricingPath(Request $request): bool
     {
-        $path = trim($request->path(), '/');
-        $uri  = $request->getRequestUri();
-
         return $request->is('api/v1/public/pricing/estimate')
-        || $path === 'api/v1/public/pricing/estimate'
-        || str_contains($path, 'public/pricing/estimate')
-        || str_contains($uri, '/api/v1/public/pricing/estimate');
+            || $request->is('api/v1/public/pricing/estimate/*');
     }
 
-    private function handlePublicPricingCors(
-        Request $request,
-        Closure $next,
-        string $origin
-    ): Response {
-        // Preflight – answer immediately
-        if ($request->isMethod('OPTIONS')) {
-            $response = response('', 204);
-            $this->addPublicCorsHeaders($response, $origin);
-            return $response;
-        }
-
-        $response = $next($request);
-        $this->addPublicCorsHeaders($response, $origin);
-        return $response;
-    }
-
-    private function addPublicCorsHeaders(Response $response, string $origin): void
+    private function publicPreflightResponse(?string $origin): Response
     {
-        // Reflect the exact origin the browser sent (or * as last resort)
-        $response->headers->set('Access-Control-Allow-Origin', $origin === '*' ? '*' : $origin);
+        $response = response('', 204);
+        return $this->addPublicCorsHeaders($response, $origin);
+    }
+
+    private function normalPreflightResponse(string $origin): Response
+    {
+        $response = response('', 204);
+        return $this->addNormalCorsHeaders($response, $origin);
+    }
+
+    private function addPublicCorsHeaders(Response $response, ?string $origin): Response
+    {
+        // Reflect the exact origin or fall back to *
+        $allowOrigin = $origin ?: '*';
+
+        $response->headers->set('Access-Control-Allow-Origin', $allowOrigin);
         $response->headers->set('Access-Control-Allow-Methods', 'POST, OPTIONS');
         $response->headers->set(
             'Access-Control-Allow-Headers',
-            'Content-Type, Accept, Authorization, X-Requested-With'
+            'Content-Type, Accept, Authorization, X-Requested-With, X-Api-Key'
         );
         $response->headers->set('Access-Control-Max-Age', '86400');
         $response->headers->set('Vary', 'Origin');
 
-        // Public endpoint must never advertise credentials
+        // Never allow credentials on a public open endpoint
         $response->headers->remove('Access-Control-Allow-Credentials');
+
+        return $response;
     }
 
-    private function addNormalCorsHeaders(Response $response, string $origin): void
+    private function addNormalCorsHeaders(Response $response, string $origin): Response
     {
         $response->headers->set('Access-Control-Allow-Origin', $origin);
         $response->headers->set(
@@ -148,10 +107,12 @@ class ApiCorsMiddleware
         );
         $response->headers->set(
             'Access-Control-Allow-Headers',
-            'Content-Type, Accept, Authorization, X-Requested-With'
+            'Content-Type, Accept, Authorization, X-Requested-With, X-Api-Key, X-Tukaatu-Marketplace-Key, X-Tukaatu-Timestamp, X-Tukaatu-Request-Id, X-Tukaatu-Signature'
         );
         $response->headers->set('Access-Control-Allow-Credentials', 'true');
         $response->headers->set('Access-Control-Max-Age', '86400');
         $response->headers->set('Vary', 'Origin');
+
+        return $response;
     }
 }

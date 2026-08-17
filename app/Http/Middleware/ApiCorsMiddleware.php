@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Http\Middleware;
 
 use Closure;
@@ -27,43 +26,87 @@ class ApiCorsMiddleware
         'http://127.0.0.1:3003',
     ];
 
+    // public function handle(Request $request, Closure $next): Response
+    // {
+    //     $origin = $request->headers->get('Origin');
+
+    //     // 1. Public pricing estimate → completely open (any origin)
+    //     if ($this->isPublicPricingPath($request)) {
+    //         if ($request->isMethod('OPTIONS')) {
+    //             return $this->publicPreflightResponse($origin);
+    //         }
+
+    //         $response = $next($request);
+    //         return $this->addPublicCorsHeaders($response, $origin);
+    //     }
+
+    //     // 2. No Origin header (server-to-server, Postman, curl, etc.)
+    //     if (!$origin) {
+    //         return $next($request);
+    //     }
+
+    //     // 3. Origin not in allow-list → just continue (no CORS headers)
+    //     if (!in_array($origin, self::ALLOWED_ORIGINS, true)) {
+    //         return $next($request);
+    //     }
+
+    //     // 4. Allowed origin
+    //     if ($request->isMethod('OPTIONS')) {
+    //         return $this->normalPreflightResponse($origin);
+    //     }
+
+    //     $response = $next($request);
+    //     return $this->addNormalCorsHeaders($response, $origin);
+    // }
+
     public function handle(Request $request, Closure $next): Response
     {
-        $origin = $request->headers->get('Origin');
+        $origin = $request->headers->get('Origin') ?: '*';
+        $path   = $request->path();
+        $uri    = $request->getRequestUri();
 
-        // 1. Public pricing estimate → completely open (any origin)
-        if ($this->isPublicPricingPath($request)) {
-            if ($request->isMethod('OPTIONS')) {
-                return $this->publicPreflightResponse($origin);
-            }
+        $isPublicPricing = str_contains($path, 'public/pricing')
+        || str_contains($uri, '/public/pricing');
 
-            $response = $next($request);
-            return $this->addPublicCorsHeaders($response, $origin);
-        }
-
-        // 2. No Origin header (server-to-server, Postman, curl, etc.)
-        if (!$origin) {
-            return $next($request);
-        }
-
-        // 3. Origin not in allow-list → just continue (no CORS headers)
-        if (!in_array($origin, self::ALLOWED_ORIGINS, true)) {
-            return $next($request);
-        }
-
-        // 4. Allowed origin
-        if ($request->isMethod('OPTIONS')) {
-            return $this->normalPreflightResponse($origin);
+        // Always answer OPTIONS immediately for public pricing
+        if ($isPublicPricing && $request->isMethod('OPTIONS')) {
+            $response = response('', 204);
+            return $this->forcePublicCors($response, $origin);
         }
 
         $response = $next($request);
-        return $this->addNormalCorsHeaders($response, $origin);
+
+        if ($isPublicPricing) {
+            return $this->forcePublicCors($response, $origin);
+        }
+
+        // Normal routes
+        if ($origin !== '*' && in_array($origin, self::ALLOWED_ORIGINS, true)) {
+            return $this->addNormalCorsHeaders($response, $origin);
+        }
+
+        return $response;
+    }
+
+    private function forcePublicCors(Response $response, string $origin): Response
+    {
+        $response->headers->set('Access-Control-Allow-Origin', $origin);
+        $response->headers->set('Access-Control-Allow-Methods', 'POST, OPTIONS, GET');
+        $response->headers->set(
+            'Access-Control-Allow-Headers',
+            'Content-Type, Accept, Authorization, X-Requested-With, X-Api-Key, Origin'
+        );
+        $response->headers->set('Access-Control-Max-Age', '86400');
+        $response->headers->set('Vary', 'Origin');
+        $response->headers->remove('Access-Control-Allow-Credentials');
+
+        return $response;
     }
 
     private function isPublicPricingPath(Request $request): bool
     {
         return $request->is('api/v1/public/pricing/estimate')
-            || $request->is('api/v1/public/pricing/estimate/*');
+        || $request->is('api/v1/public/pricing/estimate/*');
     }
 
     private function publicPreflightResponse(?string $origin): Response

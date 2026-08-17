@@ -25,40 +25,6 @@ class ApiCorsMiddleware
         'http://127.0.0.1:3002',
         'http://127.0.0.1:3003',
     ];
-
-    // public function handle(Request $request, Closure $next): Response
-    // {
-    //     $origin = $request->headers->get('Origin');
-
-    //     // 1. Public pricing estimate → completely open (any origin)
-    //     if ($this->isPublicPricingPath($request)) {
-    //         if ($request->isMethod('OPTIONS')) {
-    //             return $this->publicPreflightResponse($origin);
-    //         }
-
-    //         $response = $next($request);
-    //         return $this->addPublicCorsHeaders($response, $origin);
-    //     }
-
-    //     // 2. No Origin header (server-to-server, Postman, curl, etc.)
-    //     if (!$origin) {
-    //         return $next($request);
-    //     }
-
-    //     // 3. Origin not in allow-list → just continue (no CORS headers)
-    //     if (!in_array($origin, self::ALLOWED_ORIGINS, true)) {
-    //         return $next($request);
-    //     }
-
-    //     // 4. Allowed origin
-    //     if ($request->isMethod('OPTIONS')) {
-    //         return $this->normalPreflightResponse($origin);
-    //     }
-
-    //     $response = $next($request);
-    //     return $this->addNormalCorsHeaders($response, $origin);
-    // }
-
     public function handle(Request $request, Closure $next): Response
     {
         $origin = $request->headers->get('Origin') ?: '*';

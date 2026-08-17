@@ -214,7 +214,7 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
             ],
 
             'stores.*.products.*.unit_weight' => [
-                'required_with:stores.*.products',
+                'nullable',
                 'numeric',
                 'min:0.001',
             ],
@@ -521,10 +521,9 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
                     0,
                     (int) ($product['quantity'] ?? 0)
                 );
-                $unitWeight = max(
-                    0,
-                    (float) ($product['unit_weight'] ?? 0)
-                );
+                $unitWeight = isset($product['unit_weight']) && (float) $product['unit_weight'] > 0
+                    ? (float) $product['unit_weight']
+                    : $this->baseWeightFallback();
                 $unitPrice = max(
                     0,
                     (float) ($product['unit_price'] ?? 0)
@@ -660,6 +659,16 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
         }
 
         return $normalized;
+    }
+
+    private function baseWeightFallback(): float
+    {
+        $settings = \Illuminate\Support\Facades\DB::table('pricing_settings')
+            ->where('is_active', true)
+            ->orderByDesc('id')
+            ->value('included_weight_kg');
+
+        return max(0.001, (float) ($settings ?? 1.5));
     }
 
     private function packingPolicy(): string

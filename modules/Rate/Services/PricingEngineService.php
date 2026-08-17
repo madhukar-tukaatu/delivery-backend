@@ -1035,12 +1035,14 @@ final class PricingEngineService
                 )
             );
 
+            $weightUsedFallback = false;
+
             if ($unitWeightKg <= 0) {
-                throw ValidationException::withMessages([
-                    "products.{$productIndex}.unit_weight" => [
-                        'The product unit weight must be greater than zero.',
-                    ],
-                ]);
+                $unitWeightKg = max(
+                    0.001,
+                    (float) ($settings->included_weight_kg ?? 1.5)
+                );
+                $weightUsedFallback = true;
             }
 
             for (
@@ -1080,6 +1082,8 @@ final class PricingEngineService
                                     ),
                             'actual_weight_kg' =>
                                 $unitWeightKg,
+                            'weight_used_fallback' =>
+                                $weightUsedFallback,
                             'parcel_type' =>
                                 $product['parcel_type']
                                 ?? 'non_fragile',
@@ -1284,6 +1288,9 @@ final class PricingEngineService
 
             'weight_source' =>
                 $weightSource,
+
+            'weight_used_fallback' =>
+                (bool) ($packet['weight_used_fallback'] ?? false),
 
             'volumetric_applied' =>
                 $volumetricApplied,

@@ -248,6 +248,13 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
                 'min:0.1',
             ],
 
+            // Nested object alternative: parcel_dimension.{length,width,height}
+            'stores.*.products.*.parcel_dimension' => ['nullable', 'array'],
+            'stores.*.products.*.parcel_dimension.length' => ['nullable', 'numeric', 'min:0.1'],
+            'stores.*.products.*.parcel_dimension.width'  => ['nullable', 'numeric', 'min:0.1'],
+            'stores.*.products.*.parcel_dimension.height' => ['nullable', 'numeric', 'min:0.1'],
+            'stores.*.products.*.parcel_dimension.unit'   => ['nullable', 'string'],
+
             'stores.*.packets' => [
                 'sometimes',
                 'array',
@@ -536,6 +543,17 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
                 $products[$key]['unit_weight'] = $unitWeight;
                 $products[$key]['unit_price'] = $unitPrice;
                 $products[$key]['parcel_type'] = $productType;
+
+                // Unpack parcel_dimension into flat cm keys the engine expects
+                if (
+                    !isset($products[$key]['length_cm']) &&
+                    is_array($product['parcel_dimension'] ?? null)
+                ) {
+                    $dim = $product['parcel_dimension'];
+                    $products[$key]['length_cm'] = isset($dim['length']) ? (float) $dim['length'] : null;
+                    $products[$key]['width_cm']  = isset($dim['width'])  ? (float) $dim['width']  : null;
+                    $products[$key]['height_cm'] = isset($dim['height']) ? (float) $dim['height'] : null;
+                }
 
                 $parcelWeight += $quantity * $unitWeight;
                 $parcelValue += $quantity * $unitPrice;

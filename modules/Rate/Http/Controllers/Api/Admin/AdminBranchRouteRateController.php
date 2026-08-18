@@ -130,7 +130,7 @@ final class AdminBranchRouteRateController extends Controller
             ->where('status', 'active')
             ->where('type', 'main_branch_zone')
             ->orderBy('name')
-            ->get(['id', 'name', 'code']);
+            ->get(['id', 'name', 'code', 'latitude', 'longitude']);
 
         $rates = DB::table('branch_route_rates')
             ->whereIn('pickup_coverage_location_id', $locations->pluck('id'))

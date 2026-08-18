@@ -11,7 +11,7 @@ return new class extends Migration
         Schema::table('branch_route_rates', function (Blueprint $table): void {
             $table->foreignId('branch_transfer_route_id')
                 ->nullable()
-                ->after('delivery_branch_id')
+                ->after('delivery_coverage_location_id')
                 ->constrained('branch_transfer_routes')
                 ->nullOnDelete();
         });

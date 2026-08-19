@@ -340,8 +340,13 @@ class MerchantOnboardingService
     //     ]);
     // }
 
-    private function ensureSingleApiKey(Merchant $merchant): MerchantApiKey
+    private function ensureSingleApiKey(Merchant $merchant): ?MerchantApiKey
     {
+        // store_manager credentials are issued by MerchantApiCredentialService
+        if ($merchant->application_source === Merchant::SOURCE_STORE_MANAGER) {
+            return null;
+        }
+
         $existingKey = MerchantApiKey::where('merchant_id', $merchant->id)->first();
 
         if ($existingKey) {

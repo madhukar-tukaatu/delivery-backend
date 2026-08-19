@@ -8,8 +8,8 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Modules\Merchant\Events\MerchantApplicationChanged;
 use Modules\Merchant\Models\Merchant;
+use Modules\Merchant\Services\MerchantIntegrationApprovalService;
 use Modules\Merchant\Services\MerchantOnboardingService;
-use Modules\Merchant\Services\StoreIntegrationPostApprovalService;
 
 class AdminMerchantApplicationController extends Controller
 {
@@ -132,7 +132,7 @@ class AdminMerchantApplicationController extends Controller
         Request $request,
         Merchant $merchant,
         MerchantOnboardingService $onboardingService,
-        StoreIntegrationPostApprovalService $integrationService
+        MerchantIntegrationApprovalService $integrationService
     ) {
         $isStoreManagerApplication =
             $merchant->application_source ===
@@ -221,16 +221,17 @@ class AdminMerchantApplicationController extends Controller
          * No merchant rate card is required.
          */
         if ($isStoreManagerApplication) {
-            $integrationResult =
-                $integrationService->completeApproval(
-                    $approvedMerchant,
-                    $data['approved_services']
-                );
+            $integrationResult = $integrationService->approve(
+                $approvedMerchant,
+                [
+                    'approved_services' => $data['approved_services'],
+                    'default_branch_id' => $approvedMerchant->default_branch_id,
+                    'default_sub_branch_id' => $approvedMerchant->default_sub_branch_id,
+                ],
+                $request->user()->id
+            );
 
-            if ($integrationResult instanceof Merchant) {
-                $approvedMerchant =
-                    $integrationResult;
-            }
+            $approvedMerchant = $integrationResult['merchant'];
         }
 
         $approvedMerchant =

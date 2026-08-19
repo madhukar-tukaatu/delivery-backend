@@ -41,7 +41,7 @@ class MerchantApiCredentialService
             'api_key_hash' => hash('sha256', $plainApiKey),
             'api_secret_hash' => hash('sha256', $plainApiSecret),
             'api_secret_encrypted' => Crypt::encryptString($plainApiSecret),
-            'abilities' => array_values($abilities),
+            'permissions' => array_values($abilities),
             'status' => 'active',
             'is_active' => true,
             'secret_revealed_at' => now(),

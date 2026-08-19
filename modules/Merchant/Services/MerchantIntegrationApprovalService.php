@@ -4,20 +4,18 @@ namespace Modules\Merchant\Services;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
+use Modules\Merchant\Jobs\SendStoreIntegrationApprovalCallback;
 use Modules\Merchant\Models\Merchant;
-use Throwable;
 
 class MerchantIntegrationApprovalService
 {
     public function __construct(
         private readonly MerchantApiCredentialService $credentialService,
-        private readonly StoreIntegrationCallbackService $callbackService,
     ) {
     }
 
     public function approve(Merchant $merchant, array $data, int $approvedBy): array
     {
-        $callbackStatus = 'not_required';
         $credentialResult = null;
 
         $approvedMerchant = DB::transaction(function () use (
@@ -30,28 +28,22 @@ class MerchantIntegrationApprovalService
                 ->lockForUpdate()
                 ->findOrFail($merchant->id);
 
-            $currentStatus = (string) ($merchant->verification_status ?: $merchant->status);
-
-            if (!in_array($currentStatus, [
-                'pending',
-                'pending_verification',
-                'under_review',
-                'more_info_required',
-            ], true)) {
+            // MerchantOnboardingService already set status=active/approved before this runs
+            if ($merchant->status !== 'active') {
                 throw ValidationException::withMessages([
-                    'merchant' => ['This merchant application is not available for approval.'],
+                    'merchant' => ['Merchant must be active before issuing integration credentials.'],
                 ]);
             }
 
-            if (!$merchant->pickupLocations()->exists()) {
+            if (!$merchant->integration_callback_url) {
                 throw ValidationException::withMessages([
-                    'pickup_location' => ['At least one pickup location is required.'],
+                    'callback_url' => ['The Store Manager callback URL is missing.'],
                 ]);
             }
 
-            if (!$merchant->documents()->exists()) {
+            if (!$merchant->integration_callback_secret) {
                 throw ValidationException::withMessages([
-                    'documents' => ['Merchant verification documents are required.'],
+                    'callback_secret' => ['The Store Manager callback secret is missing.'],
                 ]);
             }
 
@@ -63,61 +55,55 @@ class MerchantIntegrationApprovalService
                 'approved_services' => $approvedServices,
                 'status' => 'active',
                 'verification_status' => 'approved',
+                'integration_status' => 'approved',
+                'integration_approved_at' => now(),
+                'integration_callback_status' => 'pending',
                 'approved_by' => $approvedBy,
                 'approved_at' => now(),
                 'rejection_reason' => null,
             ])->save();
 
-            if ($merchant->application_source === 'store_manager') {
-                $abilities = $this->abilitiesFromServices($approvedServices);
-                $credentialResult = $this->credentialService
-                    ->issuePrimaryCredential($merchant, $abilities);
-            }
+            $abilities = $this->abilitiesFromServices($approvedServices);
+            $credentialResult = $this->credentialService
+                ->issuePrimaryCredential($merchant, $abilities);
 
             return $merchant->fresh([
                 'defaultBranch',
                 'defaultSubBranch',
                 'pickupLocations',
                 'documents',
+                'apiKeys',
             ]);
         }, 3);
 
-        if (
-            $approvedMerchant->application_source === 'store_manager'
-            && $credentialResult
-            && $credentialResult['created']
-        ) {
-            try {
-                $this->callbackService->sendApproved($approvedMerchant, $credentialResult);
-                $callbackStatus = 'delivered';
-            } catch (Throwable $exception) {
-                report($exception);
-                $callbackStatus = 'failed';
-            }
+        if ($credentialResult && $credentialResult['created']) {
+            SendStoreIntegrationApprovalCallback::dispatch($approvedMerchant->id)
+                ->afterCommit()
+                ->onQueue('webhooks');
         }
 
         return [
             'merchant' => $approvedMerchant,
             'credentials_created' => (bool) ($credentialResult['created'] ?? false),
-            'callback_status' => $callbackStatus,
         ];
     }
 
     private function abilitiesFromServices(array $services): array
     {
         $map = [
-            'delivery_pricing' => 'pricing:read',
-            'quote_creation' => 'quotes:create',
-            'shipment_creation' => 'shipments:create',
-            'tracking' => 'tracking:read',
-            'webhooks' => 'webhooks:manage',
-            'pod' => 'pod:use',
-            'returns' => 'returns:create',
+            'delivery_pricing' => 'pricing.quote',
+            'quote_creation' => 'pricing.quote',
+            'shipment_creation' => 'shipments.create',
+            'tracking' => 'shipments.track',
+            'webhooks' => 'webhooks.manage',
+            'pod' => 'pod.use',
+            'returns' => 'returns.create',
         ];
 
         return collect($services)
             ->map(fn (string $service) => $map[$service] ?? null)
             ->filter()
+            ->unique()
             ->values()
             ->all();
     }

@@ -1,5 +1,4 @@
 <?php
-
 namespace Modules\Merchant\Http\Controllers;
 
 use App\Http\Controllers\Controller;
@@ -7,6 +6,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Modules\Merchant\Events\MerchantApplicationChanged;
+use Modules\Merchant\Jobs\SendStoreIntegrationApprovalCallback;
 use Modules\Merchant\Models\Merchant;
 use Modules\Merchant\Services\MerchantIntegrationApprovalService;
 use Modules\Merchant\Services\MerchantOnboardingService;
@@ -112,6 +112,45 @@ class AdminMerchantApplicationController extends Controller
         );
     }
 
+    public function retryCallback(Merchant $merchant): JsonResponse
+    {
+        if ($merchant->application_source !== Merchant::SOURCE_STORE_MANAGER) {
+            return response()->json([
+                'message' => 'This merchant does not use store integration callbacks.',
+            ], 422);
+        }
+
+        if ($merchant->integration_status !== 'approved') {
+            return response()->json([
+                'message' => 'The merchant must be approved before the integration callback can be retried.',
+            ], 422);
+        }
+
+        if (! $merchant->integration_callback_url) {
+            return response()->json([
+                'message' => 'Integration callback URL is not configured.',
+            ], 422);
+        }
+
+        DB::transaction(function () use ($merchant): void {
+            $merchant->forceFill([
+                'integration_callback_status'  => 'pending',
+                'integration_callback_error'   => null,
+                'integration_callback_sent_at' => null,
+            ])->save();
+
+            SendStoreIntegrationApprovalCallback::dispatch($merchant->id)
+                ->onQueue('webhooks');
+        });
+
+        return response()->json([
+            'message'            => 'Integration callback retry has been queued.',
+            'merchant_id'        => $merchant->id,
+            'application_number' => $merchant->application_number,
+            'callback_status'    => 'pending',
+        ]);
+    }
+
     /**
      * Display one merchant application.
      */
@@ -135,11 +174,11 @@ class AdminMerchantApplicationController extends Controller
         MerchantIntegrationApprovalService $integrationService
     ) {
         $isStoreManagerApplication =
-            $merchant->application_source ===
-            Merchant::SOURCE_STORE_MANAGER;
+        $merchant->application_source ===
+        Merchant::SOURCE_STORE_MANAGER;
 
         $rules = [
-            'branch_id' => [
+            'branch_id'     => [
                 'nullable',
                 'integer',
                 'exists:branches,id',
@@ -183,30 +222,30 @@ class AdminMerchantApplicationController extends Controller
         }
 
         $data =
-            $request->validate($rules);
+        $request->validate($rules);
 
         /*
          * Shared approval process for both public merchants
          * and Store Manager merchants.
          */
         $approvedMerchant =
-            $onboardingService->approve(
-                $merchant,
-                $request->user(),
-                [
-                    'branch_id' =>
-                        $data['branch_id'] ?? null,
+        $onboardingService->approve(
+            $merchant,
+            $request->user(),
+            [
+                'branch_id'     =>
+                $data['branch_id'] ?? null,
 
-                    'sub_branch_id' =>
-                        $data['sub_branch_id'] ?? null,
-                ]
-            );
+                'sub_branch_id' =>
+                $data['sub_branch_id'] ?? null,
+            ]
+        );
 
         /*
          * Defensive fallback when the service updates the
          * merchant but does not explicitly return it.
          */
-        if (!$approvedMerchant instanceof Merchant) {
+        if (! $approvedMerchant instanceof Merchant) {
             $approvedMerchant = $merchant;
         }
 
@@ -224,8 +263,8 @@ class AdminMerchantApplicationController extends Controller
             $integrationResult = $integrationService->approve(
                 $approvedMerchant,
                 [
-                    'approved_services' => $data['approved_services'],
-                    'default_branch_id' => $approvedMerchant->default_branch_id,
+                    'approved_services'     => $data['approved_services'],
+                    'default_branch_id'     => $approvedMerchant->default_branch_id,
                     'default_sub_branch_id' => $approvedMerchant->default_sub_branch_id,
                 ],
                 $request->user()->id
@@ -235,9 +274,9 @@ class AdminMerchantApplicationController extends Controller
         }
 
         $approvedMerchant =
-            $this->freshMerchant(
-                $approvedMerchant
-            );
+        $this->freshMerchant(
+            $approvedMerchant
+        );
 
         /*
          * Notify connected admin pages.
@@ -284,14 +323,14 @@ class AdminMerchantApplicationController extends Controller
          * without returning it.
          */
         $rejectedMerchant =
-            $result instanceof Merchant
-                ? $result
-                : $merchant;
+        $result instanceof Merchant
+            ? $result
+            : $merchant;
 
         $rejectedMerchant =
-            $this->freshMerchant(
-                $rejectedMerchant
-            );
+        $this->freshMerchant(
+            $rejectedMerchant
+        );
 
         $this->broadcastChange(
             $rejectedMerchant,
@@ -322,20 +361,20 @@ class AdminMerchantApplicationController extends Controller
         ]);
 
         $result =
-            $service->requestMoreInfo(
-                $merchant,
-                $data['message']
-            );
+        $service->requestMoreInfo(
+            $merchant,
+            $data['message']
+        );
 
         $updatedMerchant =
-            $result instanceof Merchant
-                ? $result
-                : $merchant;
+        $result instanceof Merchant
+            ? $result
+            : $merchant;
 
         $updatedMerchant =
-            $this->freshMerchant(
-                $updatedMerchant
-            );
+        $this->freshMerchant(
+            $updatedMerchant
+        );
 
         $this->broadcastChange(
             $updatedMerchant,

@@ -43,8 +43,6 @@ Route::prefix('v1/merchant')
             ->name('signup');
     });
 
-
-
 /*
     |--------------------------------------------------------------------------
 | Store Manager Application Submission
@@ -79,10 +77,10 @@ Route::prefix('v1/admin')
         Route::middleware(['route.permission'])->group(function () {
             Route::apiResource('merchants', MerchantController::class)
                 ->names([
-                    'index' => 'merchants.index',
-                    'store' => 'merchants.store',
-                    'show' => 'merchants.show',
-                    'update' => 'merchants.update',
+                    'index'   => 'merchants.index',
+                    'store'   => 'merchants.store',
+                    'show'    => 'merchants.show',
+                    'update'  => 'merchants.update',
                     'destroy' => 'merchants.destroy',
                 ]);
 
@@ -106,6 +104,9 @@ Route::prefix('v1/admin')
 
             Route::post('merchant-applications/{merchant}/request-more-info', [AdminMerchantApplicationController::class, 'requestMoreInfo'])
                 ->name('merchant-applications.request-more-info');
+                
+            Route::post('merchant-applications/{merchant}/retry-callback',[AdminMerchantApplicationController::class, 'retryCallback'])
+                ->name('merchant-applications.retry-callback');
 
             Route::get('shipments', [MerchantShipmentController::class, 'index'])
                 ->name('merchant.shipments.index');

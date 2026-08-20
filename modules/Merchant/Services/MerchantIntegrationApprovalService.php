@@ -60,7 +60,7 @@ class MerchantIntegrationApprovalService
                 'integration_callback_status' => 'pending',
                 'verified_by' => $approvedBy,
                 'verified_at' => now(),
-                'rejection_reason' => null,
+                'rejected_reason' => null,
             ])->save();
 
             $abilities = $this->abilitiesFromServices($approvedServices);

@@ -3,6 +3,8 @@ namespace Modules\Merchant\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Modules\Merchant\Events\MerchantApplicationChanged;

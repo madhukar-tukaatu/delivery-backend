@@ -58,8 +58,8 @@ class MerchantIntegrationApprovalService
                 'integration_status' => 'approved',
                 'integration_approved_at' => now(),
                 'integration_callback_status' => 'pending',
-                'approved_by' => $approvedBy,
-                'approved_at' => now(),
+                'verified_by' => $approvedBy,
+                'verified_at' => now(),
                 'rejection_reason' => null,
             ])->save();
 

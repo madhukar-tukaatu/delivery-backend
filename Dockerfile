@@ -44,13 +44,14 @@ RUN mkdir -p \
     storage/logs \
     bootstrap/cache \
     && chmod -R 775 storage bootstrap/cache
+    
+RUN composer config --global source-fallback true
 
-RUN composer config --global source-fallback true \ 
-    && composer install \
-        --no-dev \
-        --prefer-dist \
-        --no-interaction \
-        --optimize-autoloader
+RUN composer install \
+    --no-dev \
+    --prefer-dist \
+    --no-interaction \
+    --optimize-autoloader
 
 COPY docker/php.ini /usr/local/etc/php/conf.d/custom.ini
 COPY docker/start.sh /usr/local/bin/start.sh

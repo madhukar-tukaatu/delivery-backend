@@ -1,6 +1,6 @@
 <?php
 
-declare(strict_types=1);
+declare (strict_types = 1);
 
 namespace Modules\Rate\Services;
 
@@ -47,7 +47,7 @@ final class MultiStorePricingService
     ): array {
         $stores = $validated['stores'] ?? [];
 
-        if (!is_array($stores) || count($stores) === 0) {
+        if (! is_array($stores) || count($stores) === 0) {
             throw ValidationException::withMessages([
                 'stores' => [
                     'At least one marketplace store is required.',
@@ -67,15 +67,15 @@ final class MultiStorePricingService
 
         $storeCalculations = [];
 
-        $productsTotal = 0.0;
-        $podTotal = 0.0;
-        $deliveryTotal = 0.0;
+        $productsTotal  = 0.0;
+        $podTotal       = 0.0;
+        $deliveryTotal  = 0.0;
         $estimatedHours = 0;
 
         $earliestValidUntil = null;
 
         foreach ($stores as $storeIndex => $store) {
-            if (!is_array($store)) {
+            if (! is_array($store)) {
                 throw ValidationException::withMessages([
                     "stores.{$storeIndex}" => [
                         'Each store must be a valid object.',
@@ -101,7 +101,7 @@ final class MultiStorePricingService
 
             $deliveryTotal += (float) $calculation['quote']['final_price'];
 
-            $estimatedHours = max(
+            $estimatedHours  = max(
                 $estimatedHours,
                 (int) ($calculation['quote']['estimated_hours'] ?? 0)
             );
@@ -122,48 +122,48 @@ final class MultiStorePricingService
         }
 
         $publicStoreQuotes = array_map(
-            fn (array $calculation): array =>
-                $this->formatCalculatedStoreQuote($calculation),
+            fn(array $calculation): array=>
+            $this->formatCalculatedStoreQuote($calculation),
             $storeCalculations
         );
 
         return [
-            'public' => [
-                'marketplace_id' => $marketplaceId,
-                'merchant_id' => $merchantId,
+            'public'             => [
+                'marketplace_id'       => $marketplaceId,
+                'merchant_id'          => $merchantId,
 
                 'external_checkout_id' =>
-                    $validated['external_checkout_id'] ?? null,
+                $validated['external_checkout_id'] ?? null,
 
-                'currency' => 'NPR',
+                'currency'             => 'NPR',
 
-                'store_count' => count($publicStoreQuotes),
+                'store_count'          => count($publicStoreQuotes),
 
-                'products_total' => round($productsTotal, 2),
+                'products_total'       => round($productsTotal, 2),
 
-                'pod_total' => round($podTotal, 2),
+                'pod_total'            => round($podTotal, 2),
 
-                'delivery_total' => round($deliveryTotal, 2),
+                'delivery_total'       => round($deliveryTotal, 2),
 
-                'grand_total' => round(
+                'grand_total'          => round(
                     $productsTotal + $deliveryTotal,
                     2
                 ),
 
-                'estimated_hours' => $estimatedHours,
+                'estimated_hours'      => $estimatedHours,
 
-                'valid_until' => $earliestValidUntil,
+                'valid_until'          => $earliestValidUntil,
 
-                'store_quotes' => $publicStoreQuotes,
+                'store_quotes'         => $publicStoreQuotes,
             ],
 
             'store_calculations' => $storeCalculations,
 
-            'delivery' => $delivery,
+            'delivery'           => $delivery,
 
-            'service_type' => $defaultServiceType,
+            'service_type'       => $defaultServiceType,
 
-            'payment_type' => $defaultPaymentType,
+            'payment_type'       => $defaultPaymentType,
         ];
     }
 
@@ -218,97 +218,97 @@ final class MultiStorePricingService
             }
 
             $checkoutInsert = [
-                'quote_number' => $checkoutQuoteNumber,
+                'quote_number'       => $checkoutQuoteNumber,
 
-                'merchant_id' => $merchantId,
+                'merchant_id'        => $merchantId,
 
-                'delivery_address' =>
-                    $delivery['address'],
+                'delivery_address'   =>
+                $delivery['address'],
 
-                'delivery_latitude' =>
-                    $delivery['latitude'],
+                'delivery_latitude'  =>
+                $delivery['latitude'],
 
                 'delivery_longitude' =>
-                    $delivery['longitude'],
+                $delivery['longitude'],
 
-                'service_type' =>
-                    $defaultServiceType,
+                'service_type'       =>
+                $defaultServiceType,
 
-                'service_type_id' =>
-                    $serviceTypeId,
+                'service_type_id'    =>
+                $serviceTypeId,
 
-                'payment_type' =>
-                    $defaultPaymentType,
+                'payment_type'       =>
+                $defaultPaymentType,
 
-                'products_total' =>
-                    $calculated['products_total'],
+                'products_total'     =>
+                $calculated['products_total'],
 
-                'pod_total' =>
-                    $calculated['pod_total'],
+                'pod_total'          =>
+                $calculated['pod_total'],
 
-                'delivery_total' =>
-                    $calculated['delivery_total'],
+                'delivery_total'     =>
+                $calculated['delivery_total'],
 
-                'grand_total' =>
-                    $calculated['grand_total'],
+                'grand_total'        =>
+                $calculated['grand_total'],
 
-                'currency' =>
-                    $calculated['currency'],
+                'currency'           =>
+                $calculated['currency'],
 
-                'store_count' =>
-                    $calculated['store_count'],
+                'store_count'        =>
+                $calculated['store_count'],
 
-                'status' =>
-                    'pending',
+                'status'             =>
+                'pending',
 
-                'expires_at' =>
-                    $this->toDatabaseDateTime(
-                        $calculated['valid_until']
-                    ),
+                'expires_at'         =>
+                $this->toDatabaseDateTime(
+                    $calculated['valid_until']
+                ),
 
-                'snapshot_json' => $this->encodeJson([
-                    'marketplace_id' =>
-                        $marketplaceId,
+                'snapshot_json'      => $this->encodeJson([
+                    'marketplace_id'       =>
+                    $marketplaceId,
 
-                    'merchant_id' =>
-                        $merchantId,
+                    'merchant_id'          =>
+                    $merchantId,
 
                     'external_checkout_id' =>
-                        $validated['external_checkout_id'] ?? null,
+                    $validated['external_checkout_id'] ?? null,
 
-                    'delivery' =>
-                        $delivery,
+                    'delivery'             =>
+                    $delivery,
 
-                    'service_type' =>
-                        $defaultServiceType,
+                    'service_type'         =>
+                    $defaultServiceType,
 
-                    'payment_type' =>
-                        $defaultPaymentType,
+                    'payment_type'         =>
+                    $defaultPaymentType,
 
-                    'products_total' =>
-                        $calculated['products_total'],
+                    'products_total'       =>
+                    $calculated['products_total'],
 
-                    'pod_total' =>
-                        $calculated['pod_total'],
+                    'pod_total'            =>
+                    $calculated['pod_total'],
 
-                    'delivery_total' =>
-                        $calculated['delivery_total'],
+                    'delivery_total'       =>
+                    $calculated['delivery_total'],
 
-                    'grand_total' =>
-                        $calculated['grand_total'],
+                    'grand_total'          =>
+                    $calculated['grand_total'],
 
-                    'store_count' =>
-                        $calculated['store_count'],
+                    'store_count'          =>
+                    $calculated['store_count'],
 
-                    'store_quotes' =>
-                        $calculated['store_quotes'],
+                    'store_quotes'         =>
+                    $calculated['store_quotes'],
                 ]),
 
-                'created_at' =>
-                    now(),
+                'created_at'         =>
+                now(),
 
-                'updated_at' =>
-                    now(),
+                'updated_at'         =>
+                now(),
             ];
 
             $checkoutInsert = $this->withColumnIfExists(
@@ -342,47 +342,47 @@ final class MultiStorePricingService
             }
 
             return [
-                'checkout_quote_id' =>
-                    (int) $checkoutQuoteId,
+                'checkout_quote_id'     =>
+                (int) $checkoutQuoteId,
 
                 'checkout_quote_number' =>
-                    $checkoutQuoteNumber,
+                $checkoutQuoteNumber,
 
-                'external_checkout_id' =>
-                    $validated['external_checkout_id'] ?? null,
+                'external_checkout_id'  =>
+                $validated['external_checkout_id'] ?? null,
 
-                'marketplace_id' =>
-                    $marketplaceId,
+                'marketplace_id'        =>
+                $marketplaceId,
 
-                'merchant_id' =>
-                    $merchantId,
+                'merchant_id'           =>
+                $merchantId,
 
-                'currency' =>
-                    $calculated['currency'],
+                'currency'              =>
+                $calculated['currency'],
 
-                'store_count' =>
-                    count($savedStoreQuotes),
+                'store_count'           =>
+                count($savedStoreQuotes),
 
-                'products_total' =>
-                    $calculated['products_total'],
+                'products_total'        =>
+                $calculated['products_total'],
 
-                'pod_total' =>
-                    $calculated['pod_total'],
+                'pod_total'             =>
+                $calculated['pod_total'],
 
-                'delivery_total' =>
-                    $calculated['delivery_total'],
+                'delivery_total'        =>
+                $calculated['delivery_total'],
 
-                'grand_total' =>
-                    $calculated['grand_total'],
+                'grand_total'           =>
+                $calculated['grand_total'],
 
-                'estimated_hours' =>
-                    $calculated['estimated_hours'],
+                'estimated_hours'       =>
+                $calculated['estimated_hours'],
 
-                'valid_until' =>
-                    $calculated['valid_until'],
+                'valid_until'           =>
+                $calculated['valid_until'],
 
-                'store_quotes' =>
-                    $savedStoreQuotes,
+                'store_quotes'          =>
+                $savedStoreQuotes,
             ];
         }, 3);
     }
@@ -410,8 +410,7 @@ final class MultiStorePricingService
          * Resolve packing policy.
          */
         $packingMode = MarketplacePackingMode::resolve(
-            $store['packing_policy']
-                ?? MarketplacePackingMode::configured()->value
+            $store['packing_policy'] ?? MarketplacePackingMode::configured()->value
         );
 
         /*
@@ -485,79 +484,79 @@ final class MultiStorePricingService
          * are present.
          */
         $payload = [
-            'store_id' =>
-                isset($store['store_id'])
-                    ? (int) $store['store_id']
-                    : null,
+            'store_id'           =>
+            isset($store['store_id'])
+                ? (int) $store['store_id']
+                : null,
 
-            'pickup_address' =>
-                $store['pickup_address'] ?? null,
+            'pickup_address'     =>
+            $store['pickup_address'] ?? null,
 
-            'pickup_latitude' =>
-                $store['pickup_latitude'] ?? null,
+            'pickup_latitude'    =>
+            $store['pickup_latitude'] ?? null,
 
-            'pickup_longitude' =>
-                $store['pickup_longitude'] ?? null,
+            'pickup_longitude'   =>
+            $store['pickup_longitude'] ?? null,
 
-            'delivery_address' =>
-                $delivery['address'],
+            'delivery_address'   =>
+            $delivery['address'],
 
-            'delivery_latitude' =>
-                $delivery['latitude'],
+            'delivery_latitude'  =>
+            $delivery['latitude'],
 
             'delivery_longitude' =>
-                $delivery['longitude'],
+            $delivery['longitude'],
 
             /*
              * Physical marketplace products.
              */
-            'products' =>
-                $pricingInput['products'],
+            'products'           =>
+            $pricingInput['products'],
 
             /*
              * Physical packets.
              */
-            'packets' =>
-                $pricingInput['packets'],
+            'packets'            =>
+            $pricingInput['packets'],
 
             /*
              * Calculated values.
              */
-            'packet_count' =>
-                $summary['packet_count'],
+            'packet_count'       =>
+            $summary['packet_count'],
 
-            'parcel_weight' =>
-                $summary['parcel_weight'],
+            'parcel_weight'      =>
+            $summary['parcel_weight'],
 
-            'parcel_value' =>
-                $summary['parcel_value'],
+            'parcel_value'       =>
+            $summary['parcel_value'],
 
-            'parcel_type' =>
-                $summary['parcel_type'],
+            'parcel_type'        =>
+            $summary['parcel_type'],
 
             /*
              * Dimensions are explicitly exposed as well.
              */
-            'dimensions' =>
-                $summary['dimensions'],
+            'dimensions'         =>
+            $summary['dimensions'],
 
-            'payment_type' =>
-                $paymentType,
+            'payment_type'       =>
+            $paymentType,
 
-            'pod_amount' =>
-                $podAmount,
+            'pod_amount'         =>
+            $podAmount,
 
-            'service_type' =>
-                $serviceType,
+            'service_type'       =>
+            $serviceType,
 
             /*
              * Marketplace uses configured transfer route pricing.
              */
-            'base_rate_mode' =>
-                config(
-                    'marketplace.base_rate_mode',
-                    'configured_transfer_route'
-                ),
+            'base_rate_mode'     =>
+            config(
+                'marketplace.base_rate_mode',
+                'configured_transfer_route'
+            ),
         ];
 
         /*
@@ -575,69 +574,228 @@ final class MultiStorePricingService
         );
 
         return [
-            'store_index' =>
-                $storeIndex,
+            'store_index'       =>
+            $storeIndex,
 
-            'store' =>
-                $store,
+            'store'             =>
+            $store,
 
-            'store_id' =>
-                $payload['store_id'],
+            'store_id'          =>
+            $payload['store_id'],
 
             'external_store_id' =>
-                $store['external_store_id'] ?? null,
+            $store['external_store_id'] ?? null,
 
-            'marketplace_id' =>
-                $marketplaceId,
+            'marketplace_id'    =>
+            $marketplaceId,
 
-            'merchant_id' =>
-                $merchantId,
+            'merchant_id'       =>
+            $merchantId,
 
-            'input_mode' => match (true) {
-                count($packets) > 0 =>
-                    'packets',
+            'input_mode'        => match (true) {
+                count($packets) > 0  =>
+                'packets',
 
                 count($products) > 0 =>
-                    'products',
+                'products',
 
-                default =>
-                    'legacy_single_parcel',
+                default              =>
+                'legacy_single_parcel',
             },
 
-            'packing_policy' =>
-                $packingMode->value,
+            'packing_policy'    =>
+            $packingMode->value,
 
-            'products' =>
-                $products,
+            'products'          =>
+            $products,
 
-            'packets' =>
-                $packets,
+            'packets'           =>
+            $packets,
 
-            'pricing_products' =>
-                $pricingInput['products'],
+            'pricing_products'  =>
+            $pricingInput['products'],
 
-            'pricing_packets' =>
-                $pricingInput['packets'],
+            'pricing_packets'   =>
+            $pricingInput['packets'],
 
-            'summary' =>
-                $summary,
+            'summary'           =>
+            $summary,
 
-            'payment_type' =>
-                $paymentType,
+            'payment_type'      =>
+            $paymentType,
 
-            'service_type' =>
-                $serviceType,
+            'service_type'      =>
+            $serviceType,
 
-            'pod_amount' =>
-                $podAmount,
+            'pod_amount'        =>
+            $podAmount,
 
-            'quote' =>
-                $quote,
+            'quote'             =>
+            $quote,
+        ];
+    }
+
+    /**
+     * Default actual weight used when marketplace does not provide
+     * unit_weight.
+     *
+     * This is intentionally configurable.
+     */
+    private function defaultUnitWeightKg(): float
+    {
+        return max(
+            0.001,
+            (float) config(
+                'marketplace.default_product_weight_kg',
+                1.5
+            )
+        );
+    }
+
+/**
+ * Volumetric divisor.
+ *
+ * Standard courier volumetric-weight calculation:
+ *
+ *     L × W × H / 5000
+ *
+ * Dimensions must be in centimetres.
+ */
+    private function volumetricDivisor(): float
+    {
+        return max(
+            1,
+            (float) config(
+                'marketplace.volumetric_divisor',
+                5000
+            )
+        );
+    }
+
+/**
+ * Calculate volumetric weight in kilograms.
+ */
+    private function calculateVolumetricWeightKg(
+        ?array $dimension
+    ): float {
+        if (
+            ! is_array($dimension) ||
+            ! isset(
+                $dimension['length_cm'],
+                $dimension['width_cm'],
+                $dimension['height_cm']
+            )
+        ) {
+            return 0.0;
+        }
+
+        $volume = (
+            (float) $dimension['length_cm']
+             * (float) $dimension['width_cm']
+             * (float) $dimension['height_cm']
+        );
+
+        if ($volume <= 0) {
+            return 0.0;
+        }
+
+        return round(
+            $volume / $this->volumetricDivisor(),
+            3
+        );
+    }
+
+/**
+ * Resolve product's actual and chargeable weight.
+ *
+ * Rules:
+ *
+ * - unit_weight provided:
+ *      actual = supplied unit_weight
+ *
+ * - unit_weight missing:
+ *      actual = 1.5 kg fallback
+ *
+ * - dimensions provided:
+ *      volumetric = L × W × H / divisor
+ *
+ * - chargeable:
+ *      max(actual, volumetric)
+ */
+    private function resolveProductWeight(
+        array $product,
+        ?array $dimension
+    ): array {
+        $hasUnitWeight =
+        array_key_exists('unit_weight', $product)
+        && $product['unit_weight'] !== null
+        && $product['unit_weight'] !== ''
+        && is_numeric($product['unit_weight']);
+
+        $actualWeight = $hasUnitWeight
+            ? (float) $product['unit_weight']
+            : $this->defaultUnitWeightKg();
+
+        /*
+     * Safety fallback.
+     */
+        if ($actualWeight <= 0) {
+            $actualWeight = $this->defaultUnitWeightKg();
+        }
+
+        $volumetricWeight =
+        $this->calculateVolumetricWeightKg($dimension);
+
+        /*
+     * Chargeable weight is whichever is greater:
+     *
+     * actual weight
+     * OR
+     * volumetric weight
+     */
+        $chargeableWeight = max(
+            $actualWeight,
+            $volumetricWeight
+        );
+
+        return [
+            'actual_weight_kg'     =>
+            round($actualWeight, 3),
+
+            'volumetric_weight_kg' =>
+            round($volumetricWeight, 3),
+
+            'chargeable_weight_kg' =>
+            round($chargeableWeight, 3),
+
+            'weight_source'        =>
+            $hasUnitWeight
+                ? 'unit_weight'
+                : 'fallback_1.5kg',
+
+            'volumetric_applied'   =>
+            $volumetricWeight > $actualWeight,
         ];
     }
 
     /**
      * Validate marketplace products.
+     */
+    /**
+     * Validate marketplace products.
+     *
+     * IMPORTANT:
+     *
+     * unit_weight is OPTIONAL.
+     *
+     * If unit_weight is missing:
+     *     actual weight = 1.5 kg fallback.
+     *
+     * If parcel_dimension exists:
+     *     volumetric weight is calculated.
+     *
+     * Chargeable weight:
+     *     max(actual weight, volumetric weight)
      */
     private function validateMarketplaceProducts(
         array $products,
@@ -648,7 +806,8 @@ final class MultiStorePricingService
         }
 
         foreach ($products as $productIndex => $product) {
-            $prefix = "stores.{$storeIndex}.products.{$productIndex}";
+            $prefix =
+                "stores.{$storeIndex}.products.{$productIndex}";
 
             $quantity = (int) ($product['quantity'] ?? 0);
 
@@ -660,32 +819,53 @@ final class MultiStorePricingService
                 ]);
             }
 
-            $unitWeight = (float) ($product['unit_weight'] ?? 0);
+            /*
+         * ---------------------------------------------------------
+         * UNIT WEIGHT
+         * ---------------------------------------------------------
+         *
+         * unit_weight is now OPTIONAL.
+         *
+         * Missing unit_weight does NOT cause validation failure.
+         */
+            if (
+                array_key_exists('unit_weight', $product)
+                && $product['unit_weight'] !== null
+                && $product['unit_weight'] !== ''
+            ) {
+                if (! is_numeric($product['unit_weight'])) {
+                    throw ValidationException::withMessages([
+                        "{$prefix}.unit_weight" => [
+                            'Product unit weight must be numeric.',
+                        ],
+                    ]);
+                }
 
-            if ($unitWeight <= 0) {
-                throw ValidationException::withMessages([
-                    "{$prefix}.unit_weight" => [
-                        'Product unit weight must be greater than zero.',
-                    ],
-                ]);
-            }
+                $unitWeight =
+                (float) $product['unit_weight'];
 
-            $unitPrice = (float) ($product['unit_price'] ?? 0);
-
-            if ($unitPrice < 0) {
-                throw ValidationException::withMessages([
-                    "{$prefix}.unit_price" => [
-                        'Product unit price cannot be negative.',
-                    ],
-                ]);
+                if ($unitWeight <= 0) {
+                    throw ValidationException::withMessages([
+                        "{$prefix}.unit_weight" => [
+                            'Product unit weight must be greater than zero when provided.',
+                        ],
+                    ]);
+                }
+            } else {
+                /*
+             * Missing weight is allowed.
+             *
+             * The actual fallback is applied later:
+             *
+             *     1.5 kg
+             */
+                $unitWeight =
+                $this->defaultUnitWeightKg();
             }
 
             /*
-             * Maximum weight per product.
-             *
-             * Keep this configurable so the marketplace rule and
-             * public pricing rule do not need to be duplicated here.
-             */
+         * Maximum actual unit weight.
+         */
             $maxUnitWeight = (float) config(
                 'marketplace.max_product_weight_kg',
                 100
@@ -700,66 +880,118 @@ final class MultiStorePricingService
             }
 
             /*
-             * Dimensions are REQUIRED for marketplace products.
-             */
-            $dimension = $product['parcel_dimension'] ?? null;
+         * ---------------------------------------------------------
+         * PRICE
+         * ---------------------------------------------------------
+         */
+            $unitPrice =
+            (float) ($product['unit_price'] ?? 0);
 
-            if (!is_array($dimension)) {
+            if ($unitPrice < 0) {
                 throw ValidationException::withMessages([
-                    "{$prefix}.parcel_dimension" => [
-                        'Product parcel_dimension is required.',
+                    "{$prefix}.unit_price" => [
+                        'Product unit price cannot be negative.',
                     ],
                 ]);
             }
 
-            $normalized = $this->normalizeDimensions(
-                $dimension,
-                "{$prefix}.parcel_dimension"
-            );
-
             /*
-             * Maximum individual dimension.
-             */
-            $maxDimension = (float) config(
-                'marketplace.max_dimension_cm',
-                200
-            );
+         * ---------------------------------------------------------
+         * DIMENSIONS
+         * ---------------------------------------------------------
+         *
+         * parcel_dimension is optional.
+         *
+         * If provided, volumetric weight will be calculated.
+         */
+            $dimension =
+            $product['parcel_dimension'] ?? null;
 
-            foreach (
-                [
-                    'length' => $normalized['length_cm'],
-                    'width' => $normalized['width_cm'],
-                    'height' => $normalized['height_cm'],
-                ] as $name => $value
-            ) {
-                if ($value > $maxDimension) {
+            if ($dimension !== null) {
+                if (! is_array($dimension)) {
                     throw ValidationException::withMessages([
-                        "{$prefix}.parcel_dimension.{$name}" => [
-                            "Product {$name} cannot exceed {$maxDimension} cm.",
+                        "{$prefix}.parcel_dimension" => [
+                            'Product parcel_dimension must be an object.',
                         ],
                     ]);
                 }
-            }
 
-            /*
-             * Maximum product volume.
+                $normalized =
+                $this->normalizeDimensions(
+                    $dimension,
+                    "{$prefix}.parcel_dimension"
+                );
+
+                /*
+             * Maximum individual dimension.
              */
-            $maxVolume = (float) config(
-                'marketplace.max_volume_cm3',
-                200 * 200 * 200
-            );
+                $maxDimension = (float) config(
+                    'marketplace.max_dimension_cm',
+                    200
+                );
 
-            $volume =
-                $normalized['length_cm']
-                * $normalized['width_cm']
-                * $normalized['height_cm'];
+                foreach (
+                    [
+                        'length' =>
+                        $normalized['length_cm'],
 
-            if ($volume > $maxVolume) {
-                throw ValidationException::withMessages([
-                    "{$prefix}.parcel_dimension" => [
-                        'Product parcel dimensions exceed the maximum allowed volume.',
-                    ],
-                ]);
+                        'width'  =>
+                        $normalized['width_cm'],
+
+                        'height' =>
+                        $normalized['height_cm'],
+                    ] as $name => $value
+                ) {
+                    if ($value > $maxDimension) {
+                        throw ValidationException::withMessages([
+                            "{$prefix}.parcel_dimension.{$name}" => [
+                                "Product {$name} cannot exceed {$maxDimension} cm.",
+                            ],
+                        ]);
+                    }
+                }
+
+                /*
+             * Maximum volume.
+             */
+                $maxVolume = (float) config(
+                    'marketplace.max_volume_cm3',
+                    200 * 200 * 200
+                );
+
+                $volume =
+                    $normalized['length_cm']
+                     * $normalized['width_cm']
+                     * $normalized['height_cm'];
+
+                if ($volume > $maxVolume) {
+                    throw ValidationException::withMessages([
+                        "{$prefix}.parcel_dimension" => [
+                            'Product parcel dimensions exceed the maximum allowed volume.',
+                        ],
+                    ]);
+                }
+
+                /*
+             * Validate volumetric weight as well.
+             */
+                $volumetricWeight =
+                $this->calculateVolumetricWeightKg(
+                    $normalized
+                );
+
+                $maxChargeableWeight = (float) config(
+                    'marketplace.max_product_weight_kg',
+                    100
+                );
+
+                if ($volumetricWeight > $maxChargeableWeight) {
+                    throw ValidationException::withMessages([
+                        "{$prefix}.parcel_dimension" => [
+                            "Calculated volumetric weight cannot exceed {$maxChargeableWeight} kg.",
+                        ],
+                    ]);
+                }
             }
         }
     }
@@ -775,9 +1007,7 @@ final class MultiStorePricingService
             $prefix = "stores.{$storeIndex}.packets.{$packetIndex}";
 
             $weight = (float) (
-                $packet['actual_weight_kg']
-                ?? $packet['actual_weight']
-                ?? 0
+                $packet['actual_weight_kg'] ?? $packet['actual_weight'] ?? 0
             );
 
             if ($weight <= 0) {
@@ -850,7 +1080,20 @@ final class MultiStorePricingService
          * ---------------------------------------------------------------
          */
         if (count($products) > 0) {
+            /*
+     * Total CHARGEABLE weight.
+     */
             $weight = 0.0;
+
+            /*
+     * Total actual physical weight.
+     */
+            $actualWeightTotal = 0.0;
+
+            /*
+     * Total volumetric weight.
+     */
+            $volumetricWeightTotal = 0.0;
 
             $value = 0.0;
 
@@ -866,133 +1109,226 @@ final class MultiStorePricingService
                     (int) ($item['quantity'] ?? 1)
                 );
 
-                $unitWeight = max(
-                    0,
-                    (float) ($item['unit_weight'] ?? 0)
+                /*
+         * -------------------------------------------------------
+         * DIMENSION
+         * -------------------------------------------------------
+         *
+         * Dimensions are optional.
+         */
+                $dimension = null;
+
+                if (
+                    isset($item['parcel_dimension'])
+                    && is_array($item['parcel_dimension'])
+                ) {
+                    $dimension = $this->normalizeDimensions(
+                        $item['parcel_dimension'],
+                        "stores.{$storeIndex}.products.{$productIndex}.parcel_dimension"
+                    );
+                }
+
+                /*
+         * -------------------------------------------------------
+         * WEIGHT
+         * -------------------------------------------------------
+         *
+         * If unit_weight exists:
+         *     use it.
+         *
+         * If unit_weight is missing:
+         *     use 1.5 kg.
+         *
+         * If dimensions exist:
+         *     calculate volumetric weight.
+         *
+         * Final chargeable weight:
+         *     max(actual, volumetric)
+         */
+                $weightInfo =
+                $this->resolveProductWeight(
+                    product: $item,
+                    dimension: $dimension
                 );
 
-                $unitPrice = max(
+                $unitActualWeight =
+                    $weightInfo['actual_weight_kg'];
+
+                $unitVolumetricWeight =
+                    $weightInfo['volumetric_weight_kg'];
+
+                $unitChargeableWeight =
+                    $weightInfo['chargeable_weight_kg'];
+
+                /*
+         * Total actual physical weight.
+         */
+                $actualWeightTotal +=
+                    $unitActualWeight * $quantity;
+
+                /*
+         * Total volumetric weight.
+         */
+                $volumetricWeightTotal +=
+                    $unitVolumetricWeight * $quantity;
+
+                /*
+         * Total chargeable weight.
+         */
+                $weight +=
+                    $unitChargeableWeight * $quantity;
+
+                /*
+         * -------------------------------------------------------
+         * VALUE
+         * -------------------------------------------------------
+         */
+                $unitPrice  = max(
                     0,
                     (float) ($item['unit_price'] ?? 0)
                 );
 
-                $parcelType = $this->normalizeParcelType(
-                    $item['parcel_type'] ?? 'non_fragile'
-                );
-
-                /*
-                 * Actual total weight.
-                 */
-                $weight +=
-                    $unitWeight * $quantity;
-
-                /*
-                 * Actual declared product value.
-                 */
                 $value +=
                     $unitPrice * $quantity;
 
                 $productUnitCount +=
                     $quantity;
 
+                /*
+         * -------------------------------------------------------
+         * PARCEL TYPE
+         * -------------------------------------------------------
+         */
+                $parcelType  =
+                $this->normalizeParcelType(
+                    $item['parcel_type'] ?? 'non_fragile'
+                );
+
                 if ($parcelType === 'fragile') {
                     $fragile = true;
                 }
 
                 /*
-                 * Normalize dimensions and retain them.
-                 */
-                $dimension = $this->normalizeDimensions(
-                    $item['parcel_dimension'] ?? [],
-                    "stores.{$storeIndex}.products.{$productIndex}.parcel_dimension"
-                );
-
-                $dimensions[] = [
-                    'product_index' =>
+         * -------------------------------------------------------
+         * DIMENSIONS
+         * -------------------------------------------------------
+         *
+         * Keep dimensions only when supplied.
+         */
+                if ($dimension !== null) {
+                    $dimensions[] = [
+                        'product_index'        =>
                         $productIndex,
 
-                    'product_id' =>
+                        'product_id'           =>
                         $item['product_id'] ?? null,
 
-                    'quantity' =>
+                        'quantity'             =>
                         $quantity,
 
-                    'length_cm' =>
+                        'length_cm'            =>
                         $dimension['length_cm'],
 
-                    'width_cm' =>
+                        'width_cm'             =>
                         $dimension['width_cm'],
 
-                    'height_cm' =>
+                        'height_cm'            =>
                         $dimension['height_cm'],
 
-                    'volume_cm3' =>
+                        'volume_cm3'           =>
                         $dimension['volume_cm3'],
-                ];
+
+                        'actual_weight_kg'     =>
+                        $unitActualWeight,
+
+                        'volumetric_weight_kg' =>
+                        $unitVolumetricWeight,
+
+                        'chargeable_weight_kg' =>
+                        $unitChargeableWeight,
+
+                        'weight_source'        =>
+                        $weightInfo['weight_source'],
+
+                        'volumetric_applied'   =>
+                        $weightInfo['volumetric_applied'],
+                    ];
+                }
             }
 
             /*
-             * Validate total store weight.
-             */
+     * Validate total chargeable weight.
+     */
             $this->validateTotalWeight(
                 weight: $weight,
                 storeIndex: $storeIndex
             );
 
             $packetCount = match ($packingMode) {
-                MarketplacePackingMode::SinglePerStore =>
-                    1,
+                MarketplacePackingMode::SinglePerStore     =>
+                1,
 
                 MarketplacePackingMode::PerProductQuantity =>
-                    max(1, $productUnitCount),
+                max(1, $productUnitCount),
 
-                MarketplacePackingMode::ExplicitPackets =>
-                    throw ValidationException::withMessages([
-                        "stores.{$storeIndex}.products" => [
-                            'Products cannot be used while explicit_packets mode is active.',
-                        ],
-                    ]),
+                MarketplacePackingMode::ExplicitPackets    =>
+                throw ValidationException::withMessages([
+                    "stores.{$storeIndex}.products" => [
+                        'Products cannot be used while explicit_packets mode is active.',
+                    ],
+                ]),
             };
 
             /*
-             * Calculate physical dimensions for the resulting package.
-             *
-             * For one product this is exactly the product dimension.
-             *
-             * For multiple products, the largest L/W/H is used as the
-             * minimum bounding dimension. This prevents dimensions from
-             * disappearing when products are combined into one store packet.
-             */
-            $combinedDimensions = $this->combineDimensions(
+     * Combine dimensions where dimensions were provided.
+     */
+            $combinedDimensions =
+            $this->combineDimensions(
                 $dimensions
             );
 
             return [
-                'packet_count' =>
-                    $packetCount,
+                'packet_count'       =>
+                $packetCount,
 
                 'product_unit_count' =>
-                    $productUnitCount,
+                $productUnitCount,
 
-                'parcel_weight' =>
-                    round($weight, 3),
+                /*
+         * IMPORTANT:
+         *
+         * parcel_weight is the CHARGEABLE weight.
+         */
+                'parcel_weight'      =>
+                round($weight, 3),
 
-                'parcel_value' =>
-                    round($value, 2),
+                /*
+         * Additional weight information.
+         */
+                'actual_weight'      =>
+                round($actualWeightTotal, 3),
 
-                'parcel_type' =>
-                    $fragile
-                        ? 'fragile'
-                        : 'non_fragile',
+                'volumetric_weight'  =>
+                round($volumetricWeightTotal, 3),
 
-                'dimensions' =>
-                    $combinedDimensions,
+                'chargeable_weight'  =>
+                round($weight, 3),
+
+                'parcel_value'       =>
+                round($value, 2),
+
+                'parcel_type'        =>
+                $fragile
+                    ? 'fragile'
+                    : 'non_fragile',
+
+                'dimensions'         =>
+                $combinedDimensions,
 
                 'product_dimensions' =>
-                    $dimensions,
+                $dimensions,
             ];
         }
-
         /*
          * ---------------------------------------------------------------
          * EXPLICIT PACKETS
@@ -1011,18 +1347,14 @@ final class MultiStorePricingService
                 $actualWeight = max(
                     0,
                     (float) (
-                        $packet['actual_weight_kg']
-                        ?? $packet['actual_weight']
-                        ?? 0
+                        $packet['actual_weight_kg'] ?? $packet['actual_weight'] ?? 0
                     )
                 );
 
                 $declaredValue = max(
                     0,
                     (float) (
-                        $packet['declared_value']
-                        ?? $packet['unit_price']
-                        ?? 0
+                        $packet['declared_value'] ?? $packet['unit_price'] ?? 0
                     )
                 );
 
@@ -1055,16 +1387,16 @@ final class MultiStorePricingService
                         $dimensions[] = $this->normalizeDimensions(
                             [
                                 'length' =>
-                                    $packet['length_cm'],
+                                $packet['length_cm'],
 
-                                'width' =>
-                                    $packet['width_cm'],
+                                'width'  =>
+                                $packet['width_cm'],
 
                                 'height' =>
-                                    $packet['height_cm'],
+                                $packet['height_cm'],
 
-                                'unit' =>
-                                    'cm',
+                                'unit'   =>
+                                'cm',
                             ],
                             "stores.{$storeIndex}.packets.{$packetIndex}"
                         );
@@ -1077,34 +1409,34 @@ final class MultiStorePricingService
                 storeIndex: $storeIndex
             );
 
-            $packetCount =
-                $packingMode->isSinglePerStore()
-                    ? 1
-                    : count($packets);
+            $packetCount  =
+            $packingMode->isSinglePerStore()
+                ? 1
+                : count($packets);
 
             return [
-                'packet_count' =>
-                    max(1, $packetCount),
+                'packet_count'       =>
+                max(1, $packetCount),
 
                 'product_unit_count' =>
-                    count($packets),
+                count($packets),
 
-                'parcel_weight' =>
-                    round($weight, 3),
+                'parcel_weight'      =>
+                round($weight, 3),
 
-                'parcel_value' =>
-                    round($value, 2),
+                'parcel_value'       =>
+                round($value, 2),
 
-                'parcel_type' =>
-                    $fragile
-                        ? 'fragile'
-                        : 'non_fragile',
+                'parcel_type'        =>
+                $fragile
+                    ? 'fragile'
+                    : 'non_fragile',
 
-                'dimensions' =>
-                    $this->combineDimensions($dimensions),
+                'dimensions'         =>
+                $this->combineDimensions($dimensions),
 
                 'product_dimensions' =>
-                    $dimensions,
+                $dimensions,
             ];
         }
 
@@ -1143,57 +1475,57 @@ final class MultiStorePricingService
             $dimensions = $this->normalizeDimensions(
                 [
                     'length' =>
-                        $store['package_length_cm'],
+                    $store['package_length_cm'],
 
-                    'width' =>
-                        $store['package_width_cm'],
+                    'width'  =>
+                    $store['package_width_cm'],
 
                     'height' =>
-                        $store['package_height_cm'],
+                    $store['package_height_cm'],
 
-                    'unit' =>
-                        'cm',
+                    'unit'   =>
+                    'cm',
                 ],
                 "stores.{$storeIndex}.package_dimensions"
             );
         }
 
         return [
-            'packet_count' =>
-                max(
-                    1,
-                    (int) (
-                        $store['packet_count'] ?? 1
-                    )
-                ),
+            'packet_count'       =>
+            max(
+                1,
+                (int) (
+                    $store['packet_count'] ?? 1
+                )
+            ),
 
             'product_unit_count' =>
-                1,
+            1,
 
-            'parcel_weight' =>
-                round($parcelWeight, 3),
+            'parcel_weight'      =>
+            round($parcelWeight, 3),
 
-            'parcel_value' =>
-                round(
-                    max(
-                        0,
-                        (float) (
-                            $store['parcel_value'] ?? 0
-                        )
-                    ),
-                    2
+            'parcel_value'       =>
+            round(
+                max(
+                    0,
+                    (float) (
+                        $store['parcel_value'] ?? 0
+                    )
                 ),
+                2
+            ),
 
-            'parcel_type' =>
-                $this->normalizeParcelType(
-                    $store['parcel_type'] ?? 'non_fragile'
-                ),
+            'parcel_type'        =>
+            $this->normalizeParcelType(
+                $store['parcel_type'] ?? 'non_fragile'
+            ),
 
-            'dimensions' =>
-                $dimensions,
+            'dimensions'         =>
+            $dimensions,
 
             'product_dimensions' =>
-                [],
+            [],
         ];
     }
 
@@ -1225,79 +1557,77 @@ final class MultiStorePricingService
                  */
                 'products' => [],
 
-                'packets' => [
+                'packets'  => [
                     [
                         'packet_reference' =>
-                            sprintf(
-                                'STORE-%d-PKT-001',
-                                $storeIndex + 1
-                            ),
+                        sprintf(
+                            'STORE-%d-PKT-001',
+                            $storeIndex + 1
+                        ),
 
-                        'name' =>
-                            sprintf(
-                                'Combined package for %s',
-                                (string) (
-                                    $store['external_store_id']
-                                    ?? $store['store_id']
-                                    ?? $storeIndex + 1
-                                )
-                            ),
+                        'name'             =>
+                        sprintf(
+                            'Combined package for %s',
+                            (string) (
+                                $store['external_store_id'] ?? $store['store_id'] ?? $storeIndex + 1
+                            )
+                        ),
 
-                        'quantity' =>
-                            1,
+                        'quantity'         =>
+                        1,
 
                         'actual_weight_kg' =>
-                            $summary['parcel_weight'],
+                        $summary['parcel_weight'],
 
                         /*
                          * Also expose actual_weight for engines/legacy
                          * code that use this key.
                          */
-                        'actual_weight' =>
-                            $summary['parcel_weight'],
+                        'actual_weight'    =>
+                        $summary['parcel_weight'],
 
-                        'declared_value' =>
-                            $summary['parcel_value'],
+                        'declared_value'   =>
+                        $summary['parcel_value'],
 
-                        'unit_price' =>
-                            $summary['parcel_value'],
+                        'unit_price'       =>
+                        $summary['parcel_value'],
 
-                        'parcel_type' =>
-                            $summary['parcel_type'],
+                        'parcel_type'      =>
+                        $summary['parcel_type'],
 
                         /*
                          * IMPORTANT:
                          * Dimensions now come from the marketplace
                          * product's parcel_dimension.
                          */
-                        'length_cm' =>
-                            $dimensions['length_cm'] ?? null,
+                        'length_cm'        =>
+                        $dimensions['length_cm'] ?? null,
 
-                        'width_cm' =>
-                            $dimensions['width_cm'] ?? null,
+                        'width_cm'         =>
+                        $dimensions['width_cm'] ?? null,
 
-                        'height_cm' =>
-                            $dimensions['height_cm'] ?? null,
+                        'height_cm'        =>
+                        $dimensions['height_cm'] ?? null,
 
                         /*
                          * Keep the nested representation as well.
                          */
                         'parcel_dimension' =>
-                            $dimensions
-                                ? [
-                                    'length' =>
-                                        $dimensions['length_cm'],
+                        $dimensions
+                            ? [
+                            'length' =>
+                            $dimensions['length_cm'],
 
-                                    'width' =>
-                                        $dimensions['width_cm'],
+                            'width'  =>
+                            $dimensions['width_cm'],
 
-                                    'height' =>
-                                        $dimensions['height_cm'],
+                            'height' =>
+                            $dimensions['height_cm'],
 
-                                    'unit' =>
-                                        'cm',
-                                ]
-                                : null,
+                            'unit'   =>
+                            'cm',
+                        ]
+                            : null,
                     ],
                 ],
             ];
@@ -1308,64 +1638,182 @@ final class MultiStorePricingService
          * PER PRODUCT QUANTITY
          * ---------------------------------------------------------------
          */
+        // if ($packingMode->isPerProductQuantity()) {
+        //     if (count($products) > 0) {
+        //         /*
+        //          * Enrich every product with normalized dimensions so the
+        //          * PricingEngine can use them directly.
+        //          */
+        //         $pricingProducts = array_map(
+        //             function (array $product): array {
+        //                 $dimension = $this->normalizeDimensions(
+        //                     $product['parcel_dimension'] ?? [],
+        //                     'parcel_dimension'
+        //                 );
+
+        //                 return [
+        //                      ...$product,
+
+        //                     'length_cm'        =>
+        //                     $dimension['length_cm'],
+
+        //                     'width_cm'         =>
+        //                     $dimension['width_cm'],
+
+        //                     'height_cm'        =>
+        //                     $dimension['height_cm'],
+
+        //                     'parcel_dimension' => [
+        //                         'length' =>
+        //                         $dimension['length_cm'],
+
+        //                         'width'  =>
+        //                         $dimension['width_cm'],
+
+        //                         'height' =>
+        //                         $dimension['height_cm'],
+
+        //                         'unit'   =>
+        //                         'cm',
+        //                     ],
+        //                 ];
+        //             },
+        //             $products
+        //         );
+
+        //         return [
+        //             'products' =>
+        //             $pricingProducts,
+
+        //             'packets'  =>
+        //             [],
+        //         ];
+        //     }
+
+        //     return [
+        //         'products' =>
+        //         [],
+
+        //         'packets'  =>
+        //         $this->normalizePricingPackets($packets),
+        //     ];
+        // }
+
         if ($packingMode->isPerProductQuantity()) {
             if (count($products) > 0) {
                 /*
-                 * Enrich every product with normalized dimensions so the
-                 * PricingEngine can use them directly.
-                 */
+         * Enrich every product with:
+         *
+         * actual weight
+         * volumetric weight
+         * chargeable weight
+         * normalized dimensions
+         */
                 $pricingProducts = array_map(
                     function (array $product): array {
-                        $dimension = $this->normalizeDimensions(
-                            $product['parcel_dimension'] ?? [],
-                            'parcel_dimension'
+                        $dimension = null;
+
+                        if (
+                            isset($product['parcel_dimension'])
+                            && is_array($product['parcel_dimension'])
+                        ) {
+                            $dimension =
+                            $this->normalizeDimensions(
+                                $product['parcel_dimension'],
+                                'parcel_dimension'
+                            );
+                        }
+
+                        $weightInfo =
+                        $this->resolveProductWeight(
+                            product: $product,
+                            dimension: $dimension
                         );
 
-                        return [
-                            ...$product,
+                        $result = [
+                             ...$product,
 
-                            'length_cm' =>
+                            /*
+                     * Actual weight.
+                     *
+                     * Missing unit_weight becomes 1.5 kg.
+                     */
+                            'unit_weight'          =>
+                            $weightInfo['actual_weight_kg'],
+
+                            'actual_weight_kg'     =>
+                            $weightInfo['actual_weight_kg'],
+
+                            /*
+                     * Volumetric weight.
+                     */
+                            'volumetric_weight_kg' =>
+                            $weightInfo['volumetric_weight_kg'],
+
+                            /*
+                     * Weight actually used for pricing.
+                     */
+                            'chargeable_weight_kg' =>
+                            $weightInfo['chargeable_weight_kg'],
+
+                            /*
+                     * Helpful metadata.
+                     */
+                            'weight_source'        =>
+                            $weightInfo['weight_source'],
+
+                            'volumetric_applied'   =>
+                            $weightInfo['volumetric_applied'],
+                        ];
+
+                        /*
+                 * Add dimensions only when supplied.
+                 */
+                        if ($dimension !== null) {
+                            $result['length_cm'] =
+                                $dimension['length_cm'];
+
+                            $result['width_cm'] =
+                                $dimension['width_cm'];
+
+                            $result['height_cm'] =
+                                $dimension['height_cm'];
+
+                            $result['parcel_dimension'] = [
+                                'length' =>
                                 $dimension['length_cm'],
 
-                            'width_cm' =>
+                                'width'  =>
                                 $dimension['width_cm'],
 
-                            'height_cm' =>
+                                'height' =>
                                 $dimension['height_cm'],
 
-                            'parcel_dimension' => [
-                                'length' =>
-                                    $dimension['length_cm'],
+                                'unit'   =>
+                                'cm',
+                            ];
+                        }
 
-                                'width' =>
-                                    $dimension['width_cm'],
-
-                                'height' =>
-                                    $dimension['height_cm'],
-
-                                'unit' =>
-                                    'cm',
-                            ],
-                        ];
+                        return $result;
                     },
                     $products
                 );
 
                 return [
                     'products' =>
-                        $pricingProducts,
+                    $pricingProducts,
 
-                    'packets' =>
-                        [],
+                    'packets'  =>
+                    [],
                 ];
             }
 
             return [
                 'products' =>
-                    [],
+                [],
 
-                'packets' =>
-                    $this->normalizePricingPackets($packets),
+                'packets'  =>
+                $this->normalizePricingPackets($packets),
             ];
         }
 
@@ -1384,10 +1832,10 @@ final class MultiStorePricingService
 
         return [
             'products' =>
-                [],
+            [],
 
-            'packets' =>
-                $this->normalizePricingPackets($packets),
+            'packets'  =>
+            $this->normalizePricingPackets($packets),
         ];
     }
 
@@ -1400,19 +1848,17 @@ final class MultiStorePricingService
         return array_map(
             function (array $packet): array {
                 $actualWeight = (float) (
-                    $packet['actual_weight_kg']
-                    ?? $packet['actual_weight']
-                    ?? 0
+                    $packet['actual_weight_kg'] ?? $packet['actual_weight'] ?? 0
                 );
 
                 $result = [
-                    ...$packet,
+                     ...$packet,
 
                     'actual_weight_kg' =>
-                        $actualWeight,
+                    $actualWeight,
 
-                    'actual_weight' =>
-                        $actualWeight,
+                    'actual_weight'    =>
+                    $actualWeight,
                 ];
 
                 if (isset($packet['parcel_dimension'])) {
@@ -1432,16 +1878,16 @@ final class MultiStorePricingService
 
                     $result['parcel_dimension'] = [
                         'length' =>
-                            $dimension['length_cm'],
+                        $dimension['length_cm'],
 
-                        'width' =>
-                            $dimension['width_cm'],
+                        'width'  =>
+                        $dimension['width_cm'],
 
                         'height' =>
-                            $dimension['height_cm'],
+                        $dimension['height_cm'],
 
-                        'unit' =>
-                            'cm',
+                        'unit'   =>
+                        'cm',
                     ];
                 }
 
@@ -1484,7 +1930,7 @@ final class MultiStorePricingService
             ]);
         }
 
-        if (!is_numeric($length)) {
+        if (! is_numeric($length)) {
             throw ValidationException::withMessages([
                 "{$field}.length" => [
                     'Length must be numeric.',
@@ -1492,7 +1938,7 @@ final class MultiStorePricingService
             ]);
         }
 
-        if (!is_numeric($width)) {
+        if (! is_numeric($width)) {
             throw ValidationException::withMessages([
                 "{$field}.width" => [
                     'Width must be numeric.',
@@ -1500,7 +1946,7 @@ final class MultiStorePricingService
             ]);
         }
 
-        if (!is_numeric($height)) {
+        if (! is_numeric($height)) {
             throw ValidationException::withMessages([
                 "{$field}.height" => [
                     'Height must be numeric.',
@@ -1530,9 +1976,9 @@ final class MultiStorePricingService
          * Convert everything to cm.
          */
         $factor = match ($unit) {
-            'mm' => 0.1,
+            'mm'     => 0.1,
 
-            'cm' => 1.0,
+            'cm'     => 1.0,
 
             'm',
             'meter',
@@ -1542,7 +1988,7 @@ final class MultiStorePricingService
             'inch',
             'inches' => 2.54,
 
-            default => throw ValidationException::withMessages([
+            default  => throw ValidationException::withMessages([
                 "{$field}.unit" => [
                     'Dimension unit must be mm, cm, m or in.',
                 ],
@@ -1556,25 +2002,25 @@ final class MultiStorePricingService
         $heightCm = round($height * $factor, 3);
 
         return [
-            'length_cm' =>
-                $lengthCm,
+            'length_cm'  =>
+            $lengthCm,
 
-            'width_cm' =>
-                $widthCm,
+            'width_cm'   =>
+            $widthCm,
 
-            'height_cm' =>
-                $heightCm,
+            'height_cm'  =>
+            $heightCm,
 
             'volume_cm3' =>
-                round(
-                    $lengthCm
-                    * $widthCm
-                    * $heightCm,
-                    3
-                ),
+            round(
+                $lengthCm
+                 * $widthCm
+                 * $heightCm,
+                3
+            ),
 
-            'unit' =>
-                'cm',
+            'unit'       =>
+            'cm',
         ];
     }
 
@@ -1594,20 +2040,20 @@ final class MultiStorePricingService
          */
         if (count($dimensions) === 1) {
             return [
-                'length_cm' =>
-                    (float) $dimensions[0]['length_cm'],
+                'length_cm'  =>
+                (float) $dimensions[0]['length_cm'],
 
-                'width_cm' =>
-                    (float) $dimensions[0]['width_cm'],
+                'width_cm'   =>
+                (float) $dimensions[0]['width_cm'],
 
-                'height_cm' =>
-                    (float) $dimensions[0]['height_cm'],
+                'height_cm'  =>
+                (float) $dimensions[0]['height_cm'],
 
                 'volume_cm3' =>
-                    (float) $dimensions[0]['volume_cm3'],
+                (float) $dimensions[0]['volume_cm3'],
 
-                'unit' =>
-                    'cm',
+                'unit'       =>
+                'cm',
             ];
         }
 
@@ -1640,23 +2086,23 @@ final class MultiStorePricingService
         }
 
         return [
-            'length_cm' =>
-                round($length, 3),
+            'length_cm'  =>
+            round($length, 3),
 
-            'width_cm' =>
-                round($width, 3),
+            'width_cm'   =>
+            round($width, 3),
 
-            'height_cm' =>
-                round($height, 3),
+            'height_cm'  =>
+            round($height, 3),
 
             'volume_cm3' =>
-                round(
-                    $length * $width * $height,
-                    3
-                ),
+            round(
+                $length * $width * $height,
+                3
+            ),
 
-            'unit' =>
-                'cm',
+            'unit'       =>
+            'cm',
         ];
     }
 
@@ -1709,128 +2155,128 @@ final class MultiStorePricingService
         $storeQuoteNumber = $this->quoteNumber('QT');
 
         $pricingQuoteInsert = [
-            'checkout_quote_id' =>
-                $checkoutQuoteId,
+            'checkout_quote_id'  =>
+            $checkoutQuoteId,
 
-            'quote_number' =>
-                $storeQuoteNumber,
+            'quote_number'       =>
+            $storeQuoteNumber,
 
-            'merchant_id' =>
-                $merchantId,
+            'merchant_id'        =>
+            $merchantId,
 
-            'store_id' =>
-                $calculation['store_id'],
+            'store_id'           =>
+            $calculation['store_id'],
 
-            'pickup_branch_id' =>
-                (int) data_get(
-                    $quote,
-                    'pickup_branch.id'
-                ),
+            'pickup_branch_id'   =>
+            (int) data_get(
+                $quote,
+                'pickup_branch.id'
+            ),
 
             'delivery_branch_id' =>
-                (int) data_get(
-                    $quote,
-                    'delivery_branch.id'
-                ),
+            (int) data_get(
+                $quote,
+                'delivery_branch.id'
+            ),
 
-            'pickup_address' =>
-                $store['pickup_address'],
+            'pickup_address'     =>
+            $store['pickup_address'],
 
-            'pickup_latitude' =>
-                $store['pickup_latitude'],
+            'pickup_latitude'    =>
+            $store['pickup_latitude'],
 
-            'pickup_longitude' =>
-                $store['pickup_longitude'],
+            'pickup_longitude'   =>
+            $store['pickup_longitude'],
 
-            'delivery_address' =>
-                $delivery['address'],
+            'delivery_address'   =>
+            $delivery['address'],
 
-            'delivery_latitude' =>
-                $delivery['latitude'],
+            'delivery_latitude'  =>
+            $delivery['latitude'],
 
             'delivery_longitude' =>
-                $delivery['longitude'],
+            $delivery['longitude'],
 
-            'parcel_weight' =>
-                $summary['parcel_weight'],
+            'parcel_weight'      =>
+            $summary['parcel_weight'],
 
-            'parcel_value' =>
-                $summary['parcel_value'],
+            'parcel_value'       =>
+            $summary['parcel_value'],
 
-            'parcel_type' =>
-                $summary['parcel_type'],
+            'parcel_type'        =>
+            $summary['parcel_type'],
 
-            'payment_type' =>
-                $calculation['payment_type'],
+            'payment_type'       =>
+            $calculation['payment_type'],
 
-            'pod_amount' =>
-                $calculation['pod_amount'],
+            'pod_amount'         =>
+            $calculation['pod_amount'],
 
-            'service_type' =>
-                data_get(
-                    $quote,
-                    'service_type.code'
-                ),
+            'service_type'       =>
+            data_get(
+                $quote,
+                'service_type.code'
+            ),
 
-            'service_type_id' =>
-                (int) data_get(
-                    $quote,
-                    'service_type.id'
-                ),
+            'service_type_id'    =>
+            (int) data_get(
+                $quote,
+                'service_type.id'
+            ),
 
-            'final_price' =>
-                (float) $quote['final_price'],
+            'final_price'        =>
+            (float) $quote['final_price'],
 
-            'currency' =>
-                $quote['currency'] ?? 'NPR',
+            'currency'           =>
+            $quote['currency'] ?? 'NPR',
 
-            'estimated_hours' =>
-                isset($quote['estimated_hours'])
-                    ? (int) $quote['estimated_hours']
-                    : null,
+            'estimated_hours'    =>
+            isset($quote['estimated_hours'])
+                ? (int) $quote['estimated_hours']
+                : null,
 
-            'sla_due_at' =>
-                $this->toDatabaseDateTime(
-                    $quote['sla_due_at'] ?? null
-                ),
+            'sla_due_at'         =>
+            $this->toDatabaseDateTime(
+                $quote['sla_due_at'] ?? null
+            ),
 
-            'expires_at' =>
-                $this->toDatabaseDateTime(
-                    $quote['valid_until'] ?? null
-                ),
+            'expires_at'         =>
+            $this->toDatabaseDateTime(
+                $quote['valid_until'] ?? null
+            ),
 
-            'snapshot_json' =>
-                $this->encodeJson([
-                    'quote' =>
-                        $quote,
+            'snapshot_json'      =>
+            $this->encodeJson([
+                'quote'            =>
+                $quote,
 
-                    'products' =>
-                        $calculation['products'],
+                'products'         =>
+                $calculation['products'],
 
-                    'packets' =>
-                        $calculation['packets'],
+                'packets'          =>
+                $calculation['packets'],
 
-                    'pricing_products' =>
-                        $calculation['pricing_products'],
+                'pricing_products' =>
+                $calculation['pricing_products'],
 
-                    'pricing_packets' =>
-                        $calculation['pricing_packets'],
+                'pricing_packets'  =>
+                $calculation['pricing_packets'],
 
-                    'summary' =>
-                        $summary,
+                'summary'          =>
+                $summary,
 
-                    'packing_policy' =>
-                        $calculation['packing_policy'],
-                ]),
+                'packing_policy'   =>
+                $calculation['packing_policy'],
+            ]),
 
-            'status' =>
-                'pending',
+            'status'             =>
+            'pending',
 
-            'created_at' =>
-                now(),
+            'created_at'         =>
+            now(),
 
-            'updated_at' =>
-                now(),
+            'updated_at'         =>
+            now(),
         ];
 
         $pricingQuoteInsert = $this->withColumnIfExists(
@@ -1865,88 +2311,86 @@ final class MultiStorePricingService
         );
 
         return [
-            'pricing_quote_id' =>
-                (int) $pricingQuoteId,
+            'pricing_quote_id'      =>
+            (int) $pricingQuoteId,
 
-            'quote_number' =>
-                $storeQuoteNumber,
+            'quote_number'          =>
+            $storeQuoteNumber,
 
             'checkout_quote_number' =>
-                $checkoutQuoteNumber,
+            $checkoutQuoteNumber,
 
-            'store_id' =>
-                $calculation['store_id'],
+            'store_id'              =>
+            $calculation['store_id'],
 
-            'external_store_id' =>
-                $calculation['external_store_id'],
+            'external_store_id'     =>
+            $calculation['external_store_id'],
 
-            'input_mode' =>
-                $calculation['input_mode'],
+            'input_mode'            =>
+            $calculation['input_mode'],
 
-            'packet_count' =>
-                (int) (
-                    $quote['packet_count']
-                    ?? $summary['packet_count']
-                ),
+            'packet_count'          =>
+            (int) (
+                $quote['packet_count'] ?? $summary['packet_count']
+            ),
 
-            'packets' =>
-                $quote['packets']
-                ?? [],
+            'packets'               =>
+            $quote['packets'] ?? [],
 
-            'parcel_weight' =>
-                $summary['parcel_weight'],
+            'parcel_weight'         =>
+            $summary['parcel_weight'],
 
-            'parcel_value' =>
-                $summary['parcel_value'],
+            'parcel_value'          =>
+            $summary['parcel_value'],
 
-            'parcel_type' =>
-                $summary['parcel_type'],
+            'parcel_type'           =>
+            $summary['parcel_type'],
 
-            'payment_type' =>
-                $calculation['payment_type'],
+            'payment_type'          =>
+            $calculation['payment_type'],
 
-            'pod_amount' =>
-                $calculation['pod_amount'],
+            'pod_amount'            =>
+            $calculation['pod_amount'],
 
-            'pickup_branch' =>
-                $quote['pickup_branch'],
+            'pickup_branch'         =>
+            $quote['pickup_branch'],
 
-            'delivery_branch' =>
-                $quote['delivery_branch'],
+            'delivery_branch'       =>
+            $quote['delivery_branch'],
 
-            'route' =>
-                $quote['route'] ?? null,
+            'route'                 =>
+            $quote['route'] ?? null,
 
-            'transfer_route' =>
-                $quote['transfer_route'] ?? null,
+            'transfer_route'        =>
+            $quote['transfer_route'] ?? null,
 
-            'service_type' =>
-                $quote['service_type'],
+            'service_type'          =>
+            $quote['service_type'],
 
-            'weight_summary' =>
-                $quote['weight_summary'] ?? [],
+            'weight_summary'        =>
+            $quote['weight_summary'] ?? [],
 
-            'delivery_fee' =>
-                (float) $quote['final_price'],
+            'delivery_fee'          =>
+            (float) $quote['final_price'],
 
-            'currency' =>
-                $quote['currency'] ?? 'NPR',
+            'currency'              =>
+            $quote['currency'] ?? 'NPR',
 
-            'estimated_hours' =>
-                (int) ($quote['estimated_hours'] ?? 0),
+            'estimated_hours'       =>
+            (int) ($quote['estimated_hours'] ?? 0),
 
-            'sla_due_at' =>
-                $this->toCarbonOrNull(
-                    $quote['sla_due_at'] ?? null
-                ),
+            'sla_due_at'            =>
+            $this->toCarbonOrNull(
+                $quote['sla_due_at'] ?? null
+            ),
 
-            'valid_until' =>
-                $this->toCarbonOrNull(
-                    $quote['valid_until'] ?? null
-                ),
+            'valid_until'           =>
+            $this->toCarbonOrNull(
+                $quote['valid_until'] ?? null
+            ),
 
-            'breakdown' =>
-                $quote['breakdown'],
+            'breakdown'             =>
+            $quote['breakdown'],
         ];
     }
 
@@ -1959,7 +2403,7 @@ final class MultiStorePricingService
         array $products,
         array $packets
     ): void {
-        if (!Schema::hasTable('pricing_quote_items')) {
+        if (! Schema::hasTable('pricing_quote_items')) {
             return;
         }
 
@@ -1981,52 +2425,51 @@ final class MultiStorePricingService
 
             $row = [
                 'pricing_quote_id' =>
-                    $pricingQuoteId,
+                $pricingQuoteId,
 
-                'store_id' =>
-                    $storeId,
+                'store_id'         =>
+                $storeId,
 
-                'product_id' =>
-                    $item['product_id'] ?? null,
+                'product_id'       =>
+                $item['product_id'] ?? null,
 
-                'product_name' =>
-                    $item['name'] ?? 'Product',
+                'product_name'     =>
+                $item['name'] ?? 'Product',
 
-                'sku' =>
-                    $item['sku'] ?? null,
+                'sku'              =>
+                $item['sku'] ?? null,
 
-                'quantity' =>
-                    $quantity,
+                'quantity'         =>
+                $quantity,
 
-                'unit_weight' =>
-                    $unitWeight,
+                'unit_weight'      =>
+                $unitWeight,
 
-                'total_weight' =>
-                    round(
-                        $unitWeight * $quantity,
-                        3
-                    ),
+                'total_weight'     =>
+                round(
+                    $unitWeight * $quantity,
+                    3
+                ),
 
-                'unit_price' =>
-                    $unitPrice,
+                'unit_price'       =>
+                $unitPrice,
 
-                'total_price' =>
-                    round(
-                        $unitPrice * $quantity,
-                        2
-                    ),
+                'total_price'      =>
+                round(
+                    $unitPrice * $quantity,
+                    2
+                ),
 
-                'parcel_type' =>
-                    $this->normalizeParcelType(
-                        $item['parcel_type']
-                        ?? 'non_fragile'
-                    ),
+                'parcel_type'      =>
+                $this->normalizeParcelType(
+                    $item['parcel_type'] ?? 'non_fragile'
+                ),
 
-                'created_at' =>
-                    now(),
+                'created_at'       =>
+                now(),
 
-                'updated_at' =>
-                    now(),
+                'updated_at'       =>
+                now(),
             ];
 
             DB::table('pricing_quote_items')->insert(
@@ -2041,64 +2484,58 @@ final class MultiStorePricingService
             $actualWeight = max(
                 0,
                 (float) (
-                    $packet['actual_weight_kg']
-                    ?? $packet['actual_weight']
-                    ?? 0
+                    $packet['actual_weight_kg'] ?? $packet['actual_weight'] ?? 0
                 )
             );
 
             $declaredValue = max(
                 0,
                 (float) (
-                    $packet['declared_value']
-                    ?? $packet['unit_price']
-                    ?? 0
+                    $packet['declared_value'] ?? $packet['unit_price'] ?? 0
                 )
             );
 
             $row = [
                 'pricing_quote_id' =>
-                    $pricingQuoteId,
+                $pricingQuoteId,
 
-                'store_id' =>
-                    $storeId,
+                'store_id'         =>
+                $storeId,
 
-                'product_id' =>
-                    $packet['packet_id'] ?? null,
+                'product_id'       =>
+                $packet['packet_id'] ?? null,
 
-                'product_name' =>
-                    $packet['name']
-                    ?? 'Packet ' . ($index + 1),
+                'product_name'     =>
+                $packet['name'] ?? 'Packet ' . ($index + 1),
 
-                'sku' =>
-                    $packet['sku'] ?? null,
+                'sku'              =>
+                $packet['sku'] ?? null,
 
-                'quantity' =>
-                    1,
+                'quantity'         =>
+                1,
 
-                'unit_weight' =>
-                    $actualWeight,
+                'unit_weight'      =>
+                $actualWeight,
 
-                'total_weight' =>
-                    $actualWeight,
+                'total_weight'     =>
+                $actualWeight,
 
-                'unit_price' =>
-                    $declaredValue,
+                'unit_price'       =>
+                $declaredValue,
 
-                'total_price' =>
-                    $declaredValue,
+                'total_price'      =>
+                $declaredValue,
 
-                'parcel_type' =>
-                    $this->normalizeParcelType(
-                        $packet['parcel_type']
-                        ?? 'non_fragile'
-                    ),
+                'parcel_type'      =>
+                $this->normalizeParcelType(
+                    $packet['parcel_type'] ?? 'non_fragile'
+                ),
 
-                'created_at' =>
-                    now(),
+                'created_at'       =>
+                now(),
 
-                'updated_at' =>
-                    now(),
+                'updated_at'       =>
+                now(),
             ];
 
             DB::table('pricing_quote_items')->insert(
@@ -2121,102 +2558,110 @@ final class MultiStorePricingService
         $summary = $calculation['summary'];
 
         return [
-            'store_index' =>
-                $calculation['store_index'],
+            'store_index'        =>
+            $calculation['store_index'],
 
-            'store_id' =>
-                $calculation['store_id'],
+            'store_id'           =>
+            $calculation['store_id'],
 
-            'external_store_id' =>
-                $calculation['external_store_id'],
+            'external_store_id'  =>
+            $calculation['external_store_id'],
 
-            'input_mode' =>
-                $calculation['input_mode'],
+            'input_mode'         =>
+            $calculation['input_mode'],
 
-            'packing_policy' =>
-                $calculation['packing_policy'],
+            'packing_policy'     =>
+            $calculation['packing_policy'],
 
-            'products' =>
+            'products'           =>
+            $calculation['products'],
+
+            'packets'            =>
+            $quote['packets'] ?? [],
+
+            'product_count'      =>
+            $this->productCount(
                 $calculation['products'],
+                $calculation['packets']
+            ),
 
-            'packets' =>
-                $quote['packets'] ?? [],
+            'packet_count'       =>
+            (int) (
+                $quote['packet_count'] ?? $summary['packet_count']
+            ),
 
-            'product_count' =>
-                $this->productCount(
-                    $calculation['products'],
-                    $calculation['packets']
-                ),
+            'parcel_weight'      =>
+            $summary['parcel_weight'],
+            
+            'actual_weight'      =>
+            $summary['actual_weight'] ?? $summary['parcel_weight'],
 
-            'packet_count' =>
-                (int) (
-                    $quote['packet_count']
-                    ?? $summary['packet_count']
-                ),
+            'volumetric_weight'  =>
+            $summary['volumetric_weight'] ?? 0,
 
-            'parcel_weight' =>
-                $summary['parcel_weight'],
+            'chargeable_weight'  =>
+            $summary['chargeable_weight'] ?? $summary['parcel_weight'],
 
-            'parcel_value' =>
-                $summary['parcel_value'],
+            'parcel_value'       =>
+            $summary['parcel_value'],
 
-            'parcel_type' =>
-                $summary['parcel_type'],
+            'parcel_type'        =>
+            $summary['parcel_type'],
 
-            'dimensions' =>
-                $summary['dimensions'],
+            'dimensions'         =>
+            $summary['dimensions'],
 
             'product_dimensions' =>
-                $summary['product_dimensions'],
+            $summary['product_dimensions'],
 
-            'payment_type' =>
-                $calculation['payment_type'],
+            'payment_type'       =>
+            $calculation['payment_type'],
 
-            'pod_amount' =>
-                $calculation['pod_amount'],
+            'pod_amount'         =>
+            $calculation['pod_amount'],
 
-            'pickup_branch' =>
-                $quote['pickup_branch'],
+            'pickup_branch'      =>
+            $quote['pickup_branch'],
 
-            'delivery_branch' =>
-                $quote['delivery_branch'],
+            'delivery_branch'    =>
+            $quote['delivery_branch'],
 
-            'route' =>
-                $quote['route'] ?? null,
+            'route'              =>
+            $quote['route'] ?? null,
 
-            'transfer_route' =>
-                $quote['transfer_route'] ?? null,
+            'transfer_route'     =>
+            $quote['transfer_route'] ?? null,
 
-            'service_type' =>
-                $quote['service_type'],
+            'service_type'       =>
+            $quote['service_type'],
 
-            'weight_summary' =>
-                $quote['weight_summary'] ?? [],
+            'weight_summary'     =>
+            $quote['weight_summary'] ?? [],
 
-            'breakdown' =>
-                $quote['breakdown'],
+            'breakdown'          =>
+            $quote['breakdown'],
 
-            'delivery_charge' =>
-                (float) $quote['final_price'],
+            'delivery_charge'    =>
+            (float) $quote['final_price'],
 
-            'currency' =>
-                $quote['currency'] ?? 'NPR',
+            'currency'           =>
+            $quote['currency'] ?? 'NPR',
 
-            'vat' =>
-                $quote['vat'] ?? null,
+            'vat'                =>
+            $quote['vat'] ?? null,
 
-            'estimated_hours' =>
-                (int) ($quote['estimated_hours'] ?? 0),
+            'estimated_hours'    =>
+            (int) ($quote['estimated_hours'] ?? 0),
 
-            'sla_due_at' =>
-                $this->toCarbonOrNull(
-                    $quote['sla_due_at'] ?? null
-                ),
+            'sla_due_at'         =>
+            $this->toCarbonOrNull(
+                $quote['sla_due_at'] ?? null
+            ),
 
-            'valid_until' =>
-                $this->toCarbonOrNull(
-                    $quote['valid_until'] ?? null
-                ),
+            'valid_until'        =>
+            $this->toCarbonOrNull(
+                $quote['valid_until'] ?? null
+            ),
         ];
     }
 
@@ -2233,19 +2678,13 @@ final class MultiStorePricingService
             : [];
 
         $address =
-            $validated['delivery_address']
-            ?? $nested['address']
-            ?? null;
+        $validated['delivery_address'] ?? $nested['address'] ?? null;
 
         $latitude =
-            $validated['delivery_latitude']
-            ?? $nested['latitude']
-            ?? null;
+        $validated['delivery_latitude'] ?? $nested['latitude'] ?? null;
 
         $longitude =
-            $validated['delivery_longitude']
-            ?? $nested['longitude']
-            ?? null;
+        $validated['delivery_longitude'] ?? $nested['longitude'] ?? null;
 
         if (
             $address === null ||
@@ -2260,14 +2699,14 @@ final class MultiStorePricingService
         }
 
         return [
-            'address' =>
-                (string) $address,
+            'address'   =>
+            (string) $address,
 
-            'latitude' =>
-                (float) $latitude,
+            'latitude'  =>
+            (float) $latitude,
 
             'longitude' =>
-                (float) $longitude,
+            (float) $longitude,
         ];
     }
 
@@ -2278,18 +2717,16 @@ final class MultiStorePricingService
         array $store
     ): array {
         $products =
-            $store['products']
-            ?? $store['items']
-            ?? [];
+        $store['products'] ?? $store['items'] ?? [];
 
-        if (!is_array($products)) {
+        if (! is_array($products)) {
             return [];
         }
 
         return array_values(
             array_map(
                 function ($item): array {
-                    if (!is_array($item)) {
+                    if (! is_array($item)) {
                         throw ValidationException::withMessages([
                             'products' => [
                                 'Each product must be a valid object.',
@@ -2298,13 +2735,12 @@ final class MultiStorePricingService
                     }
 
                     return [
-                        ...$item,
+                         ...$item,
 
                         'parcel_type' =>
-                            $this->normalizeParcelType(
-                                $item['parcel_type']
-                                ?? 'non_fragile'
-                            ),
+                        $this->normalizeParcelType(
+                            $item['parcel_type'] ?? 'non_fragile'
+                        ),
                     ];
                 },
                 $products
@@ -2319,17 +2755,16 @@ final class MultiStorePricingService
         array $store
     ): array {
         $packets =
-            $store['packets']
-            ?? [];
+        $store['packets'] ?? [];
 
-        if (!is_array($packets)) {
+        if (! is_array($packets)) {
             return [];
         }
 
         return array_values(
             array_map(
                 function ($packet): array {
-                    if (!is_array($packet)) {
+                    if (! is_array($packet)) {
                         throw ValidationException::withMessages([
                             'packets' => [
                                 'Each packet must be a valid object.',
@@ -2338,16 +2773,15 @@ final class MultiStorePricingService
                     }
 
                     return [
-                        ...$packet,
+                         ...$packet,
 
-                        'quantity' =>
-                            1,
+                        'quantity'    =>
+                        1,
 
                         'parcel_type' =>
-                            $this->normalizeParcelType(
-                                $packet['parcel_type']
-                                ?? 'non_fragile'
-                            ),
+                        $this->normalizeParcelType(
+                            $packet['parcel_type'] ?? 'non_fragile'
+                        ),
                     ];
                 },
                 $packets
@@ -2364,14 +2798,13 @@ final class MultiStorePricingService
     ): int {
         if (count($products) > 0) {
             return (int) collect($products)->sum(
-                fn (array $product): int =>
-                    max(
-                        0,
-                        (int) (
-                            $product['quantity']
-                            ?? 0
-                        )
+                fn(array $product): int =>
+                max(
+                    0,
+                    (int) (
+                        $product['quantity'] ?? 0
                     )
+                )
             );
         }
 
@@ -2426,18 +2859,18 @@ final class MultiStorePricingService
 
         return match ($value) {
             'fragile' =>
-                'fragile',
+            'fragile',
 
             'non-fragile',
             'non fragile',
             'normal',
             'regular' =>
-                'non_fragile',
+            'non_fragile',
 
-            default =>
-                $value !== ''
-                    ? $value
-                    : 'non_fragile',
+            default   =>
+            $value !== ''
+                ? $value
+                : 'non_fragile',
         };
     }
 
@@ -2457,12 +2890,12 @@ final class MultiStorePricingService
             'payment_on_delivery',
             'cash-on-delivery',
             'payment-on-delivery' =>
-                'pod',
+            'pod',
 
-            default =>
-                $value !== ''
-                    ? $value
-                    : 'prepaid',
+            default               =>
+            $value !== ''
+                ? $value
+                : 'prepaid',
         };
     }
 
@@ -2480,12 +2913,12 @@ final class MultiStorePricingService
             'same-day',
             'same day',
             'sameday' =>
-                'same_day',
+            'same_day',
 
-            default =>
-                $value !== ''
-                    ? $value
-                    : 'standard',
+            default   =>
+            $value !== ''
+                ? $value
+                : 'standard',
         };
     }
 
@@ -2567,7 +3000,7 @@ final class MultiStorePricingService
         if (is_array($value)) {
             foreach ($value as $key => $item) {
                 $value[$key] =
-                    $this->serializeDates($item);
+                $this->serializeDates($item);
             }
         }
 
@@ -2603,14 +3036,14 @@ final class MultiStorePricingService
     ): array {
         return collect($data)
             ->filter(
-                fn (
+                fn(
                     mixed $value,
                     string $column
                 ): bool =>
-                    Schema::hasColumn(
-                        $table,
-                        $column
-                    )
+                Schema::hasColumn(
+                    $table,
+                    $column
+                )
             )
             ->all();
     }

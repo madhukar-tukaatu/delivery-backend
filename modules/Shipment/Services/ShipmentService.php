@@ -178,177 +178,52 @@ class ShipmentService
             */
 
             $shipmentData = [
+                'tracking_number'           => $this->generateTrackingNumber(),
 
-                'tracking_number'           =>
-                $trackingNumber,
+                'merchant_id'               => $merchant->id,
+                'merchant_order_id'         => $data['merchant_order_id'],
+                'order_source'              => 'store_manager',
 
-                'merchant_id'               =>
-                $merchant->id,
+                'pickup_location_id'        => $pickupLocation->id,
 
-                'merchant_order_id'         =>
-                $data['merchant_order_id'],
+                'pickup_lat'                => $pickupCoordinates['lat'],
+                'pickup_lng'                => $pickupCoordinates['lng'],
 
-                'order_source'              =>
-                $data['order_source'] ?? 'store_manager',
+                'origin_branch_id'          => $origin['branch_id'],
+                'origin_sub_branch_id'      => $origin['sub_branch_id'],
 
-                /*
-                |--------------------------------------------------------------------------
-                | Pickup
-                |--------------------------------------------------------------------------
-                */
+                'receiver_name'             => $data['receiver_name'],
+                'receiver_phone'            => $data['receiver_phone'],
+                'receiver_email'            => $data['receiver_email'] ?? null,
 
-                'pickup_location_id'        =>
-                $pickupLocation?->id,
+                'delivery_address'          => $data['delivery_address'],
+                'delivery_city'             => $data['delivery_city'] ?? null,
+                'delivery_area'             => $data['delivery_area'] ?? null,
 
-                'pickup_name'               =>
-                $pickupLocation?->name ?? $merchant->name,
+                'delivery_lat'              => $data['delivery_lat'],
+                'delivery_lng'              => $data['delivery_lng'],
 
-                'pickup_phone'              =>
-                $pickupLocation?->phone ?? $merchant->phone,
+                'destination_branch_id'     => $destination['branch_id'],
+                'destination_sub_branch_id' => $destination['sub_branch_id'],
 
-                'pickup_address'            =>
-                $pickupLocation?->address ?? $merchant->pickup_address ?? $merchant->address,
+                'service_type'              => $data['service_type'],
 
-                'pickup_city'               =>
-                $pickupLocation?->city ?? $merchant->pickup_city ?? $merchant->city,
+                'parcel_type'               => $packet['parcel_type'],
+                'product_description'       => $packet['description'] ?? null,
+                'quantity'                  => $packet['quantity'],
+                'weight'                    => $packet['weight'],
+                'declared_value'            => $packet['declared_value'],
+                'fragile'                   => $packet['fragile'],
 
-                'pickup_area'               =>
-                $pickupLocation?->area ?? $merchant->pickup_area ?? $merchant->area,
+                'payment_type'              => $data['payment_type'],
+                'delivery_charge_paid_by'   => $data['delivery_charge_paid_by'],
 
-                'pickup_lat'                =>
-                $pickupLocation?->latitude ?? $merchant->pickup_lat ?? $merchant->latitude,
+                'self_drop'                 => $data['self_drop'] ?? null,
 
-                'pickup_lng'                =>
-                $pickupLocation?->longitude ?? $merchant->pickup_lng ?? $merchant->longitude,
+                'special_instructions'      => $data['special_instructions'] ?? null,
+                'remarks'                   => $data['remarks'] ?? null,
 
-                /*
-                |--------------------------------------------------------------------------
-                | Origin
-                |--------------------------------------------------------------------------
-                */
-
-                'origin_branch_id'          =>
-                $origin['branch_id'],
-
-                'origin_sub_branch_id'      =>
-                $origin['sub_branch_id'],
-
-                /*
-                |--------------------------------------------------------------------------
-                | Destination
-                |--------------------------------------------------------------------------
-                */
-
-                'customer_name'             =>
-                $data['customer_name'],
-
-                'customer_phone'            =>
-                $data['customer_phone'],
-
-                'customer_email'            =>
-                $data['customer_email'] ?? null,
-
-                'customer_address'          =>
-                $data['customer_address'],
-
-                'customer_city'             =>
-                $data['customer_city'] ?? null,
-
-                'customer_area'             =>
-                $data['customer_area'] ?? null,
-
-                'delivery_lat'              =>
-                $data['delivery_lat'],
-
-                'delivery_lng'              =>
-                $data['delivery_lng'],
-
-                'destination_branch_id'     =>
-                $destination['branch_id'],
-
-                'destination_sub_branch_id' =>
-                $destination['sub_branch_id'],
-
-                'receiver_name'             => $data['customer_name'],
-                'receiver_phone'            => $data['customer_phone'],
-                'receiver_email'            => $data['customer_email'] ?? null,
-                'receiver_address'          => $data['customer_address'],
-                'receiver_city'             => $data['customer_city'] ?? null,
-                'receiver_area'             => $data['customer_area'] ?? null,
-                /*
-                |--------------------------------------------------------------------------
-                | Parcel
-                |--------------------------------------------------------------------------
-                */
-
-                'service_type'              =>
-                $data['service_type'],
-
-                'parcel_type'               =>
-                $data['parcel_type'],
-
-                'product_description'       =>
-                $data['product_description'] ?? null,
-
-                'quantity'                  =>
-                $data['quantity'],
-
-                'weight'                    =>
-                $data['weight'],
-
-                'declared_value'            =>
-                $data['declared_value'],
-
-                'fragile'                   =>
-                $data['fragile'] ?? false,
-
-                'payment_type'              =>
-                $data['payment_type'],
-
-                'delivery_charge_paid_by'   =>
-                $data['delivery_charge_paid_by'],
-
-                'self_drop'                 =>
-                $data['self_drop'] ?? false,
-
-                'special_instructions'      =>
-                $data['special_instructions'] ?? null,
-
-                'remarks'                   =>
-                $data['remarks'] ?? null,
-
-                /*
-                |--------------------------------------------------------------------------
-                | Workflow
-                |--------------------------------------------------------------------------
-                */
-
-                'status'                    =>
-                'awaiting_pickup',
-
-                /*
-                |--------------------------------------------------------------------------
-                | Route snapshot
-                |--------------------------------------------------------------------------
-                */
-
-                'route_snapshot'            =>
-                json_encode(
-                    $route,
-                    JSON_THROW_ON_ERROR
-                ),
-
-                /*
-                |--------------------------------------------------------------------------
-                | Timestamps
-                |--------------------------------------------------------------------------
-                */
-
-                'created_at'                =>
-                now(),
-
-                'updated_at'                =>
-                now(),
+                'status'                    => CourierStatus::AWAITING_PICKUP,
             ];
 
             /*

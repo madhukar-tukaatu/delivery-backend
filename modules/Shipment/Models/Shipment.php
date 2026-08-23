@@ -1,3 +1,4 @@
+```php
 <?php
 
 declare(strict_types=1);
@@ -21,29 +22,72 @@ class Shipment extends Model
     protected $guarded = [];
 
     protected $casts = [
-        'fragile' => 'boolean',
 
-        'self_drop' => 'boolean',
+        /*
+        |--------------------------------------------------------------------------
+        | Boolean
+        |--------------------------------------------------------------------------
+        */
 
-        'packet_products' => 'array',
+        'fragile' =>
+            'boolean',
 
-        'delivered_at' => 'datetime',
+        'self_drop' =>
+            'boolean',
 
-        'cancelled_at' => 'datetime',
+        /*
+        |--------------------------------------------------------------------------
+        | Dates
+        |--------------------------------------------------------------------------
+        */
 
-        'delivery_charge_breakdown' => 'array',
+        'delivered_at' =>
+            'datetime',
 
-        'pickup_lat' => 'decimal:7',
+        'cancelled_at' =>
+            'datetime',
 
-        'pickup_lng' => 'decimal:7',
+        /*
+        |--------------------------------------------------------------------------
+        | JSON
+        |--------------------------------------------------------------------------
+        */
 
-        'delivery_lat' => 'decimal:7',
+        'delivery_charge_breakdown' =>
+            'array',
 
-        'delivery_lng' => 'decimal:7',
+        'packet_products' =>
+            'array',
 
-        'route_distance_km' => 'decimal:2',
+        /*
+        |--------------------------------------------------------------------------
+        | Coordinates
+        |--------------------------------------------------------------------------
+        */
 
-        'route_fee' => 'decimal:2',
+        'pickup_lat' =>
+            'decimal:7',
+
+        'pickup_lng' =>
+            'decimal:7',
+
+        'delivery_lat' =>
+            'decimal:7',
+
+        'delivery_lng' =>
+            'decimal:7',
+
+        /*
+        |--------------------------------------------------------------------------
+        | Decimal values
+        |--------------------------------------------------------------------------
+        */
+
+        'route_distance_km' =>
+            'decimal:2',
+
+        'route_fee' =>
+            'decimal:2',
     ];
 
     public function merchant(): BelongsTo
@@ -158,3 +202,4 @@ class Shipment extends Model
         );
     }
 }
+```

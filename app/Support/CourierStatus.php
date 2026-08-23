@@ -1,4 +1,7 @@
 <?php
+
+declare(strict_types=1);
+
 namespace App\Support;
 
 final class CourierStatus
@@ -19,7 +22,8 @@ final class CourierStatus
     public const RECEIVED_AT_ORIGIN_BRANCH =
         'received_at_origin_branch';
 
-    public const IN_TRANSIT = 'in_transit';
+    public const IN_TRANSIT =
+        'in_transit';
 
     public const RECEIVED_AT_TRANSIT_HUB =
         'received_at_transit_hub';

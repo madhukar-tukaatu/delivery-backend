@@ -1,12 +1,15 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Modules\Merchant\Services;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 use Modules\Merchant\Models\MerchantApiKey;
 
-class MerchantApiKeyGuard
+final class MerchantApiKeyGuard
 {
     public function resolve(Request $request): MerchantApiKey
     {
@@ -17,11 +20,11 @@ class MerchantApiKeyGuard
         */
 
         $apiKey = trim((string) $request->header('X-Tukaatu-Key'));
-        $secret = trim((string) $request->header('X-Tukaatu-Secret'));
+        $apiSecret = trim((string) $request->header('X-Tukaatu-Secret'));
 
         /*
         |--------------------------------------------------------------------------
-        | API key required
+        | API Key required
         |--------------------------------------------------------------------------
         */
 
@@ -33,11 +36,11 @@ class MerchantApiKeyGuard
 
         /*
         |--------------------------------------------------------------------------
-        | API secret required
+        | API Secret required
         |--------------------------------------------------------------------------
         */
 
-        if ($secret === '') {
+        if ($apiSecret === '') {
             throw ValidationException::withMessages([
                 'api_secret' => 'X-Tukaatu-Secret header is required.',
             ]);
@@ -45,17 +48,17 @@ class MerchantApiKeyGuard
 
         /*
         |--------------------------------------------------------------------------
-        | Hash API key
+        | Find API key
         |--------------------------------------------------------------------------
+        |
+        | Never trust merchant_id from request body.
+        |
         */
 
-        $apiKeyHash = hash('sha256', $apiKey);
-
-        /*
-        |--------------------------------------------------------------------------
-        | Find active credential
-        |--------------------------------------------------------------------------
-        */
+        $apiKeyHash = hash(
+            'sha256',
+            $apiKey
+        );
 
         $merchantKey = MerchantApiKey::query()
             ->where('api_key_hash', $apiKeyHash)
@@ -64,20 +67,30 @@ class MerchantApiKeyGuard
 
         if (!$merchantKey) {
             throw ValidationException::withMessages([
-                'api_key' => 'Invalid or inactive API credentials.',
+                'api_key' => 'Invalid or inactive API key.',
             ]);
         }
 
         /*
         |--------------------------------------------------------------------------
-        | Verify secret
+        | Validate API secret
         |--------------------------------------------------------------------------
+        |
+        | Your database stores SHA-256 hash of the secret.
+        |
         */
 
-        if (!hash_equals(
-            (string) $merchantKey->secret_hash,
-            hash('sha256', $secret)
-        )) {
+        $secretHash = hash(
+            'sha256',
+            $apiSecret
+        );
+
+        if (
+            !hash_equals(
+                (string) $merchantKey->api_secret_hash,
+                $secretHash
+            )
+        ) {
             throw ValidationException::withMessages([
                 'api_secret' => 'Invalid API credentials.',
             ]);
@@ -85,13 +98,42 @@ class MerchantApiKeyGuard
 
         /*
         |--------------------------------------------------------------------------
-        | Update last used
+        | Merchant must be active
+        |--------------------------------------------------------------------------
+        */
+
+        $merchant = $merchantKey->merchant;
+
+        if (!$merchant) {
+            throw ValidationException::withMessages([
+                'api_key' => 'Merchant associated with API credentials was not found.',
+            ]);
+        }
+
+        if (
+            isset($merchant->status)
+            && $merchant->status !== 'active'
+        ) {
+            throw ValidationException::withMessages([
+                'api_key' => 'Merchant account is not active.',
+            ]);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Update usage
         |--------------------------------------------------------------------------
         */
 
         $merchantKey->forceFill([
             'last_used_at' => now(),
         ])->save();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Return authenticated credential
+        |--------------------------------------------------------------------------
+        */
 
         return $merchantKey;
     }

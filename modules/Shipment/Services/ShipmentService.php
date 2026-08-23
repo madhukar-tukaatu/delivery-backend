@@ -1,12 +1,16 @@
 <?php
+
+declare(strict_types=1);
+
 namespace Modules\Shipment\Services;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Modules\Merchant\Models\Merchant;
 use Modules\Shipment\Models\Shipment;
+use App\Support\CourierStatus;
 
-class ShipmentService
+final class ShipmentService
 {
     public function __construct(
         private readonly MerchantPickupLocationResolver $pickupResolver,
@@ -15,25 +19,37 @@ class ShipmentService
     ) {
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | External Gateway Shipment
-    |--------------------------------------------------------------------------
-    */
-
+    /**
+     * Create shipment from external Store Manager.
+     *
+     * One API request represents:
+     *
+     * Store
+     *   └── Customer Order
+     *         └── One Packet
+     *               ├── Product 1
+     *               ├── Product 2
+     *               └── Product N
+     *
+     * Tukaatu creates one shipment/tracking number for the packet.
+     */
     public function createFromGateway(
         int $merchantId,
         array $data
     ): Shipment {
 
+        /*
+        |--------------------------------------------------------------------------
+        | Merchant
+        |--------------------------------------------------------------------------
+        */
+
         $merchant = Merchant::query()
             ->find($merchantId);
 
         if (! $merchant) {
-
             throw ValidationException::withMessages([
-                'merchant' =>
-                'Authenticated merchant was not found.',
+                'merchant' => 'Authenticated merchant was not found.',
             ]);
         }
 
@@ -44,23 +60,21 @@ class ShipmentService
         */
 
         if ($merchant->status !== 'active') {
-
             throw ValidationException::withMessages([
-                'merchant' =>
-                'Merchant account is not active.',
+                'merchant' => 'Merchant account is not active.',
             ]);
         }
 
         /*
         |--------------------------------------------------------------------------
-        | Create shipment
+        | Transaction
         |--------------------------------------------------------------------------
         */
 
         return DB::transaction(function () use (
             $merchant,
             $data
-        ) {
+        ): Shipment {
 
             /*
             |--------------------------------------------------------------------------
@@ -69,10 +83,7 @@ class ShipmentService
             */
 
             $existing = Shipment::query()
-                ->where(
-                    'merchant_id',
-                    $merchant->id
-                )
+                ->where('merchant_id', $merchant->id)
                 ->where(
                     'merchant_order_id',
                     $data['merchant_order_id']
@@ -80,87 +91,118 @@ class ShipmentService
                 ->first();
 
             if ($existing) {
-                return $existing;
+                return $existing->fresh();
             }
 
             /*
             |--------------------------------------------------------------------------
-            | Pickup location
+            | Resolve pickup location
             |--------------------------------------------------------------------------
             */
 
-            $pickupLocation =
-            $this->pickupResolver->resolve(
+            $pickupLocation = $this->pickupResolver->resolve(
                 $merchant,
                 $data
             );
 
+            if (! $pickupLocation) {
+                throw ValidationException::withMessages([
+                    'pickup_location_id' =>
+                        'Pickup location does not belong to the authenticated merchant.',
+                ]);
+            }
+
             /*
             |--------------------------------------------------------------------------
-            | Origin branch
+            | Pickup coordinates
+            |--------------------------------------------------------------------------
+            */
+
+            $pickupCoordinates =
+                $this->branchAssignment->pickupCoordinates(
+                    $pickupLocation,
+                    $merchant
+                );
+
+            /*
+            |--------------------------------------------------------------------------
+            | Resolve origin branch
             |--------------------------------------------------------------------------
             */
 
             $origin =
-            $this->branchAssignment->resolveOrigin(
-                $merchant,
-                $pickupLocation
-            );
+                $this->branchAssignment->resolveOrigin(
+                    $merchant,
+                    $pickupLocation
+                );
 
             /*
             |--------------------------------------------------------------------------
-            | Destination branch
+            | Resolve destination branch
             |--------------------------------------------------------------------------
             */
 
             $destination =
-            $this->branchAssignment->resolveDestination([
-                'latitude'  =>
-                $data['delivery_lat'],
-
-                'longitude' =>
-                $data['delivery_lng'],
-
-                'city'      =>
-                $data['customer_city'] ?? null,
-
-                'area'      =>
-                $data['customer_area'] ?? null,
-            ]);
+                $this->branchAssignment->resolveDestination([
+                    'latitude' => $data['delivery_lat'],
+                    'longitude' => $data['delivery_lng'],
+                    'city' => $data['delivery_city'] ?? null,
+                    'area' => $data['delivery_area'] ?? null,
+                ]);
 
             /*
             |--------------------------------------------------------------------------
-            | Validate routing
+            | Validate origin
             |--------------------------------------------------------------------------
             */
 
             if (! $origin['branch_id']) {
-
                 throw ValidationException::withMessages([
                     'pickup_location_id' =>
-                    'Unable to determine origin branch.',
-                ]);
-            }
-
-            if (! $destination['branch_id']) {
-
-                throw ValidationException::withMessages([
-                    'delivery_lat' =>
-                    'Unable to determine destination branch.',
+                        'Unable to determine origin branch for this pickup location.',
                 ]);
             }
 
             /*
             |--------------------------------------------------------------------------
-            | Route
+            | Validate destination
+            |--------------------------------------------------------------------------
+            */
+
+            if (! $destination['branch_id']) {
+                throw ValidationException::withMessages([
+                    'delivery_lat' =>
+                        'Unable to determine destination branch for this delivery location.',
+                ]);
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Build route
             |--------------------------------------------------------------------------
             */
 
             $route =
-            $this->branchAssignment->buildRoute(
-                $origin,
-                $destination
-            );
+                $this->branchAssignment->buildRoute(
+                    $origin,
+                    $destination
+                );
+
+            /*
+            |--------------------------------------------------------------------------
+            | Packet
+            |--------------------------------------------------------------------------
+            */
+
+            $packet = $data['packet'];
+
+            /*
+            |--------------------------------------------------------------------------
+            | Products
+            |--------------------------------------------------------------------------
+            */
+
+            $products = $packet['products'];
 
             /*
             |--------------------------------------------------------------------------
@@ -169,73 +211,195 @@ class ShipmentService
             */
 
             $trackingNumber =
-            $this->shipmentNumberService->generate();
+                $this->shipmentNumberService->generate();
 
             /*
             |--------------------------------------------------------------------------
-            | Shipment payload
+            | Shipment data
             |--------------------------------------------------------------------------
             */
 
             $shipmentData = [
-                'tracking_number'           => $this->generateTrackingNumber(),
 
-                'merchant_id'               => $merchant->id,
-                'merchant_order_id'         => $data['merchant_order_id'],
-                'order_source'              => 'store_manager',
+                /*
+                |------------------------------------------------------------------
+                | Identity
+                |------------------------------------------------------------------
+                */
 
-                'pickup_location_id'        => $pickupLocation->id,
+                'tracking_number' =>
+                    $trackingNumber,
 
-                'pickup_lat'                => $pickupCoordinates['lat'],
-                'pickup_lng'                => $pickupCoordinates['lng'],
+                'merchant_id' =>
+                    $merchant->id,
 
-                'origin_branch_id'          => $origin['branch_id'],
-                'origin_sub_branch_id'      => $origin['sub_branch_id'],
+                'merchant_order_id' =>
+                    $data['merchant_order_id'],
 
-                'receiver_name'             => $data['receiver_name'],
-                'receiver_phone'            => $data['receiver_phone'],
-                'receiver_email'            => $data['receiver_email'] ?? null,
+                'order_source' =>
+                    'store_manager',
 
-                'delivery_address'          => $data['delivery_address'],
-                'delivery_city'             => $data['delivery_city'] ?? null,
-                'delivery_area'             => $data['delivery_area'] ?? null,
+                /*
+                |------------------------------------------------------------------
+                | Pickup
+                |------------------------------------------------------------------
+                */
 
-                'delivery_lat'              => $data['delivery_lat'],
-                'delivery_lng'              => $data['delivery_lng'],
+                'pickup_location_id' =>
+                    $pickupLocation->id,
 
-                'destination_branch_id'     => $destination['branch_id'],
-                'destination_sub_branch_id' => $destination['sub_branch_id'],
+                'pickup_lat' =>
+                    $pickupCoordinates['lat'],
 
-                'service_type'              => $data['service_type'],
+                'pickup_lng' =>
+                    $pickupCoordinates['lng'],
 
-                'parcel_type'               => $packet['parcel_type'],
-                'product_description'       => $packet['description'] ?? null,
-                'quantity'                  => $packet['quantity'],
-                'weight'                    => $packet['weight'],
-                'declared_value'            => $packet['declared_value'],
-                'fragile'                   => $packet['fragile'],
+                /*
+                |------------------------------------------------------------------
+                | Origin
+                |------------------------------------------------------------------
+                */
 
-                'payment_type'              => $data['payment_type'],
-                'delivery_charge_paid_by'   => $data['delivery_charge_paid_by'],
+                'origin_branch_id' =>
+                    $origin['branch_id'],
 
-                'self_drop'                 => $data['self_drop'] ?? null,
+                'origin_sub_branch_id' =>
+                    $origin['sub_branch_id'],
 
-                'special_instructions'      => $data['special_instructions'] ?? null,
-                'remarks'                   => $data['remarks'] ?? null,
+                /*
+                |------------------------------------------------------------------
+                | Receiver
+                |------------------------------------------------------------------
+                */
 
-                'status'                    => CourierStatus::AWAITING_PICKUP,
+                'receiver_name' =>
+                    $data['receiver_name'],
+
+                'receiver_phone' =>
+                    $data['receiver_phone'],
+
+                'receiver_email' =>
+                    $data['receiver_email'] ?? null,
+
+                /*
+                |------------------------------------------------------------------
+                | Delivery
+                |------------------------------------------------------------------
+                */
+
+                'delivery_address' =>
+                    $data['delivery_address'],
+
+                'delivery_city' =>
+                    $data['delivery_city'] ?? null,
+
+                'delivery_area' =>
+                    $data['delivery_area'] ?? null,
+
+                'delivery_lat' =>
+                    $data['delivery_lat'],
+
+                'delivery_lng' =>
+                    $data['delivery_lng'],
+
+                /*
+                |------------------------------------------------------------------
+                | Destination
+                |------------------------------------------------------------------
+                */
+
+                'destination_branch_id' =>
+                    $destination['branch_id'],
+
+                'destination_sub_branch_id' =>
+                    $destination['sub_branch_id'],
+
+                /*
+                |------------------------------------------------------------------
+                | Service
+                |------------------------------------------------------------------
+                */
+
+                'service_type' =>
+                    $data['service_type'],
+
+                /*
+                |------------------------------------------------------------------
+                | Packet
+                |------------------------------------------------------------------
+                */
+
+                'parcel_type' =>
+                    $packet['parcel_type'],
+
+                'product_description' =>
+                    $packet['description'] ?? null,
+
+                'quantity' =>
+                    $packet['quantity'],
+
+                'weight' =>
+                    $packet['weight'],
+
+                'declared_value' =>
+                    $packet['declared_value'],
+
+                'fragile' =>
+                    $packet['fragile'],
+
+                /*
+                |------------------------------------------------------------------
+                | Payment
+                |------------------------------------------------------------------
+                */
+
+                'payment_type' =>
+                    $data['payment_type'],
+
+                'delivery_charge_paid_by' =>
+                    $data['delivery_charge_paid_by'],
+
+                /*
+                |------------------------------------------------------------------
+                | Pickup mode
+                |------------------------------------------------------------------
+                */
+
+                'self_drop' =>
+                    $data['self_drop'] ?? null,
+
+                /*
+                |------------------------------------------------------------------
+                | Additional
+                |------------------------------------------------------------------
+                */
+
+                'special_instructions' =>
+                    $data['special_instructions'] ?? null,
+
+                'remarks' =>
+                    $data['remarks'] ?? null,
+
+                /*
+                |------------------------------------------------------------------
+                | Status
+                |------------------------------------------------------------------
+                */
+
+                'status' =>
+                    CourierStatus::AWAITING_PICKUP,
             ];
 
             /*
             |--------------------------------------------------------------------------
-            | Only insert columns that actually exist
+            | Only existing DB columns
             |--------------------------------------------------------------------------
             */
 
             $shipmentData =
-            $this->filterShipmentColumns(
-                $shipmentData
-            );
+                $this->filterShipmentColumns(
+                    $shipmentData
+                );
 
             /*
             |--------------------------------------------------------------------------
@@ -248,27 +412,185 @@ class ShipmentService
 
             /*
             |--------------------------------------------------------------------------
+            | Store packet/products if packet tables exist
+            |--------------------------------------------------------------------------
+            */
+
+            $this->storePacketProducts(
+                $shipment,
+                $packet,
+                $products,
+                $trackingNumber
+            );
+
+            /*
+            |--------------------------------------------------------------------------
             | Initial tracking event
             |--------------------------------------------------------------------------
             */
 
             $this->createTrackingEvent(
-                $shipment,
-                null,
-                'awaiting_pickup',
-                'Shipment created successfully. Awaiting pickup.'
+                shipment: $shipment,
+                oldStatus: null,
+                newStatus: CourierStatus::AWAITING_PICKUP,
+                description: 'Shipment created successfully. Awaiting pickup.'
             );
+
+            /*
+            |--------------------------------------------------------------------------
+            | Return shipment
+            |--------------------------------------------------------------------------
+            */
 
             return $shipment->fresh();
         });
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Tracking event
-    |--------------------------------------------------------------------------
-    */
+    /**
+     * Store packet and product details when corresponding tables exist.
+     *
+     * This method is intentionally defensive because your current
+     * shipments table may not yet have packet/product tables.
+     */
+    private function storePacketProducts(
+        Shipment $shipment,
+        array $packet,
+        array $products,
+        string $trackingNumber
+    ): void {
 
+        /*
+        |--------------------------------------------------------------------------
+        | Packet table
+        |--------------------------------------------------------------------------
+        */
+
+        if (DB::getSchemaBuilder()->hasTable('shipment_packets')) {
+
+            $packetColumns =
+                DB::getSchemaBuilder()
+                    ->getColumnListing('shipment_packets');
+
+            $packetData = [
+                'shipment_id' =>
+                    $shipment->id,
+
+                'tracking_number' =>
+                    $trackingNumber,
+
+                'description' =>
+                    $packet['description'] ?? null,
+
+                'quantity' =>
+                    $packet['quantity'],
+
+                'weight' =>
+                    $packet['weight'],
+
+                'declared_value' =>
+                    $packet['declared_value'],
+
+                'parcel_type' =>
+                    $packet['parcel_type'],
+
+                'fragile' =>
+                    $packet['fragile'],
+
+                'created_at' =>
+                    now(),
+
+                'updated_at' =>
+                    now(),
+            ];
+
+            $packetData =
+                array_intersect_key(
+                    $packetData,
+                    array_flip($packetColumns)
+                );
+
+            DB::table('shipment_packets')
+                ->insert($packetData);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Product table
+        |--------------------------------------------------------------------------
+        */
+
+        if (! DB::getSchemaBuilder()->hasTable('shipment_products')) {
+            return;
+        }
+
+        $productColumns =
+            DB::getSchemaBuilder()
+                ->getColumnListing('shipment_products');
+
+        foreach ($products as $index => $product) {
+
+            /*
+            |--------------------------------------------------------------------------
+            | Product tracking reference
+            |--------------------------------------------------------------------------
+            |
+            | Example:
+            |
+            | TKT-20260823-852101-P1
+            | TKT-20260823-852101-P2
+            |
+            */
+
+            $productTrackingNumber =
+                $trackingNumber . '-P' . ($index + 1);
+
+            $productData = [
+
+                'shipment_id' =>
+                    $shipment->id,
+
+                'tracking_number' =>
+                    $productTrackingNumber,
+
+                'product_id' =>
+                    $product['product_id'] ?? null,
+
+                'name' =>
+                    $product['name'],
+
+                'quantity' =>
+                    $product['quantity'],
+
+                'unit_price' =>
+                    $product['unit_price'] ?? null,
+
+                'unit_weight' =>
+                    $product['unit_weight'] ?? null,
+
+                'parcel_type' =>
+                    $product['parcel_type'] ?? null,
+
+                'created_at' =>
+                    now(),
+
+                'updated_at' =>
+                    now(),
+            ];
+
+            $productData =
+                array_intersect_key(
+                    $productData,
+                    array_flip($productColumns)
+                );
+
+            DB::table('shipment_products')
+                ->insert($productData);
+        }
+    }
+
+    /**
+     * Create tracking event.
+     */
     private function createTrackingEvent(
         Shipment $shipment,
         ?string $oldStatus,
@@ -284,55 +606,53 @@ class ShipmentService
 
         $data = [
             'shipment_id' =>
-            $shipment->id,
+                $shipment->id,
 
-            'old_status'  =>
-            $oldStatus,
+            'old_status' =>
+                $oldStatus,
 
-            'status'      =>
-            $newStatus,
+            'status' =>
+                $newStatus,
 
             'description' =>
-            $description,
+                $description,
 
-            'location'    =>
-            null,
+            'location' =>
+                null,
 
-            'meta_json'   =>
-            json_encode([]),
+            'meta_json' =>
+                json_encode([]),
 
-            'created_at'  =>
-            now(),
+            'created_at' =>
+                now(),
 
-            'updated_at'  =>
-            now(),
+            'updated_at' =>
+                now(),
         ];
 
         $columns =
-        DB::getSchemaBuilder()
-            ->getColumnListing($table);
+            DB::getSchemaBuilder()
+                ->getColumnListing($table);
 
-        $data = array_intersect_key(
-            $data,
-            array_flip($columns)
-        );
+        $data =
+            array_intersect_key(
+                $data,
+                array_flip($columns)
+            );
 
         DB::table($table)->insert($data);
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Shipment columns
-    |--------------------------------------------------------------------------
-    */
-
+    /**
+     * Only use columns that actually exist in shipments table.
+     */
     private function filterShipmentColumns(
         array $data
     ): array {
 
         $columns =
-        DB::getSchemaBuilder()
-            ->getColumnListing('shipments');
+            DB::getSchemaBuilder()
+                ->getColumnListing('shipments');
 
         return array_intersect_key(
             $data,
@@ -340,12 +660,9 @@ class ShipmentService
         );
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Status update
-    |--------------------------------------------------------------------------
-    */
-
+    /**
+     * Update shipment status.
+     */
     public function updateStatus(
         Shipment $shipment,
         string $status,
@@ -353,29 +670,31 @@ class ShipmentService
         ?string $note = null
     ): Shipment {
 
-        return DB::transaction(function () use (
-            $shipment,
-            $status,
-            $userId,
-            $note
-        ) {
-
-            $oldStatus =
-            $shipment->status;
-
-            $shipment->status =
-                $status;
-
-            $shipment->save();
-
-            $this->createTrackingEvent(
+        return DB::transaction(
+            function () use (
                 $shipment,
-                $oldStatus,
                 $status,
-                $note ?? 'Shipment status updated.'
-            );
+                $userId,
+                $note
+            ): Shipment {
 
-            return $shipment->fresh();
-        });
+                $oldStatus =
+                    $shipment->status;
+
+                $shipment->status =
+                    $status;
+
+                $shipment->save();
+
+                $this->createTrackingEvent(
+                    $shipment,
+                    $oldStatus,
+                    $status,
+                    $note ?? 'Shipment status updated.'
+                );
+
+                return $shipment->fresh();
+            }
+        );
     }
 }

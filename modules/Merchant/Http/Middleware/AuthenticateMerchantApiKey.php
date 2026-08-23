@@ -18,12 +18,51 @@ class AuthenticateMerchantApiKey
         Request $request,
         Closure $next
     ): Response {
+        /*
+        |--------------------------------------------------------------------------
+        | API key is mandatory
+        |--------------------------------------------------------------------------
+        */
 
-        $merchantKey = $this->guard->resolve($request);
+        $key = trim((string) $request->header('X-Tukaatu-Key'));
+
+        if ($key === '') {
+            return response()->json([
+                'message' => 'Tukaatu API key is required.',
+            ], 401);
+        }
 
         /*
         |--------------------------------------------------------------------------
-        | Store authenticated integration context
+        | API secret is mandatory
+        |--------------------------------------------------------------------------
+        */
+
+        $secret = trim((string) $request->header('X-Tukaatu-Secret'));
+
+        if ($secret === '') {
+            return response()->json([
+                'message' => 'Tukaatu API secret is required.',
+            ], 401);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Resolve and authenticate credential
+        |--------------------------------------------------------------------------
+        */
+
+        $merchantKey = $this->guard->resolve($request);
+
+        if (!$merchantKey) {
+            return response()->json([
+                'message' => 'Invalid Tukaatu API credentials.',
+            ], 401);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Attach authenticated integration context
         |--------------------------------------------------------------------------
         */
 
@@ -37,18 +76,10 @@ class AuthenticateMerchantApiKey
             (int) $merchantKey->merchant_id
         );
 
-        /*
-        |--------------------------------------------------------------------------
-        | Useful for controllers/services
-        |--------------------------------------------------------------------------
-        */
-
-        if (isset($merchantKey->merchant)) {
-            $request->attributes->set(
-                'merchant',
-                $merchantKey->merchant
-            );
-        }
+        $request->attributes->set(
+            'merchant',
+            $merchantKey->merchant ?? null
+        );
 
         return $next($request);
     }

@@ -1,17 +1,8 @@
 <?php
-
-declare (strict_types = 1);
-
 namespace App\Support;
 
 final class CourierStatus
 {
-    /*
-    |--------------------------------------------------------------------------
-    | Shipment lifecycle
-    |--------------------------------------------------------------------------
-    */
-
     public const BOOKED = 'booked';
 
     public const AWAITING_PICKUP = 'awaiting_pickup';
@@ -22,23 +13,11 @@ final class CourierStatus
 
     public const PICKUP_FAILED = 'pickup_failed';
 
-    /*
-    |--------------------------------------------------------------------------
-    | Origin
-    |--------------------------------------------------------------------------
-    */
-
     public const RECEIVED_AT_ORIGIN_SUB_BRANCH =
         'received_at_origin_sub_branch';
 
     public const RECEIVED_AT_ORIGIN_BRANCH =
         'received_at_origin_branch';
-
-    /*
-    |--------------------------------------------------------------------------
-    | Transit
-    |--------------------------------------------------------------------------
-    */
 
     public const IN_TRANSIT = 'in_transit';
 
@@ -54,12 +33,6 @@ final class CourierStatus
     public const RECEIVED_AT_DESTINATION_SUB_BRANCH =
         'received_at_destination_sub_branch';
 
-    /*
-    |--------------------------------------------------------------------------
-    | Last-mile
-    |--------------------------------------------------------------------------
-    */
-
     public const ASSIGNED_TO_RIDER =
         'assigned_to_rider';
 
@@ -72,55 +45,52 @@ final class CourierStatus
     public const DELIVERY_FAILED =
         'delivery_failed';
 
-    /*
-    |--------------------------------------------------------------------------
-    | Return / cancellation
-    |--------------------------------------------------------------------------
-    */
-
     public const RETURN_INITIATED =
         'return_initiated';
 
     public const CANCELLED =
         'cancelled';
 
-    /*
-    |--------------------------------------------------------------------------
-    | Merchant-facing status
-    |--------------------------------------------------------------------------
-    */
-
-    public static function merchantStatus(string $status): string
-    {
+    public static function merchantStatus(
+        string $status
+    ): string {
         return match ($status) {
 
             self::BOOKED,
             self::AWAITING_PICKUP,
-            self::PICKUP_ASSIGNED                    => 'pending',
+            self::PICKUP_ASSIGNED
+                => 'pending',
 
             self::PICKED_UP,
             self::RECEIVED_AT_ORIGIN_SUB_BRANCH,
-            self::RECEIVED_AT_ORIGIN_BRANCH          => 'picked_up',
+            self::RECEIVED_AT_ORIGIN_BRANCH
+                => 'picked_up',
 
             self::IN_TRANSIT,
             self::RECEIVED_AT_TRANSIT_HUB,
             self::DISPATCHED_TO_DESTINATION_BRANCH,
             self::RECEIVED_AT_DESTINATION_BRANCH,
-            self::RECEIVED_AT_DESTINATION_SUB_BRANCH => 'in_transit',
+            self::RECEIVED_AT_DESTINATION_SUB_BRANCH
+                => 'in_transit',
 
             self::ASSIGNED_TO_RIDER,
-            self::OUT_FOR_DELIVERY                   => 'out_for_delivery',
+            self::OUT_FOR_DELIVERY
+                => 'out_for_delivery',
 
-            self::DELIVERED                          => 'delivered',
+            self::DELIVERED
+                => 'delivered',
 
-            self::DELIVERY_FAILED                    => 'failed',
+            self::DELIVERY_FAILED
+                => 'failed',
 
-            self::RETURN_INITIATED                   => 'returning',
+            self::RETURN_INITIATED
+                => 'returning',
 
-            self::CANCELLED                          => 'cancelled',
+            self::CANCELLED
+                => 'cancelled',
 
             default
-                                                     => 'pending',
+                => 'pending',
         };
     }
 }

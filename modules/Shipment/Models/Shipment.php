@@ -1,11 +1,14 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Modules\Shipment\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Modules\Branch\Models\Branch;
 use Modules\Delivery\Models\DeliveryAssignment;
 use Modules\Merchant\Models\Merchant;
@@ -20,18 +23,26 @@ class Shipment extends Model
     protected $casts = [
         'fragile' => 'boolean',
 
+        'self_drop' => 'boolean',
+
+        'packet_products' => 'array',
+
         'delivered_at' => 'datetime',
+
         'cancelled_at' => 'datetime',
 
         'delivery_charge_breakdown' => 'array',
 
         'pickup_lat' => 'decimal:7',
+
         'pickup_lng' => 'decimal:7',
 
         'delivery_lat' => 'decimal:7',
+
         'delivery_lng' => 'decimal:7',
 
         'route_distance_km' => 'decimal:2',
+
         'route_fee' => 'decimal:2',
     ];
 
@@ -112,12 +123,6 @@ class Shipment extends Model
         )->orderBy('sequence');
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Pickup Requests
-    |--------------------------------------------------------------------------
-    */
-
     public function pickupRequests(): BelongsToMany
     {
         return $this->belongsToMany(
@@ -137,13 +142,7 @@ class Shipment extends Model
             ->withTimestamps();
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Delivery
-    |--------------------------------------------------------------------------
-    */
-
-    public function deliveryAssignment(): \Illuminate\Database\Eloquent\Relations\HasOne
+    public function deliveryAssignment(): HasOne
     {
         return $this->hasOne(
             DeliveryAssignment::class,

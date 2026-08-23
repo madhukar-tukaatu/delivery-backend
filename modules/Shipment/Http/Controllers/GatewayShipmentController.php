@@ -21,28 +21,11 @@ final class GatewayShipmentController extends Controller
     ) {
     }
 
-    /**
-     * Create shipment from external Store Manager.
-     *
-     * Authentication:
-     *
-     * X-Tukaatu-Key
-     * X-Tukaatu-Secret
-     */
-    public function store(
-        Request $request
-    ): JsonResponse {
-
-        /*
-        |--------------------------------------------------------------------------
-        | Merchant comes from authenticated API credentials
-        |--------------------------------------------------------------------------
-        */
-
-        $merchantId =
-            (int) $request
-                ->attributes
-                ->get('merchant_id');
+    public function store(Request $request): JsonResponse
+    {
+        $merchantId = (int) $request
+            ->attributes
+            ->get('merchant_id');
 
         abort_unless(
             $merchantId > 0,
@@ -50,14 +33,7 @@ final class GatewayShipmentController extends Controller
             'Invalid merchant authentication.'
         );
 
-        /*
-        |--------------------------------------------------------------------------
-        | Validate request
-        |--------------------------------------------------------------------------
-        */
-
         $data = $request->validate([
-
             'merchant_order_id' => [
                 'required',
                 'string',
@@ -89,7 +65,7 @@ final class GatewayShipmentController extends Controller
             ],
 
             'delivery_address' => [
-                'nullable',
+                'required',
                 'string',
                 'max:500',
             ],
@@ -172,13 +148,14 @@ final class GatewayShipmentController extends Controller
 
             /*
             |--------------------------------------------------------------------------
-            | Products
+            | Products are optional
             |--------------------------------------------------------------------------
             */
 
             'packet.products' => [
                 'nullable',
                 'array',
+                'max:100',
             ],
 
             'packet.products.*.product_id' => [
@@ -188,13 +165,13 @@ final class GatewayShipmentController extends Controller
             ],
 
             'packet.products.*.name' => [
-                'required',
+                'required_with:packet.products',
                 'string',
                 'max:255',
             ],
 
             'packet.products.*.quantity' => [
-                'required',
+                'required_with:packet.products',
                 'integer',
                 'min:1',
             ],
@@ -237,7 +214,7 @@ final class GatewayShipmentController extends Controller
 
             /*
             |--------------------------------------------------------------------------
-            | Self drop
+            | Pickup mode
             |--------------------------------------------------------------------------
             */
 
@@ -267,26 +244,26 @@ final class GatewayShipmentController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | Internal values
+        | Normalize optional fields
         |--------------------------------------------------------------------------
         */
 
+        $data['self_drop'] =
+            $data['self_drop'] ?? false;
+
         $data['order_source'] =
             'store_manager';
-
-        unset($data['merchant_id']);
 
         $data['merchant_id'] =
             $merchantId;
 
         /*
         |--------------------------------------------------------------------------
-        | Create shipment
+        | Create
         |--------------------------------------------------------------------------
         */
 
         try {
-
             $shipment =
                 $this->shipmentService
                     ->createFromGateway(
@@ -302,12 +279,6 @@ final class GatewayShipmentController extends Controller
 
         } catch (ValidationException $e) {
 
-            /*
-            |--------------------------------------------------------------------------
-            | Return useful validation errors
-            |--------------------------------------------------------------------------
-            */
-
             return response()->json([
                 'success' => false,
                 'message' =>
@@ -318,22 +289,7 @@ final class GatewayShipmentController extends Controller
 
         } catch (Throwable $e) {
 
-            /*
-            |--------------------------------------------------------------------------
-            | Log full exception
-            |--------------------------------------------------------------------------
-            */
-
             report($e);
-
-            /*
-            |--------------------------------------------------------------------------
-            | During development return useful error
-            |--------------------------------------------------------------------------
-            |
-            | Remove "debug" before production.
-            |
-            */
 
             return response()->json([
                 'success' => false,
@@ -347,9 +303,6 @@ final class GatewayShipmentController extends Controller
         }
     }
 
-    /**
-     * Get shipment.
-     */
     public function show(
         Request $request,
         string $trackingNumber
@@ -392,9 +345,6 @@ final class GatewayShipmentController extends Controller
         );
     }
 
-    /**
-     * Cancel shipment.
-     */
     public function cancel(
         Request $request,
         string $trackingNumber

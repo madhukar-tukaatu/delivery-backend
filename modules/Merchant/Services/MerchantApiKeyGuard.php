@@ -10,27 +10,84 @@ class MerchantApiKeyGuard
 {
     public function resolve(Request $request): MerchantApiKey
     {
-        $apiKey = $request->header('X-Tukaatu-Api-Key');
+        /*
+        |--------------------------------------------------------------------------
+        | Read credentials
+        |--------------------------------------------------------------------------
+        */
 
-        if (!$apiKey) {
+        $apiKey = trim((string) $request->header('X-Tukaatu-Key'));
+        $secret = trim((string) $request->header('X-Tukaatu-Secret'));
+
+        /*
+        |--------------------------------------------------------------------------
+        | API key required
+        |--------------------------------------------------------------------------
+        */
+
+        if ($apiKey === '') {
             throw ValidationException::withMessages([
-                'api_key' => 'X-Tukaatu-Api-Key header is required.',
+                'api_key' => 'X-Tukaatu-Key header is required.',
             ]);
         }
 
-        $hash = hash('sha256', $apiKey);
-        // dd($hash);
+        /*
+        |--------------------------------------------------------------------------
+        | API secret required
+        |--------------------------------------------------------------------------
+        */
+
+        if ($secret === '') {
+            throw ValidationException::withMessages([
+                'api_secret' => 'X-Tukaatu-Secret header is required.',
+            ]);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Hash API key
+        |--------------------------------------------------------------------------
+        */
+
+        $apiKeyHash = hash('sha256', $apiKey);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Find active credential
+        |--------------------------------------------------------------------------
+        */
 
         $merchantKey = MerchantApiKey::query()
-            ->where('api_key_hash', $hash)
+            ->where('api_key_hash', $apiKeyHash)
             ->where('is_active', true)
             ->first();
 
         if (!$merchantKey) {
             throw ValidationException::withMessages([
-                'api_key' => 'Invalid or inactive API key.',
+                'api_key' => 'Invalid or inactive API credentials.',
             ]);
         }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Verify secret
+        |--------------------------------------------------------------------------
+        */
+
+        if (!hash_equals(
+            (string) $merchantKey->secret_hash,
+            hash('sha256', $secret)
+        )) {
+            throw ValidationException::withMessages([
+                'api_secret' => 'Invalid API credentials.',
+            ]);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Update last used
+        |--------------------------------------------------------------------------
+        */
 
         $merchantKey->forceFill([
             'last_used_at' => now(),

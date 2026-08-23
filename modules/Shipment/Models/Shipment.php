@@ -1,4 +1,3 @@
-```php
 <?php
 
 declare(strict_types=1);
@@ -202,4 +201,3 @@ class Shipment extends Model
         );
     }
 }
-```

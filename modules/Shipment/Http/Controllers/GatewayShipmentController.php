@@ -89,7 +89,7 @@ final class GatewayShipmentController extends Controller
             ],
 
             'delivery_address' => [
-                'required',
+                'nullable',
                 'string',
                 'max:500',
             ],

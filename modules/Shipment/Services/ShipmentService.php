@@ -1,5 +1,4 @@
 <?php
-
 namespace Modules\Shipment\Services;
 
 use Illuminate\Support\Facades\DB;
@@ -16,7 +15,6 @@ class ShipmentService
     ) {
     }
 
-
     /*
     |--------------------------------------------------------------------------
     | External Gateway Shipment
@@ -31,14 +29,13 @@ class ShipmentService
         $merchant = Merchant::query()
             ->find($merchantId);
 
-        if (!$merchant) {
+        if (! $merchant) {
 
             throw ValidationException::withMessages([
                 'merchant' =>
-                    'Authenticated merchant was not found.',
+                'Authenticated merchant was not found.',
             ]);
         }
-
 
         /*
         |--------------------------------------------------------------------------
@@ -50,10 +47,9 @@ class ShipmentService
 
             throw ValidationException::withMessages([
                 'merchant' =>
-                    'Merchant account is not active.',
+                'Merchant account is not active.',
             ]);
         }
-
 
         /*
         |--------------------------------------------------------------------------
@@ -87,7 +83,6 @@ class ShipmentService
                 return $existing;
             }
 
-
             /*
             |--------------------------------------------------------------------------
             | Pickup location
@@ -95,11 +90,10 @@ class ShipmentService
             */
 
             $pickupLocation =
-                $this->pickupResolver->resolve(
-                    $merchant,
-                    $data
-                );
-
+            $this->pickupResolver->resolve(
+                $merchant,
+                $data
+            );
 
             /*
             |--------------------------------------------------------------------------
@@ -108,11 +102,10 @@ class ShipmentService
             */
 
             $origin =
-                $this->branchAssignment->resolveOrigin(
-                    $merchant,
-                    $pickupLocation
-                );
-
+            $this->branchAssignment->resolveOrigin(
+                $merchant,
+                $pickupLocation
+            );
 
             /*
             |--------------------------------------------------------------------------
@@ -121,20 +114,19 @@ class ShipmentService
             */
 
             $destination =
-                $this->branchAssignment->resolveDestination([
-                    'latitude' =>
-                        $data['delivery_lat'],
+            $this->branchAssignment->resolveDestination([
+                'latitude'  =>
+                $data['delivery_lat'],
 
-                    'longitude' =>
-                        $data['delivery_lng'],
+                'longitude' =>
+                $data['delivery_lng'],
 
-                    'city' =>
-                        $data['customer_city'] ?? null,
+                'city'      =>
+                $data['customer_city'] ?? null,
 
-                    'area' =>
-                        $data['customer_area'] ?? null,
-                ]);
-
+                'area'      =>
+                $data['customer_area'] ?? null,
+            ]);
 
             /*
             |--------------------------------------------------------------------------
@@ -142,22 +134,21 @@ class ShipmentService
             |--------------------------------------------------------------------------
             */
 
-            if (!$origin['branch_id']) {
+            if (! $origin['branch_id']) {
 
                 throw ValidationException::withMessages([
                     'pickup_location_id' =>
-                        'Unable to determine origin branch.',
+                    'Unable to determine origin branch.',
                 ]);
             }
 
-            if (!$destination['branch_id']) {
+            if (! $destination['branch_id']) {
 
                 throw ValidationException::withMessages([
                     'delivery_lat' =>
-                        'Unable to determine destination branch.',
+                    'Unable to determine destination branch.',
                 ]);
             }
-
 
             /*
             |--------------------------------------------------------------------------
@@ -166,11 +157,10 @@ class ShipmentService
             */
 
             $route =
-                $this->branchAssignment->buildRoute(
-                    $origin,
-                    $destination
-                );
-
+            $this->branchAssignment->buildRoute(
+                $origin,
+                $destination
+            );
 
             /*
             |--------------------------------------------------------------------------
@@ -179,8 +169,7 @@ class ShipmentService
             */
 
             $trackingNumber =
-                $this->shipmentNumberService->generate();
-
+            $this->shipmentNumberService->generate();
 
             /*
             |--------------------------------------------------------------------------
@@ -190,17 +179,17 @@ class ShipmentService
 
             $shipmentData = [
 
-                'tracking_number' =>
-                    $trackingNumber,
+                'tracking_number'           =>
+                $trackingNumber,
 
-                'merchant_id' =>
-                    $merchant->id,
+                'merchant_id'               =>
+                $merchant->id,
 
-                'merchant_order_id' =>
-                    $data['merchant_order_id'],
+                'merchant_order_id'         =>
+                $data['merchant_order_id'],
 
-                'order_source' =>
-                    $data['order_source'] ?? 'store_manager',
+                'order_source'              =>
+                $data['order_source'] ?? 'store_manager',
 
                 /*
                 |--------------------------------------------------------------------------
@@ -208,41 +197,29 @@ class ShipmentService
                 |--------------------------------------------------------------------------
                 */
 
-                'pickup_location_id' =>
-                    $pickupLocation?->id,
+                'pickup_location_id'        =>
+                $pickupLocation?->id,
 
-                'pickup_name' =>
-                    $pickupLocation?->name
-                    ?? $merchant->name,
+                'pickup_name'               =>
+                $pickupLocation?->name ?? $merchant->name,
 
-                'pickup_phone' =>
-                    $pickupLocation?->phone
-                    ?? $merchant->phone,
+                'pickup_phone'              =>
+                $pickupLocation?->phone ?? $merchant->phone,
 
-                'pickup_address' =>
-                    $pickupLocation?->address
-                    ?? $merchant->pickup_address
-                    ?? $merchant->address,
+                'pickup_address'            =>
+                $pickupLocation?->address ?? $merchant->pickup_address ?? $merchant->address,
 
-                'pickup_city' =>
-                    $pickupLocation?->city
-                    ?? $merchant->pickup_city
-                    ?? $merchant->city,
+                'pickup_city'               =>
+                $pickupLocation?->city ?? $merchant->pickup_city ?? $merchant->city,
 
-                'pickup_area' =>
-                    $pickupLocation?->area
-                    ?? $merchant->pickup_area
-                    ?? $merchant->area,
+                'pickup_area'               =>
+                $pickupLocation?->area ?? $merchant->pickup_area ?? $merchant->area,
 
-                'pickup_lat' =>
-                    $pickupLocation?->latitude
-                    ?? $merchant->pickup_lat
-                    ?? $merchant->latitude,
+                'pickup_lat'                =>
+                $pickupLocation?->latitude ?? $merchant->pickup_lat ?? $merchant->latitude,
 
-                'pickup_lng' =>
-                    $pickupLocation?->longitude
-                    ?? $merchant->pickup_lng
-                    ?? $merchant->longitude,
+                'pickup_lng'                =>
+                $pickupLocation?->longitude ?? $merchant->pickup_lng ?? $merchant->longitude,
 
                 /*
                 |--------------------------------------------------------------------------
@@ -250,11 +227,11 @@ class ShipmentService
                 |--------------------------------------------------------------------------
                 */
 
-                'origin_branch_id' =>
-                    $origin['branch_id'],
+                'origin_branch_id'          =>
+                $origin['branch_id'],
 
-                'origin_sub_branch_id' =>
-                    $origin['sub_branch_id'],
+                'origin_sub_branch_id'      =>
+                $origin['sub_branch_id'],
 
                 /*
                 |--------------------------------------------------------------------------
@@ -262,77 +239,83 @@ class ShipmentService
                 |--------------------------------------------------------------------------
                 */
 
-                'customer_name' =>
-                    $data['customer_name'],
+                'customer_name'             =>
+                $data['customer_name'],
 
-                'customer_phone' =>
-                    $data['customer_phone'],
+                'customer_phone'            =>
+                $data['customer_phone'],
 
-                'customer_email' =>
-                    $data['customer_email'] ?? null,
+                'customer_email'            =>
+                $data['customer_email'] ?? null,
 
-                'customer_address' =>
-                    $data['customer_address'],
+                'customer_address'          =>
+                $data['customer_address'],
 
-                'customer_city' =>
-                    $data['customer_city'] ?? null,
+                'customer_city'             =>
+                $data['customer_city'] ?? null,
 
-                'customer_area' =>
-                    $data['customer_area'] ?? null,
+                'customer_area'             =>
+                $data['customer_area'] ?? null,
 
-                'delivery_lat' =>
-                    $data['delivery_lat'],
+                'delivery_lat'              =>
+                $data['delivery_lat'],
 
-                'delivery_lng' =>
-                    $data['delivery_lng'],
+                'delivery_lng'              =>
+                $data['delivery_lng'],
 
-                'destination_branch_id' =>
-                    $destination['branch_id'],
+                'destination_branch_id'     =>
+                $destination['branch_id'],
 
                 'destination_sub_branch_id' =>
-                    $destination['sub_branch_id'],
+                $destination['sub_branch_id'],
 
+                'receiver_name'             => $data['customer_name'],
+                'receiver_phone'            => $data['customer_phone'],
+                'receiver_email'            => $data['customer_email'] ?? null,
+                'receiver_address'          => $data['customer_address'],
+                'receiver_city'             => $data['customer_city'] ?? null,
+                'receiver_area'             => $data['customer_area'] ?? null,
                 /*
                 |--------------------------------------------------------------------------
                 | Parcel
                 |--------------------------------------------------------------------------
                 */
 
-                'service_type' =>
-                    $data['service_type'],
+                'service_type'              =>
+                $data['service_type'],
 
-                'parcel_type' =>
-                    $data['parcel_type'],
+                'parcel_type'               =>
+                $data['parcel_type'],
 
-                'product_description' =>
-                    $data['product_description'] ?? null,
+                'product_description'       =>
+                $data['product_description'] ?? null,
 
-                'quantity' =>
-                    $data['quantity'],
+                'quantity'                  =>
+                $data['quantity'],
 
-                'weight' =>
-                    $data['weight'],
+                'weight'                    =>
+                $data['weight'],
 
-                'declared_value' =>
-                    $data['declared_value'],
+                'declared_value'            =>
+                $data['declared_value'],
 
-                'fragile' =>
-                    $data['fragile'] ?? false,
+                'fragile'                   =>
+                $data['fragile'] ?? false,
 
-                'payment_type' =>
-                    $data['payment_type'],
+                'payment_type'              =>
+                $data['payment_type'],
 
-                'delivery_charge_paid_by' =>
-                    $data['delivery_charge_paid_by'],
+                'delivery_charge_paid_by'   =>
+                $data['delivery_charge_paid_by'],
 
-                'self_drop' =>
-                    $data['self_drop'] ?? false,
+                'self_drop'                 =>
+                $data['self_drop'] ?? false,
 
-                'special_instructions' =>
-                    $data['special_instructions'] ?? null,
+                'special_instructions'      =>
+                $data['special_instructions'] ?? null,
 
-                'remarks' =>
-                    $data['remarks'] ?? null,
+                'remarks'                   =>
+                $data['remarks'] ?? null,
 
                 /*
                 |--------------------------------------------------------------------------
@@ -340,8 +323,8 @@ class ShipmentService
                 |--------------------------------------------------------------------------
                 */
 
-                'status' =>
-                    'awaiting_pickup',
+                'status'                    =>
+                'awaiting_pickup',
 
                 /*
                 |--------------------------------------------------------------------------
@@ -349,11 +332,11 @@ class ShipmentService
                 |--------------------------------------------------------------------------
                 */
 
-                'route_snapshot' =>
-                    json_encode(
-                        $route,
-                        JSON_THROW_ON_ERROR
-                    ),
+                'route_snapshot'            =>
+                json_encode(
+                    $route,
+                    JSON_THROW_ON_ERROR
+                ),
 
                 /*
                 |--------------------------------------------------------------------------
@@ -361,13 +344,12 @@ class ShipmentService
                 |--------------------------------------------------------------------------
                 */
 
-                'created_at' =>
-                    now(),
+                'created_at'                =>
+                now(),
 
-                'updated_at' =>
-                    now(),
+                'updated_at'                =>
+                now(),
             ];
-
 
             /*
             |--------------------------------------------------------------------------
@@ -376,10 +358,9 @@ class ShipmentService
             */
 
             $shipmentData =
-                $this->filterShipmentColumns(
-                    $shipmentData
-                );
-
+            $this->filterShipmentColumns(
+                $shipmentData
+            );
 
             /*
             |--------------------------------------------------------------------------
@@ -389,7 +370,6 @@ class ShipmentService
 
             $shipment = Shipment::query()
                 ->create($shipmentData);
-
 
             /*
             |--------------------------------------------------------------------------
@@ -404,11 +384,9 @@ class ShipmentService
                 'Shipment created successfully. Awaiting pickup.'
             );
 
-
             return $shipment->fresh();
         });
     }
-
 
     /*
     |--------------------------------------------------------------------------
@@ -425,40 +403,39 @@ class ShipmentService
 
         $table = 'shipment_tracking_events';
 
-        if (!DB::getSchemaBuilder()->hasTable($table)) {
+        if (! DB::getSchemaBuilder()->hasTable($table)) {
             return;
         }
 
         $data = [
             'shipment_id' =>
-                $shipment->id,
+            $shipment->id,
 
-            'old_status' =>
-                $oldStatus,
+            'old_status'  =>
+            $oldStatus,
 
-            'status' =>
-                $newStatus,
+            'status'      =>
+            $newStatus,
 
             'description' =>
-                $description,
+            $description,
 
-            'location' =>
-                null,
+            'location'    =>
+            null,
 
-            'meta_json' =>
-                json_encode([]),
+            'meta_json'   =>
+            json_encode([]),
 
-            'created_at' =>
-                now(),
+            'created_at'  =>
+            now(),
 
-            'updated_at' =>
-                now(),
+            'updated_at'  =>
+            now(),
         ];
 
-
         $columns =
-            DB::getSchemaBuilder()
-                ->getColumnListing($table);
+        DB::getSchemaBuilder()
+            ->getColumnListing($table);
 
         $data = array_intersect_key(
             $data,
@@ -467,7 +444,6 @@ class ShipmentService
 
         DB::table($table)->insert($data);
     }
-
 
     /*
     |--------------------------------------------------------------------------
@@ -480,15 +456,14 @@ class ShipmentService
     ): array {
 
         $columns =
-            DB::getSchemaBuilder()
-                ->getColumnListing('shipments');
+        DB::getSchemaBuilder()
+            ->getColumnListing('shipments');
 
         return array_intersect_key(
             $data,
             array_flip($columns)
         );
     }
-
 
     /*
     |--------------------------------------------------------------------------
@@ -511,22 +486,19 @@ class ShipmentService
         ) {
 
             $oldStatus =
-                $shipment->status;
+            $shipment->status;
 
             $shipment->status =
                 $status;
 
             $shipment->save();
 
-
             $this->createTrackingEvent(
                 $shipment,
                 $oldStatus,
                 $status,
-                $note
-                    ?? 'Shipment status updated.'
+                $note ?? 'Shipment status updated.'
             );
-
 
             return $shipment->fresh();
         });

@@ -5,6 +5,8 @@ namespace Modules\Pickup\Http\Controllers;
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
+use Modules\Pickup\Http\Requests\AddShipmentsToPickupRequest;
+use Modules\Pickup\Http\Requests\CreatePickupRequestRequest;
 use Modules\Pickup\Models\PickupRequest;
 use Modules\Pickup\Services\PickupWorkflowService;
 
@@ -15,62 +17,190 @@ class PickupController extends Controller
         $user = $request->user();
 
         $query = PickupRequest::query()
-            ->with(['shipment.merchant', 'assignedUser'])
-            ->whereIn('status', ['pending', 'assigned']);
+            ->with([
+                'merchant',
+                'branch',
+                'subBranch',
+                'assignedStaff',
+                'shipments',
+            ]);
 
-        if ($user->isSuperAdmin() || $user->hasRole('main_admin')) {
-            // sees all pickups
-        } elseif ($user->hasRole('branch_manager') || $user->hasRole('sub_branch_manager')) {
+        if (
+            $user->isSuperAdmin()
+            ||
+            $user->hasRole('main_admin')
+        ) {
+            // unrestricted
+        } elseif (
+            $user->hasRole('branch_manager')
+            ||
+            $user->hasRole('sub_branch_manager')
+        ) {
+
             $query->where(function ($q) use ($user) {
-                $q->where('branch_id', $user->branch_id)
-                    ->orWhere('sub_branch_id', $user->branch_id);
+
+                $q->where(
+                    'branch_id',
+                    $user->branch_id
+                )->orWhere(
+                    'sub_branch_id',
+                    $user->branch_id
+                );
             });
+
         } else {
-            $query->where('assigned_to', $user->id);
+
+            $query->where(
+                'assigned_to',
+                $user->id
+            );
         }
 
-        return ApiResponse::success($query->latest()->paginate((int) $request->get('per_page', 20)));
+        return ApiResponse::success(
+            $query
+                ->latest('id')
+                ->paginate(
+                    min(
+                        max(
+                            (int) $request->get(
+                                'per_page',
+                                20
+                            ),
+                            1
+                        ),
+                        100
+                    )
+                )
+        );
     }
 
-    public function pickedUp(Request $request, PickupRequest $pickup, PickupWorkflowService $service)
-    {
-        $this->authorizePickup($request, $pickup);
+    public function store(
+        CreatePickupRequestRequest $request,
+        PickupWorkflowService $service
+    ) {
+        $pickup = $service->create(
+            $request->user(),
+            $request->validated()
+        );
 
+        return ApiResponse::success(
+            $pickup,
+            'Pickup request created successfully.'
+        );
+    }
+
+    public function addShipments(
+        AddShipmentsToPickupRequest $request,
+        PickupRequest $pickup,
+        PickupWorkflowService $service
+    ) {
+        $pickup =
+            $service->addShipments(
+                $pickup,
+                $request->user(),
+                $request->validated()['shipment_ids'],
+                $request->validated()['remarks'] ?? null
+            );
+
+        return ApiResponse::success(
+            $pickup,
+            'Shipment(s) added to pickup request.'
+        );
+    }
+
+    public function show(
+        PickupRequest $pickup
+    ) {
+        return ApiResponse::success(
+            $pickup->load([
+                'merchant',
+                'branch',
+                'subBranch',
+                'assignedStaff',
+                'shipments',
+            ])
+        );
+    }
+
+    public function assign(
+        Request $request,
+        PickupRequest $pickup,
+        PickupWorkflowService $service
+    ) {
         $data = $request->validate([
-            'remarks' => ['nullable', 'string', 'max:500'],
+            'staff_id' => [
+                'required',
+                'integer',
+                'exists:users,id',
+            ],
         ]);
 
-        $shipment = $service->markPickedUp($pickup, $request->user(), $data['remarks'] ?? null);
+        $staff =
+            \App\Models\User::findOrFail(
+                $data['staff_id']
+            );
 
-        return ApiResponse::success($shipment, 'Parcel marked as picked up.');
+        $pickup =
+            $service->assign(
+                $pickup,
+                $staff,
+                $request->user()
+            );
+
+        return ApiResponse::success(
+            $pickup,
+            'Pickup rider assigned successfully.'
+        );
     }
 
-    public function failed(Request $request, PickupRequest $pickup, PickupWorkflowService $service)
-    {
-        $this->authorizePickup($request, $pickup);
+    public function riderArrived(
+        Request $request,
+        PickupRequest $pickup,
+        PickupWorkflowService $service
+    ) {
+        $pickup =
+            $service->riderArrived(
+                $pickup,
+                $request->user()
+            );
 
-        $data = $request->validate([
-            'reason' => ['required', 'string', 'max:500'],
-        ]);
-
-        $shipment = $service->markFailed($pickup, $request->user(), $data['reason']);
-
-        return ApiResponse::success($shipment, 'Pickup marked as failed.');
+        return ApiResponse::success(
+            $pickup,
+            'Rider arrival recorded.'
+        );
     }
 
-    private function authorizePickup(Request $request, PickupRequest $pickup): void
-    {
-        $user = $request->user();
+    public function startCollection(
+        Request $request,
+        PickupRequest $pickup,
+        PickupWorkflowService $service
+    ) {
+        $pickup =
+            $service->startCollection(
+                $pickup,
+                $request->user()
+            );
 
-        if ($user->isSuperAdmin() || $user->hasRole('main_admin')) {
-            return;
-        }
+        return ApiResponse::success(
+            $pickup,
+            'Pickup collection started.'
+        );
+    }
 
-        if (($user->hasRole('branch_manager') || $user->hasRole('sub_branch_manager'))
-            && ((int) $pickup->branch_id === (int) $user->branch_id || (int) $pickup->sub_branch_id === (int) $user->branch_id)) {
-            return;
-        }
+    public function complete(
+        Request $request,
+        PickupRequest $pickup,
+        PickupWorkflowService $service
+    ) {
+        $pickup =
+            $service->complete(
+                $pickup,
+                $request->user()
+            );
 
-        abort_unless((int) $pickup->assigned_to === (int) $user->id, 403);
+        return ApiResponse::success(
+            $pickup,
+            'Pickup request completed successfully.'
+        );
     }
 }

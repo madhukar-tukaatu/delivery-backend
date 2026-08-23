@@ -1,13 +1,29 @@
 <?php
+
 namespace Modules\Shipment\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
+use Illuminate\Validation\Rule;
 
-class MerchantCreateShipmentRequest extends FormRequest
+class StoreShipmentRequest extends FormRequest
 {
     public function authorize(): bool
     {
         return true;
+    }
+
+    protected function prepareForValidation(): void
+    {
+        $this->merge([
+            'service_type' =>
+                $this->input('service_type', 'standard'),
+
+            'parcel_type' =>
+                $this->input('parcel_type', 'non_fragile'),
+
+            'payment_type' =>
+                $this->input('payment_type', 'prepaid'),
+        ]);
     }
 
     public function rules(): array
@@ -16,17 +32,17 @@ class MerchantCreateShipmentRequest extends FormRequest
 
             /*
             |--------------------------------------------------------------------------
-            | Store's order
+            | External Order
             |--------------------------------------------------------------------------
             */
 
-            'external_order_id'        => [
+            'external_order_id' => [
                 'required',
                 'string',
-                'max:100',
+                'max:150',
             ],
 
-            'external_order_reference' => [
+            'external_checkout_id' => [
                 'nullable',
                 'string',
                 'max:150',
@@ -38,48 +54,24 @@ class MerchantCreateShipmentRequest extends FormRequest
             |--------------------------------------------------------------------------
             */
 
-            'pickup_location_id'       => [
+            'pickup_location_id' => [
                 'nullable',
                 'integer',
             ],
 
-            'pickup_name'              => [
-                'nullable',
-                'string',
-                'max:150',
-            ],
-
-            'pickup_phone'             => [
-                'nullable',
-                'string',
-                'max:30',
-            ],
-
-            'pickup_address'           => [
+            'pickup_address' => [
                 'nullable',
                 'string',
                 'max:500',
             ],
 
-            'pickup_city'              => [
-                'nullable',
-                'string',
-                'max:100',
-            ],
-
-            'pickup_area'              => [
-                'nullable',
-                'string',
-                'max:100',
-            ],
-
-            'pickup_lat'               => [
+            'pickup_latitude' => [
                 'nullable',
                 'numeric',
                 'between:-90,90',
             ],
 
-            'pickup_lng'               => [
+            'pickup_longitude' => [
                 'nullable',
                 'numeric',
                 'between:-180,180',
@@ -91,43 +83,43 @@ class MerchantCreateShipmentRequest extends FormRequest
             |--------------------------------------------------------------------------
             */
 
-            'receiver_name'            => [
+            'delivery_name' => [
                 'required',
                 'string',
                 'max:150',
             ],
 
-            'receiver_phone'           => [
+            'delivery_phone' => [
                 'required',
                 'string',
                 'max:30',
             ],
 
-            'delivery_address'         => [
+            'delivery_address' => [
                 'required',
                 'string',
                 'max:500',
             ],
 
-            'delivery_city'            => [
+            'delivery_city' => [
                 'nullable',
                 'string',
                 'max:100',
             ],
 
-            'delivery_area'            => [
+            'delivery_area' => [
                 'nullable',
                 'string',
                 'max:100',
             ],
 
-            'delivery_lat'             => [
+            'delivery_latitude' => [
                 'required',
                 'numeric',
                 'between:-90,90',
             ],
 
-            'delivery_lng'             => [
+            'delivery_longitude' => [
                 'required',
                 'numeric',
                 'between:-180,180',
@@ -135,40 +127,54 @@ class MerchantCreateShipmentRequest extends FormRequest
 
             /*
             |--------------------------------------------------------------------------
-            | Shipment
+            | Parcel
             |--------------------------------------------------------------------------
             */
 
-            'service_type'             => [
+            'service_type' => [
                 'required',
-                'string',
-                'max:50',
+                Rule::in([
+                    'standard',
+                    'express',
+                    'same_day',
+                ]),
             ],
 
-            'parcel_type'              => [
-                'nullable',
-                'string',
-                'max:50',
+            'parcel_type' => [
+                'required',
+                Rule::in([
+                    'fragile',
+                    'non_fragile',
+                ]),
             ],
 
-            'actual_weight_kg'         => [
+            'actual_weight_kg' => [
+                'required',
+                'numeric',
+                'gt:0',
+            ],
+
+            'declared_value' => [
                 'nullable',
                 'numeric',
-                'min:0',
+                'gte:0',
             ],
 
-            'declared_value'           => [
+            'payment_type' => [
+                'required',
+                Rule::in([
+                    'prepaid',
+                    'cod',
+                ]),
+            ],
+
+            'cod_amount' => [
                 'nullable',
                 'numeric',
-                'min:0',
+                'gte:0',
             ],
 
-            'fragile'                  => [
-                'nullable',
-                'boolean',
-            ],
-
-            'remarks'                  => [
+            'remarks' => [
                 'nullable',
                 'string',
                 'max:1000',

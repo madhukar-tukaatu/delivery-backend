@@ -3,52 +3,50 @@
 namespace Modules\Shipment\Services;
 
 use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\ValidationException;
 use Modules\Merchant\Models\Merchant;
+use Modules\Shipment\Enums\ShipmentStatus;
 use Modules\Shipment\Models\Shipment;
-use Modules\Shipment\Support\ShipmentStatus;
 use Modules\Tracking\Services\TrackingService;
 
-class StoreShipmentService
+class MerchantShipmentCreationService
 {
     public function __construct(
         private readonly MerchantShipmentGateService $gate,
         private readonly MerchantPickupLocationResolver $pickupResolver,
         private readonly BranchAssignmentService $branchAssignment,
-        private readonly TrackingNumberService $trackingNumberService,
+        private readonly TrackingNumberService $trackingNumbers,
         private readonly TrackingService $trackingService,
-    ) {
-    }
+    ) {}
 
     public function create(
         Merchant $merchant,
-        array $payload,
+        array $data,
         ?int $createdBy = null
     ): Shipment {
 
-        $this->gate->ensureCanCreateShipment($merchant);
+        $this->gate->ensureCanCreateShipment(
+            $merchant
+        );
 
         return DB::transaction(function () use (
             $merchant,
-            $payload,
+            $data,
             $createdBy
         ) {
 
             /*
             |--------------------------------------------------------------------------
-            | Idempotency
+            | Prevent duplicate Store orders
             |--------------------------------------------------------------------------
-            |
-            | The Store Manager may retry the same request.
-            |
             */
 
             $existing = Shipment::query()
                 ->where('merchant_id', $merchant->id)
                 ->where(
                     'external_order_id',
-                    $payload['external_order_id']
+                    $data['external_order_id']
                 )
+                ->lockForUpdate()
                 ->first();
 
             if ($existing) {
@@ -63,19 +61,19 @@ class StoreShipmentService
 
             /*
             |--------------------------------------------------------------------------
-            | Resolve Pickup Location
+            | Pickup location
             |--------------------------------------------------------------------------
             */
 
             $pickupLocation =
                 $this->pickupResolver->resolve(
                     $merchant,
-                    $payload
+                    $data
                 );
 
             /*
             |--------------------------------------------------------------------------
-            | Resolve Origin
+            | Resolve origin
             |--------------------------------------------------------------------------
             */
 
@@ -85,112 +83,106 @@ class StoreShipmentService
                     $pickupLocation
                 );
 
-            if (!$origin['branch_id']) {
-                throw ValidationException::withMessages([
-                    'pickup' =>
-                        'Unable to determine the pickup branch.',
-                ]);
-            }
-
             /*
             |--------------------------------------------------------------------------
-            | Resolve Destination
+            | Resolve destination
             |--------------------------------------------------------------------------
             */
 
             $destination =
                 $this->branchAssignment->resolveDestination([
                     'latitude' =>
-                        $payload['delivery_latitude'],
+                        $data['delivery_lat'],
 
                     'longitude' =>
-                        $payload['delivery_longitude'],
+                        $data['delivery_lng'],
 
                     'city' =>
-                        $payload['delivery_city'] ?? null,
+                        $data['delivery_city'] ?? null,
 
                     'area' =>
-                        $payload['delivery_area'] ?? null,
+                        $data['delivery_area'] ?? null,
                 ]);
-
-            if (!$destination['branch_id']) {
-                throw ValidationException::withMessages([
-                    'delivery' =>
-                        'Unable to determine the destination branch.',
-                ]);
-            }
 
             /*
             |--------------------------------------------------------------------------
-            | Generate Tracking Number
+            | Generate tracking number
             |--------------------------------------------------------------------------
             */
 
             $trackingNumber =
-                $this->trackingNumberService->generate();
+                $this->trackingNumbers->generate();
 
             /*
             |--------------------------------------------------------------------------
-            | Shipment Payload
+            | Create shipment
             |--------------------------------------------------------------------------
             */
 
-            $shipmentData = [
+            $shipment = Shipment::create([
 
                 'merchant_id' =>
                     $merchant->id,
 
+                'external_order_id' =>
+                    $data['external_order_id'],
+
+                'external_order_reference' =>
+                    $data['external_order_reference'] ?? null,
+
                 'tracking_number' =>
                     $trackingNumber,
 
-                'external_order_id' =>
-                    $payload['external_order_id'],
+                'status' =>
+                    ShipmentStatus::AWAITING_PICKUP,
 
-                'external_checkout_id' =>
-                    $payload['external_checkout_id'] ?? null,
+                'merchant_status' =>
+                    ShipmentStatus::AWAITING_PICKUP,
 
                 /*
                  * Pickup
                  */
-
                 'pickup_location_id' =>
                     $pickupLocation?->id,
 
                 'sender_name' =>
-                    $pickupLocation?->name
+                    $data['pickup_name']
+                    ?? $pickupLocation?->name
                     ?? $merchant->name,
 
                 'sender_phone' =>
-                    $pickupLocation?->phone
+                    $data['pickup_phone']
+                    ?? $pickupLocation?->phone
                     ?? $merchant->phone,
 
                 'sender_address' =>
-                    $pickupLocation?->address
-                    ?? $merchant->pickup_address
+                    $data['pickup_address']
+                    ?? $pickupLocation?->address
                     ?? $merchant->address,
 
                 'sender_city' =>
-                    $pickupLocation?->city
-                    ?? $merchant->pickup_city
+                    $data['pickup_city']
+                    ?? $pickupLocation?->city
                     ?? $merchant->city,
 
                 'sender_area' =>
-                    $pickupLocation?->area
-                    ?? $merchant->pickup_area
+                    $data['pickup_area']
+                    ?? $pickupLocation?->area
                     ?? $merchant->area,
 
                 'pickup_lat' =>
-                    $pickupLocation?->latitude
+                    $data['pickup_lat']
+                    ?? $pickupLocation?->latitude
                     ?? $merchant->pickup_lat,
 
                 'pickup_lng' =>
-                    $pickupLocation?->longitude
+                    $data['pickup_lng']
+                    ?? $pickupLocation?->longitude
                     ?? $merchant->pickup_lng,
 
                 /*
                  * Origin
                  */
-
                 'origin_branch_id' =>
                     $origin['branch_id'],
 
@@ -198,33 +190,28 @@ class StoreShipmentService
                     $origin['sub_branch_id'],
 
                 /*
-                 * Delivery
-                 */
-
-                'receiver_name' =>
-                    $payload['delivery_name'],
-
-                'receiver_phone' =>
-                    $payload['delivery_phone'],
-
-                'receiver_address' =>
-                    $payload['delivery_address'],
-
-                'receiver_city' =>
-                    $payload['delivery_city'] ?? null,
-
-                'receiver_area' =>
-                    $payload['delivery_area'] ?? null,
-
-                'delivery_lat' =>
-                    $payload['delivery_latitude'],
-
-                'delivery_lng' =>
-                    $payload['delivery_longitude'],
-
-                /*
                  * Destination
                  */
+                'receiver_name' =>
+                    $data['receiver_name'],
+
+                'receiver_phone' =>
+                    $data['receiver_phone'],
+
+                'delivery_address' =>
+                    $data['delivery_address'],
+
+                'delivery_city' =>
+                    $data['delivery_city'] ?? null,
+
+                'delivery_area' =>
+                    $data['delivery_area'] ?? null,
+
+                'delivery_lat' =>
+                    $data['delivery_lat'],
+
+                'delivery_lng' =>
+                    $data['delivery_lng'],
 
                 'destination_branch_id' =>
                     $destination['branch_id'],
@@ -235,71 +222,44 @@ class StoreShipmentService
                 /*
                  * Parcel
                  */
-
                 'service_type' =>
-                    $payload['service_type'],
+                    $data['service_type'],
 
                 'parcel_type' =>
-                    $payload['parcel_type'],
-
-                'fragile' =>
-                    $payload['parcel_type'] === 'fragile',
+                    $data['parcel_type'] ?? 'non_fragile',
 
                 'actual_weight_kg' =>
-                    $payload['actual_weight_kg'],
+                    $data['actual_weight_kg'] ?? null,
 
                 'declared_value' =>
-                    $payload['declared_value'] ?? 0,
+                    $data['declared_value'] ?? null,
 
-                'payment_type' =>
-                    $payload['payment_type'],
-
-                'cod_amount' =>
-                    $payload['cod_amount'] ?? 0,
+                'fragile' =>
+                    $data['fragile'] ?? false,
 
                 'remarks' =>
-                    $payload['remarks'] ?? null,
+                    $data['remarks'] ?? null,
 
                 /*
-                 * Workflow
+                 * Current location
                  */
-
-                'status' =>
-                    ShipmentStatus::AWAITING_PICKUP,
-
-                'merchant_status' =>
-                    ShipmentStatus::AWAITING_PICKUP,
-
                 'current_branch_id' =>
                     $origin['branch_id'],
 
                 'current_sub_branch_id' =>
                     $origin['sub_branch_id'],
-
-                'created_by' =>
-                    $createdBy,
-            ];
+            ]);
 
             /*
             |--------------------------------------------------------------------------
-            | Create Shipment
-            |--------------------------------------------------------------------------
-            */
-
-            $shipment = Shipment::create(
-                $shipmentData
-            );
-
-            /*
-            |--------------------------------------------------------------------------
-            | Tracking Event
+            | Tracking event
             |--------------------------------------------------------------------------
             */
 
             $this->trackingService->record(
                 $shipment,
                 ShipmentStatus::AWAITING_PICKUP,
-                'Shipment created. Awaiting pickup request from store.',
+                'Shipment created and is awaiting pickup.',
                 $createdBy
             );
 

@@ -3,8 +3,8 @@
 use Illuminate\Support\Facades\Route;
 use Modules\Shipment\Http\Controllers\Api\AdminNotificationController;
 use Modules\Shipment\Http\Controllers\Api\AdminShipmentTaskController;
+use Modules\Shipment\Http\Controllers\Api\MerchantShipmentController;
 use Modules\Shipment\Http\Controllers\GatewayShipmentController;
-use Modules\Shipment\Http\Controllers\MerchantShipmentController;
 use Modules\Shipment\Http\Controllers\ShipmentController;
 
 /*
@@ -15,112 +15,177 @@ use Modules\Shipment\Http\Controllers\ShipmentController;
 
 Route::prefix('v1/admin')
     ->name('admin.')
-    ->middleware(['auth:sanctum', 'branch.scope'])
+    ->middleware([
+        'auth:sanctum',
+        'branch.scope',
+    ])
     ->group(function () {
 
         Route::middleware(['route.permission'])->group(function () {
 
+            Route::get(
+                'shipments',
+                [ShipmentController::class, 'index']
+            )->name('shipments.index');
+
+            Route::post(
+                'shipments',
+                [ShipmentController::class, 'store']
+            )->name('shipments.store');
+
+            Route::get(
+                'shipments/{shipment}',
+                [ShipmentController::class, 'show']
+            )->name('shipments.show');
+
+            Route::put(
+                'shipments/{shipment}',
+                [ShipmentController::class, 'update']
+            )->name('shipments.update');
+
+            Route::post(
+                'shipments/{shipment}/status',
+                [ShipmentController::class, 'status']
+            )->name('shipments.status');
+
+            Route::post(
+                'shipments/{shipment}/cancel',
+                [ShipmentController::class, 'cancel']
+            )->name('shipments.cancel');
+
             /*
             |--------------------------------------------------------------------------
-            | Shipments (Admin)
+            | Shipment Tasks
             |--------------------------------------------------------------------------
-            | Auto generated permissions:
-            | shipments.view
-            | shipments.create
-            | shipments.edit
-            | shipments.status
-            | shipments.cancel
             */
 
-            Route::get('shipments', [ShipmentController::class, 'index'])
-                ->name('shipments.index');
+            Route::get(
+                'shipment-tasks',
+                [AdminShipmentTaskController::class, 'index']
+            );
 
-            Route::post('shipments', [ShipmentController::class, 'store'])
-                ->name('shipments.store');
+            Route::post(
+                'shipment-tasks/{id}/assign',
+                [AdminShipmentTaskController::class, 'assign']
+            );
 
-            Route::get('shipments/{shipment}', [ShipmentController::class, 'show'])
-                ->name('shipments.show');
+            Route::post(
+                'shipment-tasks/{id}/status',
+                [AdminShipmentTaskController::class, 'updateStatus']
+            );
 
-            Route::put('shipments/{shipment}', [ShipmentController::class, 'update'])
-                ->name('shipments.update');
+            /*
+            |--------------------------------------------------------------------------
+            | Notifications
+            |--------------------------------------------------------------------------
+            */
 
-            Route::post('shipments/{shipment}/status', [ShipmentController::class, 'status'])
-                ->name('shipments.status');
+            Route::get(
+                'notifications',
+                [AdminNotificationController::class, 'index']
+            );
 
-            Route::post('shipments/{shipment}/cancel', [ShipmentController::class, 'cancel'])
-                ->name('shipments.cancel');
+            Route::post(
+                'notifications/{id}/read',
+                [AdminNotificationController::class, 'markRead']
+            );
 
-            Route::get('/shipment-tasks', [AdminShipmentTaskController::class, 'index']);
-            Route::post('/shipment-tasks/{id}/assign', [AdminShipmentTaskController::class, 'assign']);
-            Route::post('/shipment-tasks/{id}/status', [AdminShipmentTaskController::class, 'updateStatus']);
-            Route::get('/notifications', [AdminNotificationController::class, 'index']);
-            Route::post('/notifications/{id}/read', [AdminNotificationController::class, 'markRead']);
-            Route::post('/notifications/read-all', [AdminNotificationController::class, 'markAllRead']);
+            Route::post(
+                'notifications/read-all',
+                [AdminNotificationController::class, 'markAllRead']
+            );
         });
     });
 
+
 /*
 |--------------------------------------------------------------------------
-| Merchant Shipment Routes
+| Tukaatu Internal Merchant Shipment Routes
 |--------------------------------------------------------------------------
+|
+| Used by merchants registered/logged into Tukaatu itself.
+|
+| Authentication:
+|   Sanctum
+|
 */
 
 Route::prefix('v1/merchant')
     ->name('merchant.')
-    ->middleware(['auth:sanctum', 'role:merchant', 'branch.scope'])
+    ->middleware([
+        'auth:sanctum',
+        'role:merchant',
+        'branch.scope',
+    ])
     ->group(function () {
 
         Route::middleware(['route.permission'])->group(function () {
 
-            /*
-            |--------------------------------------------------------------------------
-            | Shipments (Merchant)
-            |--------------------------------------------------------------------------
-            | Permissions:
-            | merchant.shipments OR shipments.view
-            */
+            Route::post(
+                'shipments',
+                [MerchantShipmentController::class, 'store']
+            )->name('shipments.store');
 
-            Route::get('shipments', [MerchantShipmentController::class, 'index'])
-                ->name('shipments.index');
-
-            Route::post('shipments', [MerchantShipmentController::class, 'store'])
-                ->name('shipments.store');
-
-            Route::post('shipments/quote', [MerchantShipmentController::class, 'quote'])
-                ->name('shipments.quote');
-
-            Route::get('shipments/{trackingNumber}', [MerchantShipmentController::class, 'show'])
-                ->name('shipments.show');
-
-            Route::post('shipments/{trackingNumber}/cancel', [MerchantShipmentController::class, 'cancel'])
-                ->name('shipments.cancel');
         });
     });
 
+
 /*
 |--------------------------------------------------------------------------
-| Gateway Shipment Routes
+| External Store Manager / Integration Shipment Routes
 |--------------------------------------------------------------------------
+|
+| Used by approved external stores.
+|
+| Authentication:
+|
+|   X-Tukaatu-Key
+|   X-Tukaatu-Secret
+|
+| No Sanctum.
+| No role:merchant.
+| No branch.scope.
+| No route.permission.
+|
 */
 
 Route::prefix('v1/gateway')
     ->name('gateway.')
-    ->middleware(['gateway.auth'])
+    ->middleware([
+        'merchant.api-key',
+    ])
     ->group(function () {
 
         /*
         |--------------------------------------------------------------------------
-        | Shipments (Gateway)
+        | Create Shipment
         |--------------------------------------------------------------------------
-        | External system access (no route.permission)
         */
 
-        Route::post('shipments', [GatewayShipmentController::class, 'store'])
-            ->name('shipments.store');
+        Route::post(
+            'shipments',
+            [GatewayShipmentController::class, 'store']
+        )->name('shipments.store');
 
-        Route::get('shipments/{trackingNumber}', [GatewayShipmentController::class, 'show'])
-            ->name('shipments.show');
+        /*
+        |--------------------------------------------------------------------------
+        | Get Shipment
+        |--------------------------------------------------------------------------
+        */
 
-        Route::post('shipments/{trackingNumber}/cancel', [GatewayShipmentController::class, 'cancel'])
-            ->name('shipments.cancel');
+        Route::get(
+            'shipments/{trackingNumber}',
+            [GatewayShipmentController::class, 'show']
+        )->name('shipments.show');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Cancel Shipment
+        |--------------------------------------------------------------------------
+        */
+
+        Route::post(
+            'shipments/{trackingNumber}/cancel',
+            [GatewayShipmentController::class, 'cancel']
+        )->name('shipments.cancel');
     });

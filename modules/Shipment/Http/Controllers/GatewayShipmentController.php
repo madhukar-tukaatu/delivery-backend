@@ -21,10 +21,11 @@ final class GatewayShipmentController extends Controller
     }
 
     /**
-     * Create shipment from external Store Manager.
+     * Create shipment from an external Store Manager.
      *
      * Authentication:
-     * X-Tukaatu-Api-Key
+     *
+     * X-Tukaatu-Key
      * X-Tukaatu-Secret
      */
     public function store(Request $request): JsonResponse
@@ -45,12 +46,11 @@ final class GatewayShipmentController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | Validate payload
+        | Validate request
         |--------------------------------------------------------------------------
         */
 
         $data = $request->validate([
-
             /*
             |--------------------------------------------------------------------------
             | Merchant order
@@ -149,7 +149,7 @@ final class GatewayShipmentController extends Controller
 
             /*
             |--------------------------------------------------------------------------
-            | Single Packet
+            | Single packet
             |--------------------------------------------------------------------------
             */
 
@@ -195,14 +195,13 @@ final class GatewayShipmentController extends Controller
 
             /*
             |--------------------------------------------------------------------------
-            | Packet products
+            | Products inside packet
             |--------------------------------------------------------------------------
             */
 
             'packet.products' => [
-                'required',
+                'nullable',
                 'array',
-                'min:1',
             ],
 
             'packet.products.*.product_id' => [
@@ -212,13 +211,13 @@ final class GatewayShipmentController extends Controller
             ],
 
             'packet.products.*.name' => [
-                'required',
+                'required_with:packet.products',
                 'string',
                 'max:255',
             ],
 
             'packet.products.*.quantity' => [
-                'required',
+                'required_with:packet.products',
                 'integer',
                 'min:1',
             ],
@@ -272,7 +271,7 @@ final class GatewayShipmentController extends Controller
 
             /*
             |--------------------------------------------------------------------------
-            | Additional
+            | Additional information
             |--------------------------------------------------------------------------
             */
 
@@ -291,7 +290,7 @@ final class GatewayShipmentController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | Force internal order source
+        | Force internal source
         |--------------------------------------------------------------------------
         */
 
@@ -314,7 +313,6 @@ final class GatewayShipmentController extends Controller
         */
 
         try {
-
             $shipment = $this->shipmentService->createFromGateway(
                 merchantId: $merchantId,
                 data: $data,
@@ -325,8 +323,16 @@ final class GatewayShipmentController extends Controller
                 'Shipment created successfully.',
                 201
             );
-
         } catch (Throwable $e) {
+
+            /*
+            |--------------------------------------------------------------------------
+            | Log the REAL exception
+            |--------------------------------------------------------------------------
+            |
+            | This is important while testing.
+            |
+            */
 
             report($e);
 
@@ -338,7 +344,7 @@ final class GatewayShipmentController extends Controller
     }
 
     /**
-     * Get shipment.
+     * Get shipment by tracking number.
      */
     public function show(
         Request $request,
@@ -347,11 +353,7 @@ final class GatewayShipmentController extends Controller
 
         $merchantId = (int) $request->attributes->get('merchant_id');
 
-        abort_unless(
-            $merchantId > 0,
-            401,
-            'Invalid merchant authentication.'
-        );
+        abort_unless($merchantId > 0, 401);
 
         $shipment = Shipment::query()
             ->where('merchant_id', $merchantId)
@@ -383,11 +385,7 @@ final class GatewayShipmentController extends Controller
 
         $merchantId = (int) $request->attributes->get('merchant_id');
 
-        abort_unless(
-            $merchantId > 0,
-            401,
-            'Invalid merchant authentication.'
-        );
+        abort_unless($merchantId > 0, 401);
 
         $shipment = Shipment::query()
             ->where('merchant_id', $merchantId)

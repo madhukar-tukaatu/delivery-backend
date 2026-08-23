@@ -4,11 +4,11 @@ declare(strict_types=1);
 
 namespace Modules\Shipment\Services;
 
+use App\Support\CourierStatus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Modules\Merchant\Models\Merchant;
 use Modules\Shipment\Models\Shipment;
-use App\Support\CourierStatus;
 
 final class ShipmentService
 {
@@ -22,16 +22,11 @@ final class ShipmentService
     /**
      * Create shipment from external Store Manager.
      *
-     * One API request represents:
-     *
-     * Store
-     *   └── Customer Order
-     *         └── One Packet
-     *               ├── Product 1
-     *               ├── Product 2
-     *               └── Product N
-     *
-     * Tukaatu creates one shipment/tracking number for the packet.
+     * One merchant order
+     *      ↓
+     * One shipment / packet
+     *      ↓
+     * One or more products
      */
     public function createFromGateway(
         int $merchantId,
@@ -40,12 +35,11 @@ final class ShipmentService
 
         /*
         |--------------------------------------------------------------------------
-        | Merchant
+        | Find merchant
         |--------------------------------------------------------------------------
         */
 
-        $merchant = Merchant::query()
-            ->find($merchantId);
+        $merchant = Merchant::query()->find($merchantId);
 
         if (! $merchant) {
             throw ValidationException::withMessages([
@@ -67,19 +61,51 @@ final class ShipmentService
 
         /*
         |--------------------------------------------------------------------------
+        | Packet
+        |--------------------------------------------------------------------------
+        */
+
+        $packet = $data['packet'] ?? null;
+
+        if (! is_array($packet)) {
+            throw ValidationException::withMessages([
+                'packet' => 'Packet details are required.',
+            ]);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Products
+        |--------------------------------------------------------------------------
+        */
+
+        $products = $packet['products'] ?? [];
+
+        if (! is_array($products)) {
+            $products = [];
+        }
+
+        /*
+        |--------------------------------------------------------------------------
         | Transaction
         |--------------------------------------------------------------------------
         */
 
         return DB::transaction(function () use (
             $merchant,
-            $data
+            $data,
+            $packet,
+            $products
         ): Shipment {
 
             /*
             |--------------------------------------------------------------------------
-            | Prevent duplicate merchant order
+            | Idempotency
             |--------------------------------------------------------------------------
+            |
+            | Same merchant + same merchant_order_id
+            | must not create duplicate shipment.
+            |
             */
 
             $existing = Shipment::query()
@@ -91,7 +117,7 @@ final class ShipmentService
                 ->first();
 
             if ($existing) {
-                return $existing->fresh();
+                return $existing;
             }
 
             /*
@@ -108,7 +134,7 @@ final class ShipmentService
             if (! $pickupLocation) {
                 throw ValidationException::withMessages([
                     'pickup_location_id' =>
-                        'Pickup location does not belong to the authenticated merchant.',
+                        'Pickup location could not be resolved.',
                 ]);
             }
 
@@ -130,11 +156,10 @@ final class ShipmentService
             |--------------------------------------------------------------------------
             */
 
-            $origin =
-                $this->branchAssignment->resolveOrigin(
-                    $merchant,
-                    $pickupLocation
-                );
+            $origin = $this->branchAssignment->resolveOrigin(
+                $merchant,
+                $pickupLocation
+            );
 
             /*
             |--------------------------------------------------------------------------
@@ -159,7 +184,7 @@ final class ShipmentService
             if (! $origin['branch_id']) {
                 throw ValidationException::withMessages([
                     'pickup_location_id' =>
-                        'Unable to determine origin branch for this pickup location.',
+                        'Unable to determine origin branch.',
                 ]);
             }
 
@@ -172,7 +197,7 @@ final class ShipmentService
             if (! $destination['branch_id']) {
                 throw ValidationException::withMessages([
                     'delivery_lat' =>
-                        'Unable to determine destination branch for this delivery location.',
+                        'Unable to determine destination branch.',
                 ]);
             }
 
@@ -182,31 +207,14 @@ final class ShipmentService
             |--------------------------------------------------------------------------
             */
 
-            $route =
-                $this->branchAssignment->buildRoute(
-                    $origin,
-                    $destination
-                );
+            $route = $this->branchAssignment->buildRoute(
+                $origin,
+                $destination
+            );
 
             /*
             |--------------------------------------------------------------------------
-            | Packet
-            |--------------------------------------------------------------------------
-            */
-
-            $packet = $data['packet'];
-
-            /*
-            |--------------------------------------------------------------------------
-            | Products
-            |--------------------------------------------------------------------------
-            */
-
-            $products = $packet['products'];
-
-            /*
-            |--------------------------------------------------------------------------
-            | Tracking number
+            | Generate ONE shipment / packet tracking number
             |--------------------------------------------------------------------------
             */
 
@@ -220,15 +228,20 @@ final class ShipmentService
             */
 
             $shipmentData = [
-
                 /*
-                |------------------------------------------------------------------
-                | Identity
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
+                | Tracking
+                |--------------------------------------------------------------------------
                 */
 
                 'tracking_number' =>
                     $trackingNumber,
+
+                /*
+                |--------------------------------------------------------------------------
+                | Merchant
+                |--------------------------------------------------------------------------
+                */
 
                 'merchant_id' =>
                     $merchant->id,
@@ -240,9 +253,9 @@ final class ShipmentService
                     'store_manager',
 
                 /*
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 | Pickup
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 */
 
                 'pickup_location_id' =>
@@ -255,9 +268,9 @@ final class ShipmentService
                     $pickupCoordinates['lng'],
 
                 /*
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 | Origin
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 */
 
                 'origin_branch_id' =>
@@ -267,9 +280,9 @@ final class ShipmentService
                     $origin['sub_branch_id'],
 
                 /*
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 | Receiver
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 */
 
                 'receiver_name' =>
@@ -282,9 +295,9 @@ final class ShipmentService
                     $data['receiver_email'] ?? null,
 
                 /*
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 | Delivery
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 */
 
                 'delivery_address' =>
@@ -303,9 +316,9 @@ final class ShipmentService
                     $data['delivery_lng'],
 
                 /*
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 | Destination
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 */
 
                 'destination_branch_id' =>
@@ -315,18 +328,18 @@ final class ShipmentService
                     $destination['sub_branch_id'],
 
                 /*
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 | Service
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 */
 
                 'service_type' =>
                     $data['service_type'],
 
                 /*
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 | Packet
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 */
 
                 'parcel_type' =>
@@ -348,9 +361,9 @@ final class ShipmentService
                     $packet['fragile'],
 
                 /*
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 | Payment
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 */
 
                 'payment_type' =>
@@ -360,18 +373,18 @@ final class ShipmentService
                     $data['delivery_charge_paid_by'],
 
                 /*
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 | Pickup mode
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 */
 
                 'self_drop' =>
                     $data['self_drop'] ?? null,
 
                 /*
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 | Additional
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 */
 
                 'special_instructions' =>
@@ -381,9 +394,9 @@ final class ShipmentService
                     $data['remarks'] ?? null,
 
                 /*
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 | Status
-                |------------------------------------------------------------------
+                |--------------------------------------------------------------------------
                 */
 
                 'status' =>
@@ -392,7 +405,7 @@ final class ShipmentService
 
             /*
             |--------------------------------------------------------------------------
-            | Only existing DB columns
+            | Filter against actual shipments table
             |--------------------------------------------------------------------------
             */
 
@@ -407,18 +420,18 @@ final class ShipmentService
             |--------------------------------------------------------------------------
             */
 
-            $shipment = Shipment::query()
-                ->create($shipmentData);
+            $shipment = Shipment::query()->create(
+                $shipmentData
+            );
 
             /*
             |--------------------------------------------------------------------------
-            | Store packet/products if packet tables exist
+            | Create product records if shipment_products exists
             |--------------------------------------------------------------------------
             */
 
-            $this->storePacketProducts(
+            $this->createShipmentProducts(
                 $shipment,
-                $packet,
                 $products,
                 $trackingNumber
             );
@@ -430,15 +443,15 @@ final class ShipmentService
             */
 
             $this->createTrackingEvent(
-                shipment: $shipment,
-                oldStatus: null,
-                newStatus: CourierStatus::AWAITING_PICKUP,
-                description: 'Shipment created successfully. Awaiting pickup.'
+                $shipment,
+                null,
+                CourierStatus::AWAITING_PICKUP,
+                'Shipment created successfully. Awaiting pickup.'
             );
 
             /*
             |--------------------------------------------------------------------------
-            | Return shipment
+            | Return fresh shipment
             |--------------------------------------------------------------------------
             */
 
@@ -447,105 +460,48 @@ final class ShipmentService
     }
 
     /**
-     * Store packet and product details when corresponding tables exist.
+     * Create product records under the shipment.
      *
-     * This method is intentionally defensive because your current
-     * shipments table may not yet have packet/product tables.
+     * Product tracking format:
+     *
+     * TKT-20260823-852101-01
+     * TKT-20260823-852101-02
+     * TKT-20260823-852101-03
      */
-    private function storePacketProducts(
+    private function createShipmentProducts(
         Shipment $shipment,
-        array $packet,
         array $products,
-        string $trackingNumber
+        string $packetTrackingNumber
     ): void {
 
-        /*
-        |--------------------------------------------------------------------------
-        | Packet table
-        |--------------------------------------------------------------------------
-        */
-
-        if (DB::getSchemaBuilder()->hasTable('shipment_packets')) {
-
-            $packetColumns =
-                DB::getSchemaBuilder()
-                    ->getColumnListing('shipment_packets');
-
-            $packetData = [
-                'shipment_id' =>
-                    $shipment->id,
-
-                'tracking_number' =>
-                    $trackingNumber,
-
-                'description' =>
-                    $packet['description'] ?? null,
-
-                'quantity' =>
-                    $packet['quantity'],
-
-                'weight' =>
-                    $packet['weight'],
-
-                'declared_value' =>
-                    $packet['declared_value'],
-
-                'parcel_type' =>
-                    $packet['parcel_type'],
-
-                'fragile' =>
-                    $packet['fragile'],
-
-                'created_at' =>
-                    now(),
-
-                'updated_at' =>
-                    now(),
-            ];
-
-            $packetData =
-                array_intersect_key(
-                    $packetData,
-                    array_flip($packetColumns)
-                );
-
-            DB::table('shipment_packets')
-                ->insert($packetData);
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Product table
-        |--------------------------------------------------------------------------
-        */
-
-        if (! DB::getSchemaBuilder()->hasTable('shipment_products')) {
+        if (
+            ! DB::getSchemaBuilder()->hasTable(
+                'shipment_products'
+            )
+        ) {
             return;
         }
 
-        $productColumns =
-            DB::getSchemaBuilder()
-                ->getColumnListing('shipment_products');
+        $table = 'shipment_products';
+
+        $columns = DB::getSchemaBuilder()
+            ->getColumnListing($table);
 
         foreach ($products as $index => $product) {
 
-            /*
-            |--------------------------------------------------------------------------
-            | Product tracking reference
-            |--------------------------------------------------------------------------
-            |
-            | Example:
-            |
-            | TKT-20260823-852101-P1
-            | TKT-20260823-852101-P2
-            |
-            */
+            $productIndex = $index + 1;
 
             $productTrackingNumber =
-                $trackingNumber . '-P' . ($index + 1);
+                $packetTrackingNumber
+                . '-'
+                . str_pad(
+                    (string) $productIndex,
+                    2,
+                    '0',
+                    STR_PAD_LEFT
+                );
 
             $productData = [
-
                 'shipment_id' =>
                     $shipment->id,
 
@@ -555,11 +511,11 @@ final class ShipmentService
                 'product_id' =>
                     $product['product_id'] ?? null,
 
-                'name' =>
-                    $product['name'],
+                'product_name' =>
+                    $product['name'] ?? null,
 
                 'quantity' =>
-                    $product['quantity'],
+                    $product['quantity'] ?? 1,
 
                 'unit_price' =>
                     $product['unit_price'] ?? null,
@@ -577,19 +533,25 @@ final class ShipmentService
                     now(),
             ];
 
-            $productData =
-                array_intersect_key(
-                    $productData,
-                    array_flip($productColumns)
-                );
+            /*
+            |--------------------------------------------------------------------------
+            | Only insert columns that actually exist
+            |--------------------------------------------------------------------------
+            */
 
-            DB::table('shipment_products')
-                ->insert($productData);
+            $productData = array_intersect_key(
+                $productData,
+                array_flip($columns)
+            );
+
+            DB::table($table)->insert(
+                $productData
+            );
         }
     }
 
     /**
-     * Create tracking event.
+     * Create shipment tracking event.
      */
     private function createTrackingEvent(
         Shipment $shipment,
@@ -600,7 +562,9 @@ final class ShipmentService
 
         $table = 'shipment_tracking_events';
 
-        if (! DB::getSchemaBuilder()->hasTable($table)) {
+        if (
+            ! DB::getSchemaBuilder()->hasTable($table)
+        ) {
             return;
         }
 
@@ -630,29 +594,26 @@ final class ShipmentService
                 now(),
         ];
 
-        $columns =
-            DB::getSchemaBuilder()
-                ->getColumnListing($table);
+        $columns = DB::getSchemaBuilder()
+            ->getColumnListing($table);
 
-        $data =
-            array_intersect_key(
-                $data,
-                array_flip($columns)
-            );
+        $data = array_intersect_key(
+            $data,
+            array_flip($columns)
+        );
 
         DB::table($table)->insert($data);
     }
 
     /**
-     * Only use columns that actually exist in shipments table.
+     * Only use columns that exist in shipments table.
      */
     private function filterShipmentColumns(
         array $data
     ): array {
 
-        $columns =
-            DB::getSchemaBuilder()
-                ->getColumnListing('shipments');
+        $columns = DB::getSchemaBuilder()
+            ->getColumnListing('shipments');
 
         return array_intersect_key(
             $data,
@@ -678,11 +639,9 @@ final class ShipmentService
                 $note
             ): Shipment {
 
-                $oldStatus =
-                    $shipment->status;
+                $oldStatus = $shipment->status;
 
-                $shipment->status =
-                    $status;
+                $shipment->status = $status;
 
                 $shipment->save();
 

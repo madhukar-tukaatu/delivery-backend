@@ -9,6 +9,7 @@ use App\Support\ApiResponse;
 use App\Support\CourierStatus;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use Modules\Shipment\Models\Shipment;
 use Modules\Shipment\Services\ShipmentService;
 use Throwable;
@@ -21,22 +22,27 @@ final class GatewayShipmentController extends Controller
     }
 
     /**
-     * Create shipment from an external Store Manager.
+     * Create shipment from external Store Manager.
      *
      * Authentication:
      *
      * X-Tukaatu-Key
      * X-Tukaatu-Secret
      */
-    public function store(Request $request): JsonResponse
-    {
+    public function store(
+        Request $request
+    ): JsonResponse {
+
         /*
         |--------------------------------------------------------------------------
-        | Merchant comes ONLY from authenticated API credentials
+        | Merchant comes from authenticated API credentials
         |--------------------------------------------------------------------------
         */
 
-        $merchantId = (int) $request->attributes->get('merchant_id');
+        $merchantId =
+            (int) $request
+                ->attributes
+                ->get('merchant_id');
 
         abort_unless(
             $merchantId > 0,
@@ -51,11 +57,6 @@ final class GatewayShipmentController extends Controller
         */
 
         $data = $request->validate([
-            /*
-            |--------------------------------------------------------------------------
-            | Merchant order
-            |--------------------------------------------------------------------------
-            */
 
             'merchant_order_id' => [
                 'required',
@@ -63,23 +64,11 @@ final class GatewayShipmentController extends Controller
                 'max:100',
             ],
 
-            /*
-            |--------------------------------------------------------------------------
-            | Pickup
-            |--------------------------------------------------------------------------
-            */
-
             'pickup_location_id' => [
                 'required',
                 'integer',
                 'min:1',
             ],
-
-            /*
-            |--------------------------------------------------------------------------
-            | Receiver
-            |--------------------------------------------------------------------------
-            */
 
             'receiver_name' => [
                 'required',
@@ -98,12 +87,6 @@ final class GatewayShipmentController extends Controller
                 'email',
                 'max:150',
             ],
-
-            /*
-            |--------------------------------------------------------------------------
-            | Delivery
-            |--------------------------------------------------------------------------
-            */
 
             'delivery_address' => [
                 'required',
@@ -135,12 +118,6 @@ final class GatewayShipmentController extends Controller
                 'between:-180,180',
             ],
 
-            /*
-            |--------------------------------------------------------------------------
-            | Service
-            |--------------------------------------------------------------------------
-            */
-
             'service_type' => [
                 'required',
                 'string',
@@ -149,7 +126,7 @@ final class GatewayShipmentController extends Controller
 
             /*
             |--------------------------------------------------------------------------
-            | Single packet
+            | Packet
             |--------------------------------------------------------------------------
             */
 
@@ -195,7 +172,7 @@ final class GatewayShipmentController extends Controller
 
             /*
             |--------------------------------------------------------------------------
-            | Products inside packet
+            | Products
             |--------------------------------------------------------------------------
             */
 
@@ -211,13 +188,13 @@ final class GatewayShipmentController extends Controller
             ],
 
             'packet.products.*.name' => [
-                'required_with:packet.products',
+                'required',
                 'string',
                 'max:255',
             ],
 
             'packet.products.*.quantity' => [
-                'required_with:packet.products',
+                'required',
                 'integer',
                 'min:1',
             ],
@@ -260,7 +237,7 @@ final class GatewayShipmentController extends Controller
 
             /*
             |--------------------------------------------------------------------------
-            | Pickup mode
+            | Self drop
             |--------------------------------------------------------------------------
             */
 
@@ -271,7 +248,7 @@ final class GatewayShipmentController extends Controller
 
             /*
             |--------------------------------------------------------------------------
-            | Additional information
+            | Additional
             |--------------------------------------------------------------------------
             */
 
@@ -290,21 +267,17 @@ final class GatewayShipmentController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | Force internal source
+        | Internal values
         |--------------------------------------------------------------------------
         */
 
-        $data['order_source'] = 'store_manager';
-
-        /*
-        |--------------------------------------------------------------------------
-        | Never trust merchant_id from request
-        |--------------------------------------------------------------------------
-        */
+        $data['order_source'] =
+            'store_manager';
 
         unset($data['merchant_id']);
 
-        $data['merchant_id'] = $merchantId;
+        $data['merchant_id'] =
+            $merchantId;
 
         /*
         |--------------------------------------------------------------------------
@@ -313,61 +286,105 @@ final class GatewayShipmentController extends Controller
         */
 
         try {
-            $shipment = $this->shipmentService->createFromGateway(
-                merchantId: $merchantId,
-                data: $data,
-            );
+
+            $shipment =
+                $this->shipmentService
+                    ->createFromGateway(
+                        merchantId: $merchantId,
+                        data: $data,
+                    );
 
             return ApiResponse::success(
                 $shipment,
                 'Shipment created successfully.',
                 201
             );
+
+        } catch (ValidationException $e) {
+
+            /*
+            |--------------------------------------------------------------------------
+            | Return useful validation errors
+            |--------------------------------------------------------------------------
+            */
+
+            return response()->json([
+                'success' => false,
+                'message' =>
+                    'Shipment validation failed.',
+                'errors' =>
+                    $e->errors(),
+            ], 422);
+
         } catch (Throwable $e) {
 
             /*
             |--------------------------------------------------------------------------
-            | Log the REAL exception
+            | Log full exception
             |--------------------------------------------------------------------------
-            |
-            | This is important while testing.
-            |
             */
 
             report($e);
 
-            return ApiResponse::error(
-                'Unable to create shipment.',
-                422
-            );
+            /*
+            |--------------------------------------------------------------------------
+            | During development return useful error
+            |--------------------------------------------------------------------------
+            |
+            | Remove "debug" before production.
+            |
+            */
+
+            return response()->json([
+                'success' => false,
+                'message' =>
+                    'Unable to create shipment.',
+                'errors' => [
+                    'exception' =>
+                        $e->getMessage(),
+                ],
+            ], 422);
         }
     }
 
     /**
-     * Get shipment by tracking number.
+     * Get shipment.
      */
     public function show(
         Request $request,
         string $trackingNumber
     ): JsonResponse {
 
-        $merchantId = (int) $request->attributes->get('merchant_id');
+        $merchantId =
+            (int) $request
+                ->attributes
+                ->get('merchant_id');
 
-        abort_unless($merchantId > 0, 401);
+        abort_unless(
+            $merchantId > 0,
+            401
+        );
 
-        $shipment = Shipment::query()
-            ->where('merchant_id', $merchantId)
-            ->where('tracking_number', $trackingNumber)
-            ->with([
-                'trackingEvents',
-                'originBranch',
-                'originSubBranch',
-                'destinationBranch',
-                'destinationSubBranch',
-                'routeSteps.fromBranch',
-                'routeSteps.toBranch',
-            ])
-            ->firstOrFail();
+        $shipment =
+            Shipment::query()
+                ->where(
+                    'merchant_id',
+                    $merchantId
+                )
+                ->where(
+                    'tracking_number',
+                    $trackingNumber
+                )
+                ->with([
+                    'trackingEvents',
+                    'originBranch',
+                    'originSubBranch',
+                    'destinationBranch',
+                    'destinationSubBranch',
+                    'routeSteps.fromBranch',
+                    'routeSteps.toBranch',
+                ])
+                ->firstOrFail();
 
         return ApiResponse::success(
             $shipment,
@@ -383,14 +400,27 @@ final class GatewayShipmentController extends Controller
         string $trackingNumber
     ): JsonResponse {
 
-        $merchantId = (int) $request->attributes->get('merchant_id');
+        $merchantId =
+            (int) $request
+                ->attributes
+                ->get('merchant_id');
 
-        abort_unless($merchantId > 0, 401);
+        abort_unless(
+            $merchantId > 0,
+            401
+        );
 
-        $shipment = Shipment::query()
-            ->where('merchant_id', $merchantId)
-            ->where('tracking_number', $trackingNumber)
-            ->firstOrFail();
+        $shipment =
+            Shipment::query()
+                ->where(
+                    'merchant_id',
+                    $merchantId
+                )
+                ->where(
+                    'tracking_number',
+                    $trackingNumber
+                )
+                ->firstOrFail();
 
         if (! in_array(
             $shipment->status,
@@ -407,12 +437,14 @@ final class GatewayShipmentController extends Controller
             );
         }
 
-        $updated = $this->shipmentService->updateStatus(
-            $shipment,
-            CourierStatus::CANCELLED,
-            null,
-            'Cancelled by Store Manager API.'
-        );
+        $updated =
+            $this->shipmentService
+                ->updateStatus(
+                    $shipment,
+                    CourierStatus::CANCELLED,
+                    null,
+                    'Cancelled by Store Manager API.'
+                );
 
         return ApiResponse::success(
             $updated,

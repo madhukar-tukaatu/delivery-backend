@@ -1,7 +1,5 @@
 <?php
 
-declare(strict_types=1);
-
 namespace Modules\Merchant\Http\Middleware;
 
 use Closure;
@@ -9,7 +7,7 @@ use Illuminate\Http\Request;
 use Modules\Merchant\Services\MerchantApiKeyGuard;
 use Symfony\Component\HttpFoundation\Response;
 
-final class AuthenticateMerchantApiKey
+class AuthenticateMerchantApiKey
 {
     public function __construct(
         private readonly MerchantApiKeyGuard $guard
@@ -20,7 +18,8 @@ final class AuthenticateMerchantApiKey
         Request $request,
         Closure $next
     ): Response {
-        $merchantApiKey = $this->guard->resolve($request);
+
+        $merchantKey = $this->guard->resolve($request);
 
         /*
         |--------------------------------------------------------------------------
@@ -30,18 +29,26 @@ final class AuthenticateMerchantApiKey
 
         $request->attributes->set(
             'merchant_api_key',
-            $merchantApiKey
+            $merchantKey
         );
 
         $request->attributes->set(
             'merchant_id',
-            (int) $merchantApiKey->merchant_id
+            (int) $merchantKey->merchant_id
         );
 
-        $request->attributes->set(
-            'authenticated_merchant_id',
-            (int) $merchantApiKey->merchant_id
-        );
+        /*
+        |--------------------------------------------------------------------------
+        | Useful for controllers/services
+        |--------------------------------------------------------------------------
+        */
+
+        if (isset($merchantKey->merchant)) {
+            $request->attributes->set(
+                'merchant',
+                $merchantKey->merchant
+            );
+        }
 
         return $next($request);
     }

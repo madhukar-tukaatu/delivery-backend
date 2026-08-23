@@ -18,9 +18,14 @@ final class MerchantShipmentService
         private readonly BranchAssignmentService $branchAssignment,
         private readonly ShipmentNumberService $shipmentNumberService,
         private readonly TrackingService $trackingService,
-        private readonly ShipmentWorkflowService $workflowService,
     ) {
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Create Shipment From External Gateway
+    |--------------------------------------------------------------------------
+    */
 
     public function createFromGateway(
         int $merchantId,
@@ -34,17 +39,16 @@ final class MerchantShipmentService
 
             /*
             |--------------------------------------------------------------------------
-            | 1. Load merchant
+            | 1. Load Merchant
             |--------------------------------------------------------------------------
             */
 
             $merchant = Merchant::query()
-                ->with('pickupLocations')
                 ->findOrFail($merchantId);
 
             /*
             |--------------------------------------------------------------------------
-            | 2. Validate merchant
+            | 2. Validate Merchant
             |--------------------------------------------------------------------------
             */
 
@@ -53,7 +57,7 @@ final class MerchantShipmentService
 
             /*
             |--------------------------------------------------------------------------
-            | 3. Resolve pickup location
+            | 3. Resolve Pickup Location
             |--------------------------------------------------------------------------
             */
 
@@ -65,7 +69,7 @@ final class MerchantShipmentService
 
             /*
             |--------------------------------------------------------------------------
-            | 4. Resolve origin
+            | 4. Resolve Origin Branch
             |--------------------------------------------------------------------------
             */
 
@@ -77,7 +81,7 @@ final class MerchantShipmentService
 
             /*
             |--------------------------------------------------------------------------
-            | 5. Resolve destination
+            | 5. Resolve Destination Branch
             |--------------------------------------------------------------------------
             */
 
@@ -98,11 +102,12 @@ final class MerchantShipmentService
 
             /*
             |--------------------------------------------------------------------------
-            | 6. Validate branch resolution
+            | 6. Validate Branch Resolution
             |--------------------------------------------------------------------------
             */
 
             if (!$origin['branch_id']) {
+
                 throw ValidationException::withMessages([
                     'pickup' =>
                         'Unable to determine the origin branch.',
@@ -110,6 +115,7 @@ final class MerchantShipmentService
             }
 
             if (!$destination['branch_id']) {
+
                 throw ValidationException::withMessages([
                     'delivery' =>
                         'Unable to determine the destination branch.',
@@ -118,7 +124,31 @@ final class MerchantShipmentService
 
             /*
             |--------------------------------------------------------------------------
-            | 7. Generate tracking number
+            | 7. Prevent Duplicate Merchant Order
+            |--------------------------------------------------------------------------
+            |
+            | Recommended for external integrations.
+            |
+            */
+
+            $existing = Shipment::query()
+                ->where('merchant_id', $merchant->id)
+                ->where(
+                    'merchant_order_id',
+                    $data['merchant_order_id']
+                )
+                ->first();
+
+            if ($existing) {
+                throw ValidationException::withMessages([
+                    'merchant_order_id' =>
+                        'A shipment with this merchant order ID already exists.',
+                ]);
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | 8. Generate Tracking Number
             |--------------------------------------------------------------------------
             */
 
@@ -127,15 +157,21 @@ final class MerchantShipmentService
 
             /*
             |--------------------------------------------------------------------------
-            | 8. Create shipment
+            | 9. Create Shipment
             |--------------------------------------------------------------------------
             |
-            | IMPORTANT:
-            | No price calculation here.
+            | NO PRICE CALCULATION HERE.
             |
             */
 
             $shipment = Shipment::create([
+
+                /*
+                |--------------------------------------------------------------------------
+                | Merchant
+                |--------------------------------------------------------------------------
+                */
+
                 'merchant_id' =>
                     $merchant->id,
 
@@ -280,12 +316,18 @@ final class MerchantShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Instructions
+                | Pickup
                 |--------------------------------------------------------------------------
                 */
 
                 'self_drop' =>
                     $data['self_drop'] ?? false,
+
+                /*
+                |--------------------------------------------------------------------------
+                | Instructions
+                |--------------------------------------------------------------------------
+                */
 
                 'special_instructions' =>
                     $data['special_instructions'] ?? null,
@@ -295,7 +337,7 @@ final class MerchantShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Initial status
+                | Initial Status
                 |--------------------------------------------------------------------------
                 */
 
@@ -308,7 +350,7 @@ final class MerchantShipmentService
 
             /*
             |--------------------------------------------------------------------------
-            | 9. Shipment items
+            | 10. Create Shipment Items
             |--------------------------------------------------------------------------
             */
 
@@ -328,7 +370,7 @@ final class MerchantShipmentService
 
             /*
             |--------------------------------------------------------------------------
-            | 10. Tracking event
+            | 11. Create Initial Tracking Event
             |--------------------------------------------------------------------------
             */
 
@@ -341,12 +383,22 @@ final class MerchantShipmentService
 
             /*
             |--------------------------------------------------------------------------
-            | 11. Create pickup workflow
+            | IMPORTANT
             |--------------------------------------------------------------------------
+            |
+            | DO NOT:
+            |
+            | - calculate price
+            | - create price breakdown
+            | - create pickup request
+            | - assign rider
+            | - create pickup task
+            | - create transfer task
+            | - create delivery task
+            |
+            | Those belong to the next phase.
+            |
             */
-
-            $this->workflowService
-                ->createWorkflow($shipment->fresh());
 
             return $shipment->fresh([
                 'merchant',
@@ -355,7 +407,6 @@ final class MerchantShipmentService
                 'originSubBranch',
                 'destinationBranch',
                 'destinationSubBranch',
-                'pickupRequest',
             ]);
         });
     }

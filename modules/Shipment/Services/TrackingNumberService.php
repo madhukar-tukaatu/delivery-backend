@@ -8,10 +8,10 @@ class TrackingNumberService
 {
     public function generate(): string
     {
-        return 'TKT-' .
-            now()->format('Ymd') .
-            '-' .
-            strtoupper(
+        return 'TKT-'
+            . now()->format('Ymd')
+            . '-'
+            . strtoupper(
                 Str::padLeft(
                     (string) random_int(1, 999999),
                     6,
@@ -22,17 +22,17 @@ class TrackingNumberService
 
     public function transferBatchNumber(): string
     {
-        return 'TRF-' .
-            now()->format('YmdHis') .
-            '-' .
-            random_int(100, 999);
+        return 'TRF-'
+            . now()->format('YmdHis')
+            . '-'
+            . random_int(100, 999);
     }
 
     public function settlementNumber(): string
     {
-        return 'SET-' .
-            now()->format('YmdHis') .
-            '-' .
-            random_int(100, 999);
+        return 'SET-'
+            . now()->format('YmdHis')
+            . '-'
+            . random_int(100, 999);
     }
 }

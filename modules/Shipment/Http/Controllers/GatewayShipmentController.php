@@ -1,160 +1,217 @@
 <?php
+
 namespace Modules\Shipment\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
 use App\Support\CourierStatus;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\Shipment\Models\Shipment;
 use Modules\Shipment\Services\ShipmentService;
 
 class GatewayShipmentController extends Controller
 {
-    public function store(Request $request): JsonResponse
-    {
+    public function __construct(
+        private readonly ShipmentService $shipmentService
+    ) {
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | Create Shipment
+    |--------------------------------------------------------------------------
+    */
+
+    public function store(
+        Request $request
+    ): JsonResponse {
+
         /*
         |--------------------------------------------------------------------------
-        | Merchant comes ONLY from authenticated API key
+        | Merchant comes ONLY from API key middleware
         |--------------------------------------------------------------------------
         */
 
-        $merchantId = (int) $request->attributes->get(
-            'merchant_id'
-        );
+        $merchantId =
+            (int) $request
+                ->attributes
+                ->get('merchant_id');
 
-        abort_unless($merchantId > 0, 401);
+
+        if ($merchantId <= 0) {
+
+            return ApiResponse::error(
+                'Merchant authentication failed.',
+                401
+            );
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | Validate request
+        |--------------------------------------------------------------------------
+        */
 
         $data = $request->validate([
-            'merchant_order_id'       => [
+
+            'merchant_order_id' => [
                 'required',
                 'string',
                 'max:100',
             ],
 
-            'order_source'            => [
+            'order_source' => [
                 'nullable',
                 'string',
                 'max:50',
             ],
 
-            'pickup_location_id'      => [
+            'pickup_location_id' => [
                 'nullable',
                 'integer',
             ],
 
-            'customer_name'           => [
+            /*
+            |--------------------------------------------------------------------------
+            | Customer
+            |--------------------------------------------------------------------------
+            */
+
+            'customer_name' => [
                 'required',
                 'string',
                 'max:150',
             ],
 
-            'customer_phone'          => [
+            'customer_phone' => [
                 'required',
                 'string',
                 'max:30',
             ],
 
-            'customer_email'          => [
+            'customer_email' => [
                 'nullable',
                 'email',
                 'max:150',
             ],
 
-            'customer_address'        => [
+            'customer_address' => [
                 'required',
                 'string',
                 'max:500',
             ],
 
-            'customer_city'           => [
+            'customer_city' => [
                 'nullable',
                 'string',
                 'max:100',
             ],
 
-            'customer_area'           => [
+            'customer_area' => [
                 'nullable',
                 'string',
                 'max:100',
             ],
 
-            'delivery_lat'            => [
+            /*
+            |--------------------------------------------------------------------------
+            | Destination coordinates
+            |--------------------------------------------------------------------------
+            */
+
+            'delivery_lat' => [
                 'required',
                 'numeric',
                 'between:-90,90',
             ],
 
-            'delivery_lng'            => [
+            'delivery_lng' => [
                 'required',
                 'numeric',
                 'between:-180,180',
             ],
 
-            'service_type'            => [
+            /*
+            |--------------------------------------------------------------------------
+            | Shipment
+            |--------------------------------------------------------------------------
+            */
+
+            'service_type' => [
                 'required',
                 'string',
                 'max:50',
             ],
 
-            'items'                   => [
+            'items' => [
                 'required',
                 'array',
                 'min:1',
             ],
 
-            'items.*.name'            => [
+            'items.*.name' => [
                 'required',
                 'string',
                 'max:255',
             ],
 
-            'items.*.quantity'        => [
+            'items.*.quantity' => [
                 'required',
                 'integer',
                 'min:1',
             ],
 
-            'items.*.value'           => [
+            'items.*.value' => [
                 'nullable',
                 'numeric',
                 'min:0',
             ],
 
-            'parcel_type'             => [
+            'parcel_type' => [
                 'required',
                 'string',
                 'max:50',
             ],
 
-            'product_description'     => [
+            'product_description' => [
                 'nullable',
                 'string',
                 'max:1000',
             ],
 
-            'quantity'                => [
+            'quantity' => [
                 'required',
                 'integer',
                 'min:1',
             ],
 
-            'weight'                  => [
+            'weight' => [
                 'required',
                 'numeric',
                 'min:0.01',
             ],
 
-            'declared_value'          => [
+            'declared_value' => [
                 'required',
                 'numeric',
                 'min:0',
             ],
 
-            'fragile'                 => [
+            'fragile' => [
+                'sometimes',
                 'boolean',
             ],
 
-            'payment_type'            => [
+            /*
+            |--------------------------------------------------------------------------
+            | Payment
+            |--------------------------------------------------------------------------
+            */
+
+            'payment_type' => [
                 'required',
                 'string',
                 'max:50',
@@ -166,22 +223,30 @@ class GatewayShipmentController extends Controller
                 'max:50',
             ],
 
-            'self_drop'               => [
+            'self_drop' => [
+                'sometimes',
                 'boolean',
             ],
 
-            'special_instructions'    => [
+            /*
+            |--------------------------------------------------------------------------
+            | Notes
+            |--------------------------------------------------------------------------
+            */
+
+            'special_instructions' => [
                 'nullable',
                 'string',
                 'max:1000',
             ],
 
-            'remarks'                 => [
+            'remarks' => [
                 'nullable',
                 'string',
                 'max:1000',
             ],
         ]);
+
 
         /*
         |--------------------------------------------------------------------------
@@ -191,27 +256,52 @@ class GatewayShipmentController extends Controller
 
         unset($data['merchant_id']);
 
+
         /*
         |--------------------------------------------------------------------------
-        | External integration context
+        | Attach authenticated merchant
         |--------------------------------------------------------------------------
         */
 
-        $data['merchant_id'] = $merchantId;
+        $data['merchant_id'] =
+            $merchantId;
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | External source
+        |--------------------------------------------------------------------------
+        */
 
         $data['order_source'] =
-        $data['order_source'] ?? 'store_manager';
+            $data['order_source']
+            ?? 'store_manager';
+
 
         /*
         |--------------------------------------------------------------------------
         | Create shipment
         |--------------------------------------------------------------------------
+        |
+        | IMPORTANT:
+        |
+        | No pricing calculation here.
+        |
         */
 
-        $shipment = $this->shipmentService->createFromGateway(
-            $merchantId,
-            $data,
-        );
+        $shipment =
+            $this->shipmentService
+                ->createFromGateway(
+                    $merchantId,
+                    $data
+                );
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | Response
+        |--------------------------------------------------------------------------
+        */
 
         return ApiResponse::success(
             $shipment,
@@ -220,23 +310,156 @@ class GatewayShipmentController extends Controller
         );
     }
 
-    public function show(Request $request, string $trackingNumber)
-    {
-        $merchant = $request->attributes->get('merchant');
-        $shipment = Shipment::where('merchant_id', $merchant->id)
-            ->where('tracking_number', $trackingNumber)
-            ->with(['trackingEvents', 'originBranch', 'originSubBranch', 'destinationBranch', 'destinationSubBranch', 'routeSteps.fromBranch', 'routeSteps.toBranch'])
-            ->firstOrFail();
-        return ApiResponse::success($shipment);
+
+    /*
+    |--------------------------------------------------------------------------
+    | Show Shipment
+    |--------------------------------------------------------------------------
+    */
+
+    public function show(
+        Request $request,
+        string $trackingNumber
+    ): JsonResponse {
+
+        $merchantId =
+            (int) $request
+                ->attributes
+                ->get('merchant_id');
+
+
+        if ($merchantId <= 0) {
+
+            return ApiResponse::error(
+                'Merchant authentication failed.',
+                401
+            );
+        }
+
+
+        $shipment = Shipment::query()
+            ->where(
+                'merchant_id',
+                $merchantId
+            )
+            ->where(
+                'tracking_number',
+                $trackingNumber
+            )
+            ->with([
+                'trackingEvents',
+                'originBranch',
+                'originSubBranch',
+                'destinationBranch',
+                'destinationSubBranch',
+                'routeSteps.fromBranch',
+                'routeSteps.toBranch',
+            ])
+            ->first();
+
+
+        if (!$shipment) {
+
+            return ApiResponse::error(
+                'Shipment not found.',
+                404
+            );
+        }
+
+
+        return ApiResponse::success(
+            $shipment
+        );
     }
 
-    public function cancel(Request $request, string $trackingNumber, ShipmentService $service)
-    {
-        $merchant = $request->attributes->get('merchant');
-        $shipment = Shipment::where('merchant_id', $merchant->id)->where('tracking_number', $trackingNumber)->firstOrFail();
-        if (! in_array($shipment->status, [CourierStatus::BOOKED, CourierStatus::PICKUP_ASSIGNED], true)) {
-            return ApiResponse::error('Shipment cannot be cancelled after pickup/dispatch.', 422);
+
+    /*
+    |--------------------------------------------------------------------------
+    | Cancel Shipment
+    |--------------------------------------------------------------------------
+    */
+
+    public function cancel(
+        Request $request,
+        string $trackingNumber
+    ): JsonResponse {
+
+        $merchantId =
+            (int) $request
+                ->attributes
+                ->get('merchant_id');
+
+
+        if ($merchantId <= 0) {
+
+            return ApiResponse::error(
+                'Merchant authentication failed.',
+                401
+            );
         }
-        return ApiResponse::success($service->updateStatus($shipment, CourierStatus::CANCELLED, null, 'Cancelled by gateway API.'));
+
+
+        $shipment = Shipment::query()
+            ->where(
+                'merchant_id',
+                $merchantId
+            )
+            ->where(
+                'tracking_number',
+                $trackingNumber
+            )
+            ->first();
+
+
+        if (!$shipment) {
+
+            return ApiResponse::error(
+                'Shipment not found.',
+                404
+            );
+        }
+
+
+        /*
+        |--------------------------------------------------------------------------
+        | Cancellation window
+        |--------------------------------------------------------------------------
+        */
+
+        $allowedStatuses = [
+            'awaiting_pickup',
+            'pickup_pending',
+            'pickup_assigned',
+            CourierStatus::BOOKED,
+        ];
+
+
+        if (!in_array(
+            $shipment->status,
+            $allowedStatuses,
+            true
+        )) {
+
+            return ApiResponse::error(
+                'Shipment cannot be cancelled after pickup or dispatch.',
+                422
+            );
+        }
+
+
+        $shipment =
+            $this->shipmentService
+                ->updateStatus(
+                    $shipment,
+                    CourierStatus::CANCELLED,
+                    null,
+                    'Cancelled by external store API.'
+                );
+
+
+        return ApiResponse::success(
+            $shipment,
+            'Shipment cancelled successfully.'
+        );
     }
 }

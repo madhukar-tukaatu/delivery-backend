@@ -11,6 +11,9 @@ use Modules\Shipment\Http\Controllers\ShipmentController;
 |--------------------------------------------------------------------------
 | Admin Shipment Routes
 |--------------------------------------------------------------------------
+|
+| Used by Tukaatu administrative users.
+|
 */
 
 Route::prefix('v1/admin')
@@ -100,13 +103,17 @@ Route::prefix('v1/admin')
 
 /*
 |--------------------------------------------------------------------------
-| Tukaatu Internal Merchant Shipment Routes
+| Tukaatu Internal Merchant Routes
 |--------------------------------------------------------------------------
 |
-| Used by merchants registered/logged into Tukaatu itself.
+| These are merchants who registered directly with Tukaatu.
 |
 | Authentication:
-|   Sanctum
+|   Laravel Sanctum
+|
+| Example:
+|
+|   POST /api/v1/merchant/shipments
 |
 */
 
@@ -125,22 +132,24 @@ Route::prefix('v1/merchant')
                 'shipments',
                 [MerchantShipmentController::class, 'store']
             )->name('shipments.store');
-
         });
     });
 
 
 /*
 |--------------------------------------------------------------------------
-| External Store Manager / Integration Shipment Routes
+| External Store Manager / Integration Routes
 |--------------------------------------------------------------------------
 |
-| Used by approved external stores.
+| These are stores that integrate their own Store Manager system
+| with Tukaatu.
 |
 | Authentication:
 |
 |   X-Tukaatu-Key
 |   X-Tukaatu-Secret
+|
+| IMPORTANT:
 |
 | No Sanctum.
 | No role:merchant.

@@ -1,16 +1,19 @@
 <?php
 
-declare(strict_types=1);
-
 namespace Modules\Shipment\Services;
 
 use Illuminate\Support\Facades\DB;
 use Modules\Merchant\Models\Merchant;
 
-final class BranchAssignmentService
+class BranchAssignmentService
 {
     /**
      * Resolve merchant pickup location.
+     *
+     * Priority:
+     * 1. Explicit pickup location
+     * 2. Default pickup location
+     * 3. First available pickup location
      */
     public function resolveMerchantPickupLocation(
         Merchant $merchant,
@@ -25,7 +28,7 @@ final class BranchAssignmentService
         |--------------------------------------------------------------------------
         */
 
-        if ($pickupLocationId !== null) {
+        if ($pickupLocationId) {
             $row = (clone $query)
                 ->where('id', $pickupLocationId)
                 ->first();
@@ -51,7 +54,7 @@ final class BranchAssignmentService
 
         /*
         |--------------------------------------------------------------------------
-        | First available pickup location
+        | Fallback
         |--------------------------------------------------------------------------
         */
 
@@ -61,7 +64,13 @@ final class BranchAssignmentService
     }
 
     /**
-     * Resolve merchant pickup location.
+     * Resolve origin branch/sub-branch.
+     *
+     * Priority:
+     *
+     * 1. Pickup location assigned branch
+     * 2. Merchant default branch
+     * 3. Nearest available branch
      */
     public function resolveOrigin(
         Merchant $merchant,
@@ -69,15 +78,15 @@ final class BranchAssignmentService
     ): array {
         /*
         |--------------------------------------------------------------------------
-        | Pickup location explicitly assigned to branch
+        | 1. Pickup location already has branch assignment
         |--------------------------------------------------------------------------
         */
 
         if (
             $pickupLocation &&
             (
-                $pickupLocation->branch_id ||
-                $pickupLocation->sub_branch_id
+                !empty($pickupLocation->branch_id) ||
+                !empty($pickupLocation->sub_branch_id)
             )
         ) {
             return [
@@ -96,13 +105,13 @@ final class BranchAssignmentService
 
         /*
         |--------------------------------------------------------------------------
-        | Merchant default branch
+        | 2. Merchant default branch
         |--------------------------------------------------------------------------
         */
 
         if (
-            $merchant->default_branch_id ||
-            $merchant->default_sub_branch_id
+            !empty($merchant->default_branch_id) ||
+            !empty($merchant->default_sub_branch_id)
         ) {
             return [
                 'branch_id' => $merchant->default_branch_id,
@@ -120,44 +129,70 @@ final class BranchAssignmentService
 
         /*
         |--------------------------------------------------------------------------
-        | Fallback to nearest branch
+        | 3. Nearest available branch
         |--------------------------------------------------------------------------
         */
 
         return $this->nearestBranch(
-            $pickupLocation?->latitude
+            $pickupLocation->latitude
+                ?? $pickupLocation->lat
                 ?? $merchant->latitude
+                ?? $merchant->pickup_lat
                 ?? null,
 
-            $pickupLocation?->longitude
+            $pickupLocation->longitude
+                ?? $pickupLocation->lng
                 ?? $merchant->longitude
+                ?? $merchant->pickup_lng
                 ?? null,
 
-            $pickupLocation?->city
+            $pickupLocation->city
                 ?? $merchant->city
                 ?? null,
 
-            $pickupLocation?->area
+            $pickupLocation->area
                 ?? $merchant->area
-                ?? null,
+                ?? null
         );
     }
 
     /**
-     * Resolve destination branch.
+     * Resolve destination branch/sub-branch.
+     *
+     * The delivery payload can contain:
+     *
+     * latitude
+     * longitude
+     * city
+     * area
+     *
+     * At the moment coverage locations may not have
+     * an assigned branch, therefore we fall back to
+     * the nearest available branch.
      */
     public function resolveDestination(array $delivery): array
     {
         return $this->nearestBranch(
-            $delivery['latitude'] ?? null,
-            $delivery['longitude'] ?? null,
-            $delivery['city'] ?? null,
-            $delivery['area'] ?? null,
+            $delivery['latitude']
+                ?? $delivery['delivery_lat']
+                ?? null,
+
+            $delivery['longitude']
+                ?? $delivery['delivery_lng']
+                ?? null,
+
+            $delivery['city']
+                ?? $delivery['customer_city']
+                ?? null,
+
+            $delivery['area']
+                ?? $delivery['customer_area']
+                ?? null
         );
     }
 
     /**
-     * Build logical route.
+     * Build logical shipment route.
      */
     public function buildRoute(
         array $origin,
@@ -165,11 +200,13 @@ final class BranchAssignmentService
     ): array {
         $originMain =
             $origin['sub_branch_id']
-            ?: $origin['branch_id'];
+            ?? $origin['branch_id']
+            ?? null;
 
         $destinationMain =
             $destination['sub_branch_id']
-            ?: $destination['branch_id'];
+            ?? $destination['branch_id']
+            ?? null;
 
         $requiresTransfer =
             $originMain !== null &&
@@ -192,25 +229,24 @@ final class BranchAssignmentService
             'requires_transfer' =>
                 $requiresTransfer,
 
-            'steps' =>
-                $requiresTransfer
-                    ? [
-                        'Pickup Location',
-                        'Origin Branch/Sub-Branch',
-                        'Transfer',
-                        'Destination Branch/Sub-Branch',
-                        'Customer',
-                    ]
-                    : [
-                        'Pickup Location',
-                        'Branch/Sub-Branch',
-                        'Customer',
-                    ],
+            'steps' => $requiresTransfer
+                ? [
+                    'Pickup Location',
+                    'Origin Branch/Sub-Branch',
+                    'Transfer',
+                    'Destination Branch/Sub-Branch',
+                    'Customer',
+                ]
+                : [
+                    'Pickup Location',
+                    'Branch/Sub-Branch',
+                    'Customer',
+                ],
         ];
     }
 
     /**
-     * Pickup coordinates.
+     * Get pickup coordinates.
      */
     public function pickupCoordinates(
         ?object $pickupLocation,
@@ -218,13 +254,17 @@ final class BranchAssignmentService
     ): array {
         return [
             'lat' =>
-                $pickupLocation?->latitude
+                $pickupLocation->latitude
+                ?? $pickupLocation->lat
                 ?? $merchant->latitude
+                ?? $merchant->pickup_lat
                 ?? null,
 
             'lng' =>
-                $pickupLocation?->longitude
+                $pickupLocation->longitude
+                ?? $pickupLocation->lng
                 ?? $merchant->longitude
+                ?? $merchant->pickup_lng
                 ?? null,
         ];
     }
@@ -273,11 +313,12 @@ final class BranchAssignmentService
     }
 
     /**
-     * Find nearest available branch.
+     * Find nearest operational branch.
      *
      * IMPORTANT:
-     * The branches table does NOT contain is_active,
-     * so we do not filter by is_active here.
+     * branches table currently does NOT contain is_active.
+     *
+     * Therefore we do not filter using is_active.
      */
     private function nearestBranch(
         $lat,
@@ -285,6 +326,19 @@ final class BranchAssignmentService
         $city = null,
         $area = null
     ): array {
+        /*
+        |--------------------------------------------------------------------------
+        | Get branches
+        |--------------------------------------------------------------------------
+        |
+        | Do NOT use:
+        |
+        | where('is_active', true)
+        |
+        | because branches table does not contain that column.
+        |
+        */
+
         $query = DB::table('branches');
 
         /*
@@ -333,7 +387,7 @@ final class BranchAssignmentService
 
         /*
         |--------------------------------------------------------------------------
-        | Coordinate-based nearest branch
+        | Coordinate based nearest branch
         |--------------------------------------------------------------------------
         */
 
@@ -345,20 +399,18 @@ final class BranchAssignmentService
             $branches->isNotEmpty()
         ) {
             $nearest = $branches
-                ->sortBy(
-                    function ($branch) use ($lat, $lng) {
-                        return $this->distanceKm(
-                            (float) $lat,
-                            (float) $lng,
-                            $branch->latitude !== null
-                                ? (float) $branch->latitude
-                                : null,
-                            $branch->longitude !== null
-                                ? (float) $branch->longitude
-                                : null,
-                        );
-                    }
-                )
+                ->sortBy(function ($branch) use ($lat, $lng) {
+                    return $this->distanceKm(
+                        (float) $lat,
+                        (float) $lng,
+                        isset($branch->latitude)
+                            ? (float) $branch->latitude
+                            : null,
+                        isset($branch->longitude)
+                            ? (float) $branch->longitude
+                            : null
+                    );
+                })
                 ->first();
 
             return $this->asBranchPayload(
@@ -368,7 +420,7 @@ final class BranchAssignmentService
 
         /*
         |--------------------------------------------------------------------------
-        | Last fallback
+        | Final fallback
         |--------------------------------------------------------------------------
         */
 
@@ -378,12 +430,12 @@ final class BranchAssignmentService
     }
 
     /**
-     * Convert branch row into standard payload.
+     * Convert branch row to standard payload.
      */
     private function asBranchPayload(
-        ?object $branch
+        $branch
     ): array {
-        if (! $branch) {
+        if (!$branch) {
             return [
                 'branch_id' => null,
                 'sub_branch_id' => null,
@@ -398,41 +450,48 @@ final class BranchAssignmentService
 
         $isSub =
             $type === 'sub_branch'
-            ||
-            ! empty($branch->parent_id);
+            || !empty($branch->parent_id);
+
+        if ($isSub) {
+            return [
+                'branch_id' =>
+                    $branch->parent_id,
+
+                'sub_branch_id' =>
+                    $branch->id,
+
+                'branch' =>
+                    $this->branch(
+                        $branch->parent_id
+                    ),
+
+                'sub_branch' =>
+                    $branch,
+            ];
+        }
 
         return [
             'branch_id' =>
-                $isSub
-                    ? $branch->parent_id
-                    : $branch->id,
+                $branch->id,
 
             'sub_branch_id' =>
-                $isSub
-                    ? $branch->id
-                    : null,
+                null,
 
             'branch' =>
-                $isSub
-                    ? $this->branch(
-                        $branch->parent_id
-                    )
-                    : $branch,
+                $branch,
 
             'sub_branch' =>
-                $isSub
-                    ? $branch
-                    : null,
+                null,
         ];
     }
 
     /**
-     * Get branch.
+     * Get branch by ID.
      */
     private function branch(
         $id
     ): ?object {
-        if (! $id) {
+        if (!$id) {
             return null;
         }
 

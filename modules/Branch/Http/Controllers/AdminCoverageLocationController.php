@@ -120,91 +120,189 @@ class AdminCoverageLocationController extends Controller
 
     public function parentOptions(Request $request)
     {
-        $query = CoverageLocation::query()
-            ->where('type', CoverageLocationType::MAIN_BRANCH_ZONE)
-            ->where('status', CoverageLocationStatus::ACTIVE);
+        $search = trim((string) $request->query('q', ''));
+
+        $excludeId = $request->query('excludeId');
 
         /*
-    |--------------------------------------------------------------------------
-    | Exclude current location
-    |--------------------------------------------------------------------------
-    */
+     * Don't return anything for very short searches.
+     *
+     * The frontend already waits for 2 characters,
+     * but this protects the API as well.
+     */
+        if (mb_strlen($search) < 2) {
+            return response()->json([
+                'data' => [],
+            ]);
+        }
 
-        if ($request->filled('exclude_id')) {
+        /*
+     * ----------------------------------------------------------------------
+     * Main branch / coverage-location query
+     * ----------------------------------------------------------------------
+     *
+     * IMPORTANT:
+     *
+     * Do NOT reference CoverageLocationType here.
+     *
+     * The previous implementation caused:
+     *
+     * Class "Modules\Branch\Http\Controllers\CoverageLocationType" not found
+     *
+     * because the enum was being resolved relative to the controller
+     * namespace.
+     *
+     * Instead we support the values already used by the application:
+     *
+     * main
+     * main_branch
+     * main_branch_zone
+     *
+     * ----------------------------------------------------------------------
+     */
+
+        $query = CoverageLocation::query()
+            ->where(function ($q) {
+                $q->whereIn('type', [
+                    'main',
+                    'main_branch',
+                    'main_branch_zone',
+                ])
+                    ->orWhereIn('zone_type', [
+                        'main',
+                        'main_branch',
+                        'main_branch_zone',
+                    ])
+                    ->orWhereIn('coverage_type', [
+                        'main',
+                        'main_branch',
+                        'main_branch_zone',
+                    ]);
+            });
+
+        /*
+     * Don't allow the source location to be selected as its own parent.
+     */
+        if (
+            $excludeId !== null &&
+            $excludeId !== ''
+        ) {
             $query->where(
                 'id',
                 '!=',
-                (int) $request->input('exclude_id')
+                (int) $excludeId
             );
         }
 
         /*
-    |--------------------------------------------------------------------------
-    | Server-side search
-    |--------------------------------------------------------------------------
-    */
-
-        $search = trim(
-            (string) $request->input('q', '')
-        );
-
-        if ($search !== '') {
-            $query->where(function ($query) use ($search) {
-                $query
-                    ->where(
-                        'name',
-                        'like',
-                        "%{$search}%"
-                    )
-                    ->orWhere(
-                        'code',
-                        'like',
-                        "%{$search}%"
-                    )
-                    ->orWhere(
-                        'area',
-                        'like',
-                        "%{$search}%"
-                    )
-                    ->orWhere(
-                        'city',
-                        'like',
-                        "%{$search}%"
-                    )
-                    ->orWhere(
-                        'district',
-                        'like',
-                        "%{$search}%"
-                    )
-                    ->orWhere(
-                        'province',
-                        'like',
-                        "%{$search}%"
-                    );
-            });
-        }
+     * Only active zones.
+     *
+     * Some older records may not have status populated,
+     * therefore NULL is also accepted.
+     */
+        $query->where(function ($q) {
+            $q->whereNull('status')
+                ->orWhere('status', 'active');
+        });
 
         /*
-    |--------------------------------------------------------------------------
-    | Only return a small result set
-    |--------------------------------------------------------------------------
-    */
+     * ----------------------------------------------------------------------
+     * Search
+     * ----------------------------------------------------------------------
+     *
+     * Search by:
+     *
+     * name
+     * code
+     * city
+     * district
+     * province
+     * area
+     * address
+     */
 
+        $query->where(function ($q) use ($search) {
+            $like = '%' . $search . '%';
+
+            $q->where('name', 'like', $like)
+                ->orWhere('code', 'like', $like)
+                ->orWhere('city', 'like', $like)
+                ->orWhere('district', 'like', $like)
+                ->orWhere('province', 'like', $like)
+                ->orWhere('area', 'like', $like)
+                ->orWhere('address', 'like', $like);
+        });
+
+        /*
+     * Keep result count small.
+     */
         $locations = $query
             ->orderBy('name')
-            ->limit(50)
-            ->get([
-                'id',
-                'name',
-                'code',
-                'latitude',
-                'longitude',
-                'status',
-                'type',
-            ]);
+            ->limit(30)
+            ->get();
+
+        /*
+     * ----------------------------------------------------------------------
+     * Response normalization
+     * ----------------------------------------------------------------------
+     *
+     * The frontend Select only needs a small amount of information.
+     *
+     * Returning a consistent structure also prevents objects/null values
+     * from accidentally entering the Select component.
+     */
+
+        $data = $locations
+            ->map(function ($location) {
+                return [
+                    'id'        => (int) $location->id,
+
+                    'name'      => (string) ($location->name ?? ''),
+
+                    'code'      => (string) ($location->code ?? ''),
+
+                    'type'      => (string) (
+                        $location->type ??
+                        $location->zone_type ??
+                        $location->coverage_type ??
+                        ''
+                    ),
+
+                    'status'    => $location->status,
+
+                    'latitude'  => $location->latitude !== null
+                        ? (float) $location->latitude
+                        : null,
+
+                    'longitude' => $location->longitude !== null
+                        ? (float) $location->longitude
+                        : null,
+
+                    'country'   => (string) (
+                        $location->country ?? ''
+                    ),
+
+                    'province'  => (string) (
+                        $location->province ?? ''
+                    ),
+
+                    'district'  => (string) (
+                        $location->district ?? ''
+                    ),
+
+                    'city'      => (string) (
+                        $location->city ?? ''
+                    ),
+
+                    'area'      => (string) (
+                        $location->area ?? ''
+                    ),
+                ];
+            })
+            ->values();
 
         return response()->json([
-            'data' => $locations,
+            'data' => $data,
         ]);
     }
     /*

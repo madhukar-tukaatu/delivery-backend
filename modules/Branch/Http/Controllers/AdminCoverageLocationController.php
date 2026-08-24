@@ -1,6 +1,6 @@
 <?php
 
-declare (strict_types = 1);
+declare(strict_types=1);
 
 namespace Modules\Branch\Http\Controllers;
 
@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Modules\Branch\Models\CoverageLocation;
+use RuntimeException;
 
 class AdminCoverageLocationController extends Controller
 {
@@ -43,16 +44,18 @@ class AdminCoverageLocationController extends Controller
         }
 
         if ($request->filled('q')) {
-            $q = trim((string) $request->input('q'));
+            $search = trim((string) $request->input('q'));
 
-            $query->where(function ($x) use ($q) {
-                $x->where('name', 'like', "%{$q}%")
-                    ->orWhere('code', 'like', "%{$q}%")
-                    ->orWhere('province', 'like', "%{$q}%")
-                    ->orWhere('district', 'like', "%{$q}%")
-                    ->orWhere('city', 'like', "%{$q}%")
-                    ->orWhere('area', 'like', "%{$q}%")
-                    ->orWhere('address', 'like', "%{$q}%");
+            $query->where(function ($q) use ($search) {
+                $like = "%{$search}%";
+
+                $q->where('name', 'like', $like)
+                    ->orWhere('code', 'like', $like)
+                    ->orWhere('province', 'like', $like)
+                    ->orWhere('district', 'like', $like)
+                    ->orWhere('city', 'like', $like)
+                    ->orWhere('area', 'like', $like)
+                    ->orWhere('address', 'like', $like);
             });
         }
 
@@ -109,27 +112,37 @@ class AdminCoverageLocationController extends Controller
     | Parent Main Branch Options
     |--------------------------------------------------------------------------
     |
-    | Used by:
+    | GET:
     |
-    | /coverage-locations/create?type=sub_branch_zone
-    | /coverage-locations/{id}/edit
+    | /api/v1/admin/coverage-locations/parent-options?q=chit
     |
-    | Only active MAIN branch zones are returned.
+    | Optional:
     |
+    | ?exclude_id=7
+    |
+    |--------------------------------------------------------------------------
     */
 
-    public function parentOptions(Request $request)
+    public function parentOptions(Request $request): JsonResponse
     {
         $search = trim((string) $request->query('q', ''));
 
-        $excludeId = $request->query('excludeId');
+        /*
+         * Support both:
+         *
+         * exclude_id
+         * excludeId
+         *
+         * so old and new frontend code both work.
+         */
+        $excludeId = $request->query(
+            'exclude_id',
+            $request->query('excludeId')
+        );
 
         /*
-     * Don't return anything for very short searches.
-     *
-     * The frontend already waits for 2 characters,
-     * but this protects the API as well.
-     */
+         * Don't query for extremely short searches.
+         */
         if (mb_strlen($search) < 2) {
             return response()->json([
                 'data' => [],
@@ -137,52 +150,30 @@ class AdminCoverageLocationController extends Controller
         }
 
         /*
-     * ----------------------------------------------------------------------
-     * Main branch / coverage-location query
-     * ----------------------------------------------------------------------
-     *
-     * IMPORTANT:
-     *
-     * Do NOT reference CoverageLocationType here.
-     *
-     * The previous implementation caused:
-     *
-     * Class "Modules\Branch\Http\Controllers\CoverageLocationType" not found
-     *
-     * because the enum was being resolved relative to the controller
-     * namespace.
-     *
-     * Instead we support the values already used by the application:
-     *
-     * main
-     * main_branch
-     * main_branch_zone
-     *
-     * ----------------------------------------------------------------------
-     */
+        |--------------------------------------------------------------------------
+        | Main branch zones only
+        |--------------------------------------------------------------------------
+        |
+        | IMPORTANT:
+        |
+        | Do NOT use CoverageLocationType here.
+        |
+        | We use the constants defined by CoverageLocation itself.
+        |
+        |--------------------------------------------------------------------------
+        */
+
+        $mainBranchType = CoverageLocation::TYPE_MAIN_BRANCH_ZONE;
 
         $query = CoverageLocation::query()
-            ->where(function ($q) {
-                $q->whereIn('type', [
-                    'main',
-                    'main_branch',
-                    'main_branch_zone',
-                ])
-                    ->orWhereIn('zone_type', [
-                        'main',
-                        'main_branch',
-                        'main_branch_zone',
-                    ])
-                    ->orWhereIn('coverage_type', [
-                        'main',
-                        'main_branch',
-                        'main_branch_zone',
-                    ]);
-            });
+            ->where('type', $mainBranchType);
 
         /*
-     * Don't allow the source location to be selected as its own parent.
-     */
+        |--------------------------------------------------------------------------
+        | Exclude current location
+        |--------------------------------------------------------------------------
+        */
+
         if (
             $excludeId !== null &&
             $excludeId !== ''
@@ -195,34 +186,30 @@ class AdminCoverageLocationController extends Controller
         }
 
         /*
-     * Only active zones.
-     *
-     * Some older records may not have status populated,
-     * therefore NULL is also accepted.
-     */
+        |--------------------------------------------------------------------------
+        | Active main zones
+        |--------------------------------------------------------------------------
+        |
+        | Accept NULL status for legacy records.
+        |--------------------------------------------------------------------------
+        */
+
         $query->where(function ($q) {
             $q->whereNull('status')
-                ->orWhere('status', 'active');
+                ->orWhere(
+                    'status',
+                    CoverageLocation::STATUS_ACTIVE
+                );
         });
 
         /*
-     * ----------------------------------------------------------------------
-     * Search
-     * ----------------------------------------------------------------------
-     *
-     * Search by:
-     *
-     * name
-     * code
-     * city
-     * district
-     * province
-     * area
-     * address
-     */
+        |--------------------------------------------------------------------------
+        | Search
+        |--------------------------------------------------------------------------
+        */
 
         $query->where(function ($q) use ($search) {
-            $like = '%' . $search . '%';
+            $like = "%{$search}%";
 
             $q->where('name', 'like', $like)
                 ->orWhere('code', 'like', $like)
@@ -234,43 +221,42 @@ class AdminCoverageLocationController extends Controller
         });
 
         /*
-     * Keep result count small.
-     */
+        |--------------------------------------------------------------------------
+        | Fetch
+        |--------------------------------------------------------------------------
+        */
+
         $locations = $query
             ->orderBy('name')
             ->limit(30)
             ->get();
 
         /*
-     * ----------------------------------------------------------------------
-     * Response normalization
-     * ----------------------------------------------------------------------
-     *
-     * The frontend Select only needs a small amount of information.
-     *
-     * Returning a consistent structure also prevents objects/null values
-     * from accidentally entering the Select component.
-     */
+        |--------------------------------------------------------------------------
+        | Normalize
+        |--------------------------------------------------------------------------
+        */
 
         $data = $locations
-            ->map(function ($location) {
+            ->map(function (CoverageLocation $location) {
                 return [
-                    'id'        => (int) $location->id,
+                    'id' => (int) $location->id,
 
-                    'name'      => (string) ($location->name ?? ''),
-
-                    'code'      => (string) ($location->code ?? ''),
-
-                    'type'      => (string) (
-                        $location->type ??
-                        $location->zone_type ??
-                        $location->coverage_type ??
-                        ''
+                    'name' => (string) (
+                        $location->name ?? ''
                     ),
 
-                    'status'    => $location->status,
+                    'code' => (string) (
+                        $location->code ?? ''
+                    ),
 
-                    'latitude'  => $location->latitude !== null
+                    'type' => (string) (
+                        $location->type ?? ''
+                    ),
+
+                    'status' => $location->status,
+
+                    'latitude' => $location->latitude !== null
                         ? (float) $location->latitude
                         : null,
 
@@ -278,23 +264,23 @@ class AdminCoverageLocationController extends Controller
                         ? (float) $location->longitude
                         : null,
 
-                    'country'   => (string) (
+                    'country' => (string) (
                         $location->country ?? ''
                     ),
 
-                    'province'  => (string) (
+                    'province' => (string) (
                         $location->province ?? ''
                     ),
 
-                    'district'  => (string) (
+                    'district' => (string) (
                         $location->district ?? ''
                     ),
 
-                    'city'      => (string) (
+                    'city' => (string) (
                         $location->city ?? ''
                     ),
 
-                    'area'      => (string) (
+                    'area' => (string) (
                         $location->area ?? ''
                     ),
                 ];
@@ -305,6 +291,7 @@ class AdminCoverageLocationController extends Controller
             'data' => $data,
         ]);
     }
+
     /*
     |--------------------------------------------------------------------------
     | Conversion Options
@@ -315,12 +302,12 @@ class AdminCoverageLocationController extends Controller
         CoverageLocation $coverageLocation
     ): JsonResponse {
         if (
-            $coverageLocation->type
-            !== CoverageLocation::TYPE_MAIN_BRANCH_ZONE
+            $coverageLocation->type !==
+            CoverageLocation::TYPE_MAIN_BRANCH_ZONE
         ) {
             return response()->json([
                 'message' =>
-                'Only a main branch zone can be converted to a sub-branch zone.',
+                    'Only a main branch zone can be converted to a sub-branch zone.',
             ], 422);
         }
 
@@ -334,11 +321,15 @@ class AdminCoverageLocationController extends Controller
                 'type',
                 CoverageLocation::TYPE_MAIN_BRANCH_ZONE
             )
+            ->where(function ($query) {
+                $query->whereNull('status')
+                    ->orWhere(
+                        'status',
+                        CoverageLocation::STATUS_ACTIVE
+                    );
+            })
             ->where(
-                'status',
-                CoverageLocation::STATUS_ACTIVE
-            )
-            ->whereKey(
+                'id',
                 '!=',
                 $coverageLocation->id
             )
@@ -361,29 +352,29 @@ class AdminCoverageLocationController extends Controller
 
         return response()->json([
             'data' => [
-                'current'           => [
-                    'id'                      => $coverageLocation->id,
-                    'name'                    => $coverageLocation->name,
-                    'code'                    => $coverageLocation->code,
-                    'type'                    => $coverageLocation->type,
-                    'latitude'                => $coverageLocation->latitude,
-                    'longitude'               => $coverageLocation->longitude,
-                    'coverage_radius_km'      =>
-                    $coverageLocation->coverage_radius_km,
-                    'children_count'          =>
-                    $coverageLocation->children->count(),
+                'current' => [
+                    'id' => $coverageLocation->id,
+                    'name' => $coverageLocation->name,
+                    'code' => $coverageLocation->code,
+                    'type' => $coverageLocation->type,
+                    'latitude' => $coverageLocation->latitude,
+                    'longitude' => $coverageLocation->longitude,
+                    'coverage_radius_km' =>
+                        $coverageLocation->coverage_radius_km,
+                    'children_count' =>
+                        $coverageLocation->children->count(),
                     'assigned_branches_count' =>
-                    $coverageLocation->assignedBranches->count(),
+                        $coverageLocation->assignedBranches->count(),
                 ],
 
-                'children'          =>
-                $coverageLocation->children,
+                'children' =>
+                    $coverageLocation->children,
 
                 'assigned_branches' =>
-                $coverageLocation->assignedBranches,
+                    $coverageLocation->assignedBranches,
 
-                'main_zones'        =>
-                $mainZones,
+                'main_zones' =>
+                    $mainZones,
             ],
         ]);
     }
@@ -398,34 +389,59 @@ class AdminCoverageLocationController extends Controller
         Request $request,
         CoverageLocation $coverageLocation
     ): JsonResponse {
+        /*
+        |--------------------------------------------------------------------------
+        | Validate source
+        |--------------------------------------------------------------------------
+        */
+
         if (
-            $coverageLocation->type
-            !== CoverageLocation::TYPE_MAIN_BRANCH_ZONE
+            $coverageLocation->type !==
+            CoverageLocation::TYPE_MAIN_BRANCH_ZONE
         ) {
             return response()->json([
                 'message' =>
-                'Only a main branch zone can be converted to a sub-branch zone.',
+                    'Only a main branch zone can be converted to a sub-branch zone.',
             ], 422);
         }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Validate request
+        |--------------------------------------------------------------------------
+        */
 
         $data = $this->validateConversionData(
             $request,
             $coverageLocation
         );
 
+        /*
+        |--------------------------------------------------------------------------
+        | Lock source
+        |--------------------------------------------------------------------------
+        */
+
         $source = CoverageLocation::query()
             ->whereKey($coverageLocation->id)
             ->lockForUpdate()
             ->firstOrFail();
 
+        /*
+        |--------------------------------------------------------------------------
+        | Prevent self parent
+        |--------------------------------------------------------------------------
+        */
+
         if (
-            (int) $data['parent_id']
-            === (int) $source->id
+            (int) $data['parent_id'] ===
+            (int) $source->id
         ) {
             return response()->json([
                 'message' =>
-                'A coverage location cannot become a child of itself.',
-                'errors'  => [
+                    'A coverage location cannot become a child of itself.',
+
+                'errors' => [
                     'parent_id' => [
                         'Select another main coverage location.',
                     ],
@@ -433,23 +449,33 @@ class AdminCoverageLocationController extends Controller
             ], 422);
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Validate new parent
+        |--------------------------------------------------------------------------
+        */
+
         $newParent = CoverageLocation::query()
             ->whereKey($data['parent_id'])
             ->where(
                 'type',
                 CoverageLocation::TYPE_MAIN_BRANCH_ZONE
             )
-            ->where(
-                'status',
-                CoverageLocation::STATUS_ACTIVE
-            )
+            ->where(function ($query) {
+                $query->whereNull('status')
+                    ->orWhere(
+                        'status',
+                        CoverageLocation::STATUS_ACTIVE
+                    );
+            })
             ->first();
 
         if (! $newParent) {
             return response()->json([
                 'message' =>
-                'Selected parent must be an active main coverage location.',
-                'errors'  => [
+                    'Selected parent must be an active main coverage location.',
+
+                'errors' => [
                     'parent_id' => [
                         'Selected parent main coverage location is invalid.',
                     ],
@@ -466,8 +492,9 @@ class AdminCoverageLocationController extends Controller
         if ($source->assignedBranches()->exists()) {
             return response()->json([
                 'message' =>
-                'This main coverage location has assigned branches. Remove or transfer those assignments before converting it.',
-                'errors'  => [
+                    'This main coverage location has assigned branches. Remove or transfer those assignments before converting it.',
+
+                'errors' => [
                     'assigned_branches' => [
                         'Transfer assigned branches before conversion.',
                     ],
@@ -477,73 +504,89 @@ class AdminCoverageLocationController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | Existing child zones
-        |--------------------------------------------------------------------------
-        */
-
-        $sourceChildren = $source
-            ->children()
-            ->orderBy('id')
-            ->get([
-                'id',
-                'name',
-                'code',
-                'type',
-                'parent_id',
-                'latitude',
-                'longitude',
-                'coverage_radius_km',
-                'status',
-            ]);
-
-        /*
-        |--------------------------------------------------------------------------
-        | Preserve location data
+        | Preserve location fields
         |--------------------------------------------------------------------------
         */
 
         $locationData = [
-            'country'  => array_key_exists('country', $data)
+            'country' => array_key_exists(
+                'country',
+                $data
+            )
                 ? $data['country']
                 : $source->country,
 
-            'province' => array_key_exists('province', $data)
+            'province' => array_key_exists(
+                'province',
+                $data
+            )
                 ? $data['province']
                 : $source->province,
 
-            'district' => array_key_exists('district', $data)
+            'district' => array_key_exists(
+                'district',
+                $data
+            )
                 ? $data['district']
                 : $source->district,
 
-            'city'     => array_key_exists('city', $data)
+            'city' => array_key_exists(
+                'city',
+                $data
+            )
                 ? $data['city']
                 : $source->city,
 
-            'area'     => array_key_exists('area', $data)
+            'area' => array_key_exists(
+                'area',
+                $data
+            )
                 ? $data['area']
                 : $source->area,
 
-            'street'   => array_key_exists('street', $data)
+            'street' => array_key_exists(
+                'street',
+                $data
+            )
                 ? $data['street']
                 : $source->street,
 
-            'address'  => array_key_exists('address', $data)
+            'address' => array_key_exists(
+                'address',
+                $data
+            )
                 ? $data['address']
                 : $source->address,
 
-            'landmark' => array_key_exists('landmark', $data)
+            'landmark' => array_key_exists(
+                'landmark',
+                $data
+            )
                 ? $data['landmark']
                 : $source->landmark,
         ];
 
+        /*
+        |--------------------------------------------------------------------------
+        | Fallback to original values
+        |--------------------------------------------------------------------------
+        */
+
         foreach ($locationData as $field => $value) {
             if (
-                $value === null
-                || trim((string) $value) === ''
+                $value === null ||
+                trim((string) $value) === ''
             ) {
-                $locationData[$field] = $source->{$field};
+                $locationData[$field] =
+                    $source->{$field};
             }
         }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Required location fields
+        |--------------------------------------------------------------------------
+        */
 
         $requiredLocationFields = [
             'country',
@@ -556,12 +599,13 @@ class AdminCoverageLocationController extends Controller
 
         foreach ($requiredLocationFields as $field) {
             if (
-                $locationData[$field] === null
-                || trim((string) $locationData[$field]) === ''
+                $locationData[$field] === null ||
+                trim((string) $locationData[$field]) === ''
             ) {
                 return response()->json([
                     'message' =>
-                    "The source coverage location does not have a valid {$field}.",
+                        "The source coverage location does not have a valid {$field}.",
+
                     'errors' => [
                         $field => [
                             "The {$field} is required because the database column cannot be null.",
@@ -588,104 +632,139 @@ class AdminCoverageLocationController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        $result = DB::transaction(function () use (
-            $request,
-            $source,
-            $newParent,
-            $data,
-            $newCode,
-            $locationData
-        ) {
-            $parent = CoverageLocation::query()
-                ->whereKey($newParent->id)
-                ->lockForUpdate()
-                ->firstOrFail();
-
-            if (
-                $source->type
-                !== CoverageLocation::TYPE_MAIN_BRANCH_ZONE
+        $result = DB::transaction(
+            function () use (
+                $request,
+                $source,
+                $newParent,
+                $data,
+                $newCode,
+                $locationData
             ) {
-                throw new \RuntimeException(
-                    'Coverage location is no longer a main branch zone.'
-                );
-            }
+                $parent = CoverageLocation::query()
+                    ->whereKey($newParent->id)
+                    ->lockForUpdate()
+                    ->firstOrFail();
 
-            /*
-            |--------------------------------------------------------------------------
-            | Transfer children
-            |--------------------------------------------------------------------------
-            */
+                /*
+                |--------------------------------------------------------------------------
+                | Re-check source
+                |--------------------------------------------------------------------------
+                */
 
-            $childrenTransferred = $source
-                ->children()
-                ->update([
-                    'parent_id'  => $parent->id,
-                    'updated_at' => now(),
-                    'updated_by' => $request->user()?->id,
+                if (
+                    $source->type !==
+                    CoverageLocation::TYPE_MAIN_BRANCH_ZONE
+                ) {
+                    throw new RuntimeException(
+                        'Coverage location is no longer a main branch zone.'
+                    );
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | Transfer existing children
+                |--------------------------------------------------------------------------
+                */
+
+                $childrenTransferred = $source
+                    ->children()
+                    ->update([
+                        'parent_id' => $parent->id,
+                        'updated_at' => now(),
+                        'updated_by' =>
+                            $request->user()?->id,
+                    ]);
+
+                /*
+                |--------------------------------------------------------------------------
+                | Convert current location
+                |--------------------------------------------------------------------------
+                */
+
+                $source->update([
+                    'type' =>
+                        CoverageLocation::TYPE_SUB_BRANCH_ZONE,
+
+                    'parent_id' =>
+                        $parent->id,
+
+                    'name' =>
+                        $data['name'],
+
+                    'code' =>
+                        $newCode,
+
+                    'latitude' =>
+                        (float) $data['latitude'],
+
+                    'longitude' =>
+                        (float) $data['longitude'],
+
+                    'coverage_radius_km' =>
+                        (float) $data['coverage_radius_km'],
+
+                    'country' =>
+                        $locationData['country'],
+
+                    'province' =>
+                        $locationData['province'],
+
+                    'district' =>
+                        $locationData['district'],
+
+                    'city' =>
+                        $locationData['city'],
+
+                    'area' =>
+                        $locationData['area'],
+
+                    'street' =>
+                        $locationData['street'],
+
+                    'address' =>
+                        $locationData['address'],
+
+                    'landmark' =>
+                        $locationData['landmark'],
+
+                    'updated_by' =>
+                        $request->user()?->id,
                 ]);
 
-            /*
-            |--------------------------------------------------------------------------
-            | Convert current location
-            |--------------------------------------------------------------------------
-            */
+                return [
+                    'children_transferred' =>
+                        $childrenTransferred,
 
-            $source->update([
-                'type'               => CoverageLocation::TYPE_SUB_BRANCH_ZONE,
-                'parent_id'          => $parent->id,
+                    'location' =>
+                        $source->fresh([
+                            'parent',
+                            'children',
+                            'branch',
+                            'assignedBranches',
+                        ]),
 
-                'name'               => $data['name'],
-                'code'               => $newCode,
-
-                'latitude'           => (float) $data['latitude'],
-                'longitude'          => (float) $data['longitude'],
-                'coverage_radius_km' =>
-                (float) $data['coverage_radius_km'],
-
-                'country'            => $locationData['country'],
-                'province'           => $locationData['province'],
-                'district'           => $locationData['district'],
-                'city'               => $locationData['city'],
-                'area'               => $locationData['area'],
-                'street'             => $locationData['street'],
-                'address'            => $locationData['address'],
-                'landmark'           => $locationData['landmark'],
-
-                'updated_by'         => $request->user()?->id,
-            ]);
-
-            return [
-                'children_transferred' =>
-                $childrenTransferred,
-
-                'location'             =>
-                $source->fresh([
-                    'parent',
-                    'children',
-                    'branch',
-                    'assignedBranches',
-                ]),
-
-                'parent'               =>
-                $parent->fresh([
-                    'children',
-                ]),
-            ];
-        });
+                    'parent' =>
+                        $parent->fresh([
+                            'children',
+                        ]),
+                ];
+            }
+        );
 
         return response()->json([
             'message' =>
-            'Main coverage location converted to sub-branch successfully.',
+                'Main coverage location converted to sub-branch successfully.',
 
-            'data'    => [
-                'location'             =>
-                $result['location'],
+            'data' => [
+                'location' =>
+                    $result['location'],
 
-                'parent'               =>
-                $result['parent'],
+                'parent' =>
+                    $result['parent'],
 
                 'children_transferred' =>
-                $result['children_transferred'],
+                    $result['children_transferred'],
             ],
         ]);
     }
@@ -702,33 +781,33 @@ class AdminCoverageLocationController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | Main Branch
+        | Main branch cannot have parent
         |--------------------------------------------------------------------------
         */
 
         if (
-            $data['type']
-            === CoverageLocation::TYPE_MAIN_BRANCH_ZONE
+            $data['type'] ===
+            CoverageLocation::TYPE_MAIN_BRANCH_ZONE
         ) {
             $data['parent_id'] = null;
         }
 
         /*
         |--------------------------------------------------------------------------
-        | Sub Branch requires parent
+        | Sub branch requires parent
         |--------------------------------------------------------------------------
         */
 
         if (
-            $data['type']
-            === CoverageLocation::TYPE_SUB_BRANCH_ZONE
-            && empty($data['parent_id'])
+            $data['type'] ===
+            CoverageLocation::TYPE_SUB_BRANCH_ZONE &&
+            empty($data['parent_id'])
         ) {
             return response()->json([
                 'message' =>
-                'Parent main branch zone is required for sub-branch zone.',
+                    'Parent main branch zone is required for sub-branch zone.',
 
-                'errors'  => [
+                'errors' => [
                     'parent_id' => [
                         'Parent main branch zone is required for sub-branch zone.',
                     ],
@@ -743,27 +822,30 @@ class AdminCoverageLocationController extends Controller
         */
 
         if (
-            $data['type']
-            === CoverageLocation::TYPE_SUB_BRANCH_ZONE
+            $data['type'] ===
+            CoverageLocation::TYPE_SUB_BRANCH_ZONE
         ) {
-            $parent = CoverageLocation::query()
+            $parentExists = CoverageLocation::query()
                 ->whereKey($data['parent_id'])
                 ->where(
                     'type',
                     CoverageLocation::TYPE_MAIN_BRANCH_ZONE
                 )
-                ->where(
-                    'status',
-                    CoverageLocation::STATUS_ACTIVE
-                )
+                ->where(function ($query) {
+                    $query->whereNull('status')
+                        ->orWhere(
+                            'status',
+                            CoverageLocation::STATUS_ACTIVE
+                        );
+                })
                 ->exists();
 
-            if (! $parent) {
+            if (! $parentExists) {
                 return response()->json([
                     'message' =>
-                    'Selected parent must be an active main branch zone.',
+                        'Selected parent must be an active main branch zone.',
 
-                    'errors'  => [
+                    'errors' => [
                         'parent_id' => [
                             'Selected parent must be an active main branch zone.',
                         ],
@@ -784,25 +866,37 @@ class AdminCoverageLocationController extends Controller
             $data['parent_id'] ?? null
         );
 
+        /*
+        |--------------------------------------------------------------------------
+        | Audit
+        |--------------------------------------------------------------------------
+        */
+
         $data['created_by'] =
-        $request->user()?->id;
+            $request->user()?->id;
 
         $data['updated_by'] =
-        $request->user()?->id;
+            $request->user()?->id;
+
+        /*
+        |--------------------------------------------------------------------------
+        | Create
+        |--------------------------------------------------------------------------
+        */
 
         $location = CoverageLocation::create($data);
 
         return response()->json([
             'message' =>
-            'Coverage location created successfully.',
+                'Coverage location created successfully.',
 
-            'data'    =>
-            $location->fresh([
-                'parent',
-                'children',
-                'branch',
-                'assignedBranches',
-            ]),
+            'data' =>
+                $location->fresh([
+                    'parent',
+                    'children',
+                    'branch',
+                    'assignedBranches',
+                ]),
         ], 201);
     }
 
@@ -817,12 +911,12 @@ class AdminCoverageLocationController extends Controller
     ): JsonResponse {
         return response()->json([
             'data' =>
-            $coverageLocation->load([
-                'parent',
-                'children',
-                'branch',
-                'assignedBranches',
-            ]),
+                $coverageLocation->load([
+                    'parent',
+                    'children',
+                    'branch',
+                    'assignedBranches',
+                ]),
         ]);
     }
 
@@ -843,36 +937,33 @@ class AdminCoverageLocationController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | Main Branch
+        | Main branch cannot have parent
         |--------------------------------------------------------------------------
-        |
-        | Main branch zones can never have parents.
-        |
         */
 
         if (
-            $data['type']
-            === CoverageLocation::TYPE_MAIN_BRANCH_ZONE
+            $data['type'] ===
+            CoverageLocation::TYPE_MAIN_BRANCH_ZONE
         ) {
             $data['parent_id'] = null;
         }
 
         /*
         |--------------------------------------------------------------------------
-        | Sub Branch must have parent
+        | Sub branch requires parent
         |--------------------------------------------------------------------------
         */
 
         if (
-            $data['type']
-            === CoverageLocation::TYPE_SUB_BRANCH_ZONE
-            && empty($data['parent_id'])
+            $data['type'] ===
+            CoverageLocation::TYPE_SUB_BRANCH_ZONE &&
+            empty($data['parent_id'])
         ) {
             return response()->json([
                 'message' =>
-                'Parent main branch zone is required for sub-branch zone.',
+                    'Parent main branch zone is required for sub-branch zone.',
 
-                'errors'  => [
+                'errors' => [
                     'parent_id' => [
                         'Parent main branch zone is required for sub-branch zone.',
                     ],
@@ -882,20 +973,20 @@ class AdminCoverageLocationController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | Cannot be its own parent
+        | Cannot be own parent
         |--------------------------------------------------------------------------
         */
 
         if (
-            ! empty($data['parent_id'])
-            && (int) $data['parent_id']
-            === (int) $coverageLocation->id
+            ! empty($data['parent_id']) &&
+            (int) $data['parent_id'] ===
+            (int) $coverageLocation->id
         ) {
             return response()->json([
                 'message' =>
-                'Coverage location cannot be its own parent.',
+                    'Coverage location cannot be its own parent.',
 
-                'errors'  => [
+                'errors' => [
                     'parent_id' => [
                         'Coverage location cannot be its own parent.',
                     ],
@@ -905,13 +996,13 @@ class AdminCoverageLocationController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | Validate Sub Branch Parent
+        | Validate parent
         |--------------------------------------------------------------------------
         */
 
         if (
-            $data['type']
-            === CoverageLocation::TYPE_SUB_BRANCH_ZONE
+            $data['type'] ===
+            CoverageLocation::TYPE_SUB_BRANCH_ZONE
         ) {
             $validParent = CoverageLocation::query()
                 ->whereKey($data['parent_id'])
@@ -919,18 +1010,21 @@ class AdminCoverageLocationController extends Controller
                     'type',
                     CoverageLocation::TYPE_MAIN_BRANCH_ZONE
                 )
-                ->where(
-                    'status',
-                    CoverageLocation::STATUS_ACTIVE
-                )
+                ->where(function ($query) {
+                    $query->whereNull('status')
+                        ->orWhere(
+                            'status',
+                            CoverageLocation::STATUS_ACTIVE
+                        );
+                })
                 ->exists();
 
             if (! $validParent) {
                 return response()->json([
                     'message' =>
-                    'Sub-branch must belong to an active main branch zone.',
+                        'Sub-branch must belong to an active main branch zone.',
 
-                    'errors'  => [
+                    'errors' => [
                         'parent_id' => [
                             'Selected parent is not a valid active main branch.',
                         ],
@@ -941,33 +1035,32 @@ class AdminCoverageLocationController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | Generate code
+        | Detect changes
         |--------------------------------------------------------------------------
-        |
-        | Name is editable.
-        |
-        | If the name changes, generate the corresponding new code.
-        |
         */
 
         $nameChanged =
-        trim((string) $coverageLocation->name)
-        !== trim((string) $data['name']);
+            trim((string) $coverageLocation->name) !==
+            trim((string) $data['name']);
 
         $parentChanged =
-        (int) ($coverageLocation->parent_id ?? 0)
-        !== (int) ($data['parent_id'] ?? 0);
+            (int) ($coverageLocation->parent_id ?? 0) !==
+            (int) ($data['parent_id'] ?? 0);
+
+        $typeChanged =
+            $coverageLocation->type !==
+            $data['type'];
 
         /*
         |--------------------------------------------------------------------------
-        | Regenerate code
+        | Regenerate code if hierarchy/name/type changed
         |--------------------------------------------------------------------------
         */
 
         if (
-            $nameChanged
-            || $parentChanged
-            || $coverageLocation->type !== $data['type']
+            $nameChanged ||
+            $parentChanged ||
+            $typeChanged
         ) {
             $data['code'] = $this->generateCode(
                 $data['name'],
@@ -976,17 +1069,17 @@ class AdminCoverageLocationController extends Controller
                 $coverageLocation->id
             );
         } else {
-            /*
-            |--------------------------------------------------------------------------
-            | Do not allow frontend to manually modify code.
-            |--------------------------------------------------------------------------
-            */
-
             unset($data['code']);
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Audit
+        |--------------------------------------------------------------------------
+        */
+
         $data['updated_by'] =
-        $request->user()?->id;
+            $request->user()?->id;
 
         /*
         |--------------------------------------------------------------------------
@@ -998,15 +1091,15 @@ class AdminCoverageLocationController extends Controller
 
         return response()->json([
             'message' =>
-            'Coverage location updated successfully.',
+                'Coverage location updated successfully.',
 
-            'data'    =>
-            $coverageLocation->fresh([
-                'parent',
-                'children',
-                'branch',
-                'assignedBranches',
-            ]),
+            'data' =>
+                $coverageLocation->fresh([
+                    'parent',
+                    'children',
+                    'branch',
+                    'assignedBranches',
+                ]),
         ]);
     }
 
@@ -1021,23 +1114,23 @@ class AdminCoverageLocationController extends Controller
     ): JsonResponse {
         if (
             $coverageLocation
-            ->children()
-            ->exists()
+                ->children()
+                ->exists()
         ) {
             return response()->json([
                 'message' =>
-                'This location has sub-branch zones. Remove or transfer them first.',
+                    'This location has sub-branch zones. Remove or transfer them first.',
             ], 422);
         }
 
         if (
             $coverageLocation
-            ->assignedBranches()
-            ->exists()
+                ->assignedBranches()
+                ->exists()
         ) {
             return response()->json([
                 'message' =>
-                'This location is assigned to branch/franchise. Remove assignment first.',
+                    'This location is assigned to branch/franchise. Remove assignment first.',
             ], 422);
         }
 
@@ -1045,7 +1138,7 @@ class AdminCoverageLocationController extends Controller
 
         return response()->json([
             'message' =>
-            'Coverage location deleted successfully.',
+                'Coverage location deleted successfully.',
         ]);
     }
 
@@ -1062,91 +1155,91 @@ class AdminCoverageLocationController extends Controller
         ?int $ignoreId = null
     ): string {
         $abbrMap = [
-            'kathmandu'      => 'KTM',
-            'lalitpur'       => 'LTP',
-            'bhaktapur'      => 'BKT',
+            'kathmandu' => 'KTM',
+            'lalitpur' => 'LTP',
+            'bhaktapur' => 'BKT',
             'kavrepalanchok' => 'KVR',
-            'sindhupalchok'  => 'SPL',
-            'sindhuli'       => 'SDL',
-            'ramechhap'      => 'RMP',
-            'dolakha'        => 'DLK',
-            'nuwakot'        => 'NWT',
-            'rasuwa'         => 'RSW',
-            'dhading'        => 'DHD',
-            'makwanpur'      => 'MKP',
-            'chitwan'        => 'CTW',
-            'kaski'          => 'PKR',
-            'pokhara'        => 'PKR',
-            'tanahun'        => 'TNH',
-            'syangja'        => 'SYJ',
-            'lamjung'        => 'LMJ',
-            'gorkha'         => 'GRK',
-            'manang'         => 'MNG',
-            'mustang'        => 'MST',
-            'myagdi'         => 'MYG',
-            'parbat'         => 'PRB',
-            'baglung'        => 'BGL',
-            'nawalpur'       => 'NWP',
-            'morang'         => 'MRG',
-            'biratnagar'     => 'BTN',
-            'sunsari'        => 'SNS',
-            'dhankuta'       => 'DNK',
-            'terhathum'      => 'TRT',
-            'sankhuwasabha'  => 'SKS',
-            'bhojpur'        => 'BJP',
-            'solukhumbu'     => 'SLK',
-            'okhaldhunga'    => 'OKH',
-            'khotang'        => 'KHT',
-            'udayapur'       => 'UDP',
-            'taplejung'      => 'TPL',
-            'panchthar'      => 'PCT',
-            'ilam'           => 'ILM',
-            'jhapa'          => 'JHP',
-            'saptari'        => 'SPT',
-            'siraha'         => 'SRH',
-            'dhanusha'       => 'DNS',
-            'mahottari'      => 'MHT',
-            'sarlahi'        => 'SRL',
-            'rautahat'       => 'RTH',
-            'bara'           => 'BRA',
-            'parsa'          => 'PRS',
-            'birgunj'        => 'BGJ',
-            'rupandehi'      => 'RPD',
-            'butwal'         => 'BTW',
-            'bhairahawa'     => 'BHW',
-            'kapilvastu'     => 'KPV',
-            'palpa'          => 'PLP',
-            'arghakhanchi'   => 'AGK',
-            'gulmi'          => 'GLM',
-            'dang'           => 'DNG',
-            'banke'          => 'BNK',
-            'nepalgunj'      => 'NPG',
-            'bardiya'        => 'BRD',
-            'rolpa'          => 'RLP',
-            'pyuthan'        => 'PYT',
-            'rukum east'     => 'RKE',
-            'surkhet'        => 'SKT',
-            'birendranagar'  => 'BRN',
-            'dailekh'        => 'DLH',
-            'jajarkot'       => 'JJK',
-            'dolpa'          => 'DLP',
-            'jumla'          => 'JML',
-            'mugu'           => 'MGU',
-            'humla'          => 'HML',
-            'kalikot'        => 'KLK',
-            'salyan'         => 'SLN',
-            'rukum west'     => 'RKW',
-            'kailali'        => 'KLL',
-            'dhangadhi'      => 'DHG',
-            'kanchanpur'     => 'KCP',
-            'mahendranagar'  => 'MHN',
-            'dadeldhura'     => 'DDH',
-            'baitadi'        => 'BTD',
-            'darchula'       => 'DCL',
-            'achham'         => 'ACH',
-            'doti'           => 'DTI',
-            'bajura'         => 'BJR',
-            'bajhang'        => 'BJH',
+            'sindhupalchok' => 'SPL',
+            'sindhuli' => 'SDL',
+            'ramechhap' => 'RMP',
+            'dolakha' => 'DLK',
+            'nuwakot' => 'NWT',
+            'rasuwa' => 'RSW',
+            'dhading' => 'DHD',
+            'makwanpur' => 'MKP',
+            'chitwan' => 'CTW',
+            'kaski' => 'PKR',
+            'pokhara' => 'PKR',
+            'tanahun' => 'TNH',
+            'syangja' => 'SYJ',
+            'lamjung' => 'LMJ',
+            'gorkha' => 'GRK',
+            'manang' => 'MNG',
+            'mustang' => 'MST',
+            'myagdi' => 'MYG',
+            'parbat' => 'PRB',
+            'baglung' => 'BGL',
+            'nawalpur' => 'NWP',
+            'morang' => 'MRG',
+            'biratnagar' => 'BTN',
+            'sunsari' => 'SNS',
+            'dhankuta' => 'DNK',
+            'terhathum' => 'TRT',
+            'sankhuwasabha' => 'SKS',
+            'bhojpur' => 'BJP',
+            'solukhumbu' => 'SLK',
+            'okhaldhunga' => 'OKH',
+            'khotang' => 'KHT',
+            'udayapur' => 'UDP',
+            'taplejung' => 'TPL',
+            'panchthar' => 'PCT',
+            'ilam' => 'ILM',
+            'jhapa' => 'JHP',
+            'saptari' => 'SPT',
+            'siraha' => 'SRH',
+            'dhanusha' => 'DNS',
+            'mahottari' => 'MHT',
+            'sarlahi' => 'SRL',
+            'rautahat' => 'RTH',
+            'bara' => 'BRA',
+            'parsa' => 'PRS',
+            'birgunj' => 'BGJ',
+            'rupandehi' => 'RPD',
+            'butwal' => 'BTW',
+            'bhairahawa' => 'BHW',
+            'kapilvastu' => 'KPV',
+            'palpa' => 'PLP',
+            'arghakhanchi' => 'AGK',
+            'gulmi' => 'GLM',
+            'dang' => 'DNG',
+            'banke' => 'BNK',
+            'nepalgunj' => 'NPG',
+            'bardiya' => 'BRD',
+            'rolpa' => 'RLP',
+            'pyuthan' => 'PYT',
+            'rukum east' => 'RKE',
+            'surkhet' => 'SKT',
+            'birendranagar' => 'BRN',
+            'dailekh' => 'DLH',
+            'jajarkot' => 'JJK',
+            'dolpa' => 'DLP',
+            'jumla' => 'JML',
+            'mugu' => 'MGU',
+            'humla' => 'HML',
+            'kalikot' => 'KLK',
+            'salyan' => 'SLN',
+            'rukum west' => 'RKW',
+            'kailali' => 'KLL',
+            'dhangadhi' => 'DHG',
+            'kanchanpur' => 'KCP',
+            'mahendranagar' => 'MHN',
+            'dadeldhura' => 'DDH',
+            'baitadi' => 'BTD',
+            'darchula' => 'DCL',
+            'achham' => 'ACH',
+            'doti' => 'DTI',
+            'bajura' => 'BJR',
+            'bajhang' => 'BJH',
         ];
 
         $key = strtolower(trim($name));
@@ -1157,21 +1250,27 @@ class AdminCoverageLocationController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | Main Branch Abbreviation
+        | Abbreviation
         |--------------------------------------------------------------------------
         */
 
-        $abbr = $abbrMap[$key] ?? $abbrMap[$firstWord] ?? strtoupper(
-            substr(
-                preg_replace(
-                    '/[^a-z]/i',
-                    '',
-                    $firstWord
-                ),
-                0,
-                3
-            )
-        );
+        $abbr = $abbrMap[$key]
+            ?? $abbrMap[$firstWord]
+            ?? strtoupper(
+                substr(
+                    preg_replace(
+                        '/[^a-z]/i',
+                        '',
+                        $firstWord
+                    ),
+                    0,
+                    3
+                )
+            );
+
+        if ($abbr === '') {
+            $abbr = 'LOC';
+        }
 
         /*
         |--------------------------------------------------------------------------
@@ -1182,14 +1281,14 @@ class AdminCoverageLocationController extends Controller
         $words = array_values(
             array_filter(
                 array_map(
-                    static fn($word) =>
-                    strtoupper(
-                        preg_replace(
-                            '/[^A-Za-z0-9]/',
-                            '',
-                            $word
-                        )
-                    ),
+                    static fn ($word) =>
+                        strtoupper(
+                            preg_replace(
+                                '/[^A-Za-z0-9]/',
+                                '',
+                                $word
+                            )
+                        ),
                     preg_split(
                         '/\s+/',
                         trim($name)
@@ -1200,13 +1299,13 @@ class AdminCoverageLocationController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | Main Branch Code
+        | Main Branch
         |--------------------------------------------------------------------------
         */
 
         if (
-            $type
-            === CoverageLocation::TYPE_MAIN_BRANCH_ZONE
+            $type ===
+            CoverageLocation::TYPE_MAIN_BRANCH_ZONE
         ) {
             $baseCode = "TUK-{$abbr}-MAIN";
         } else {
@@ -1214,20 +1313,6 @@ class AdminCoverageLocationController extends Controller
             |--------------------------------------------------------------------------
             | Sub Branch
             |--------------------------------------------------------------------------
-            |
-            | If parent exists, use parent abbreviation.
-            |
-            | Example:
-            |
-            | Parent:
-            | TUK-CTW-MAIN
-            |
-            | Name:
-            | Chitwan East
-            |
-            | Result:
-            | TUK-CTW-SUB-EAST
-            |
             */
 
             $parent = null;
@@ -1254,10 +1339,16 @@ class AdminCoverageLocationController extends Controller
                 );
 
                 $parentAbbr =
-                $parts[1] ?? $abbr;
+                    $parts[1] ?? $abbr;
             } else {
                 $parentAbbr = $abbr;
             }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Build suffix
+            |--------------------------------------------------------------------------
+            */
 
             $suffix = implode(
                 '-',
@@ -1265,7 +1356,8 @@ class AdminCoverageLocationController extends Controller
             );
 
             if ($suffix === '') {
-                $suffix = $words[0] ?? 'SUB';
+                $suffix =
+                    $words[0] ?? 'SUB';
             }
 
             $baseCode =
@@ -1278,18 +1370,22 @@ class AdminCoverageLocationController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        $code    = $baseCode;
+        $code = $baseCode;
         $counter = 2;
 
         while (
             CoverageLocation::query()
-            ->where('code', $code)
-            ->when(
-                $ignoreId !== null,
-                fn($query) =>
-                $query->whereKey('!=', $ignoreId)
-            )
-            ->exists()
+                ->where('code', $code)
+                ->when(
+                    $ignoreId !== null,
+                    fn ($query) =>
+                        $query->where(
+                            'id',
+                            '!=',
+                            $ignoreId
+                        )
+                )
+                ->exists()
         ) {
             $code =
                 "{$baseCode}-{$counter}";
@@ -1328,7 +1424,7 @@ class AdminCoverageLocationController extends Controller
         CoverageLocation $coverageLocation
     ): array {
         return $request->validate([
-            'parent_id'          => [
+            'parent_id' => [
                 'required',
                 'integer',
 
@@ -1336,37 +1432,41 @@ class AdminCoverageLocationController extends Controller
                     'coverage_locations',
                     'id'
                 )->where(
-                    fn($query) =>
-                    $query
-                        ->where(
-                            'type',
-                            CoverageLocation::TYPE_MAIN_BRANCH_ZONE
-                        )
-                        ->where(
-                            'status',
-                            CoverageLocation::STATUS_ACTIVE
-                        )
-                        ->where(
-                            'id',
-                            '!=',
-                            $coverageLocation->id
-                        )
+                    function ($query) use ($coverageLocation) {
+                        $query
+                            ->where(
+                                'type',
+                                CoverageLocation::TYPE_MAIN_BRANCH_ZONE
+                            )
+                            ->where(function ($q) {
+                                $q->whereNull('status')
+                                    ->orWhere(
+                                        'status',
+                                        CoverageLocation::STATUS_ACTIVE
+                                    );
+                            })
+                            ->where(
+                                'id',
+                                '!=',
+                                $coverageLocation->id
+                            );
+                    }
                 ),
             ],
 
-            'name'               => [
+            'name' => [
                 'required',
                 'string',
                 'max:150',
             ],
 
-            'latitude'           => [
+            'latitude' => [
                 'required',
                 'numeric',
                 'between:-90,90',
             ],
 
-            'longitude'          => [
+            'longitude' => [
                 'required',
                 'numeric',
                 'between:-180,180',
@@ -1379,50 +1479,58 @@ class AdminCoverageLocationController extends Controller
                 'max:100',
             ],
 
-            'country'            => [
+            'country' => [
                 'sometimes',
+                'nullable',
                 'string',
                 'max:100',
             ],
 
-            'province'           => [
+            'province' => [
                 'sometimes',
+                'nullable',
                 'string',
                 'max:100',
             ],
 
-            'district'           => [
+            'district' => [
                 'sometimes',
+                'nullable',
                 'string',
                 'max:100',
             ],
 
-            'city'               => [
+            'city' => [
                 'sometimes',
+                'nullable',
                 'string',
                 'max:120',
             ],
 
-            'area'               => [
+            'area' => [
                 'sometimes',
+                'nullable',
                 'string',
                 'max:120',
             ],
 
-            'street'             => [
+            'street' => [
                 'sometimes',
+                'nullable',
                 'string',
                 'max:150',
             ],
 
-            'address'            => [
+            'address' => [
                 'sometimes',
+                'nullable',
                 'string',
                 'max:1000',
             ],
 
-            'landmark'           => [
+            'landmark' => [
                 'sometimes',
+                'nullable',
                 'string',
                 'max:150',
             ],
@@ -1440,7 +1548,7 @@ class AdminCoverageLocationController extends Controller
         ?CoverageLocation $coverageLocation = null
     ): array {
         return $request->validate([
-            'name'               => [
+            'name' => [
                 'required',
                 'string',
                 'max:150',
@@ -1451,17 +1559,18 @@ class AdminCoverageLocationController extends Controller
             | Code
             |--------------------------------------------------------------------------
             |
-            | Accepted for backwards compatibility, but backend generates it.
+            | Accepted for backward compatibility.
+            | Backend always generates the real code.
             |
             */
 
-            'code'               => [
+            'code' => [
                 'nullable',
                 'string',
                 'max:80',
             ],
 
-            'type'               => [
+            'type' => [
                 'required',
 
                 Rule::in([
@@ -1470,19 +1579,13 @@ class AdminCoverageLocationController extends Controller
                 ]),
             ],
 
-            /*
-            |--------------------------------------------------------------------------
-            | Parent
-            |--------------------------------------------------------------------------
-            */
-
-            'parent_id'          => [
+            'parent_id' => [
                 'nullable',
                 'integer',
                 'exists:coverage_locations,id',
             ],
 
-            'branch_id'          => [
+            'branch_id' => [
                 'nullable',
                 'integer',
                 'exists:branches,id',
@@ -1494,49 +1597,49 @@ class AdminCoverageLocationController extends Controller
             |--------------------------------------------------------------------------
             */
 
-            'country'            => [
+            'country' => [
                 'nullable',
                 'string',
                 'max:100',
             ],
 
-            'province'           => [
+            'province' => [
                 'nullable',
                 'string',
                 'max:100',
             ],
 
-            'district'           => [
+            'district' => [
                 'nullable',
                 'string',
                 'max:100',
             ],
 
-            'city'               => [
+            'city' => [
                 'nullable',
                 'string',
                 'max:120',
             ],
 
-            'area'               => [
+            'area' => [
                 'nullable',
                 'string',
                 'max:120',
             ],
 
-            'street'             => [
+            'street' => [
                 'nullable',
                 'string',
                 'max:150',
             ],
 
-            'address'            => [
+            'address' => [
                 'nullable',
                 'string',
                 'max:1000',
             ],
 
-            'landmark'           => [
+            'landmark' => [
                 'nullable',
                 'string',
                 'max:150',
@@ -1548,13 +1651,13 @@ class AdminCoverageLocationController extends Controller
             |--------------------------------------------------------------------------
             */
 
-            'latitude'           => [
+            'latitude' => [
                 'required',
                 'numeric',
                 'between:-90,90',
             ],
 
-            'longitude'          => [
+            'longitude' => [
                 'required',
                 'numeric',
                 'between:-180,180',
@@ -1573,12 +1676,12 @@ class AdminCoverageLocationController extends Controller
             |--------------------------------------------------------------------------
             */
 
-            'is_hq_managed'      => [
+            'is_hq_managed' => [
                 'nullable',
                 'boolean',
             ],
 
-            'status'             => [
+            'status' => [
                 'required',
 
                 Rule::in([
@@ -1587,7 +1690,7 @@ class AdminCoverageLocationController extends Controller
                 ]),
             ],
 
-            'notes'              => [
+            'notes' => [
                 'nullable',
                 'string',
                 'max:2000',

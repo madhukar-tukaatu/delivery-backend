@@ -1,6 +1,6 @@
 <?php
 
-declare(strict_types=1);
+declare (strict_types = 1);
 
 namespace Modules\Rate\Http\Controllers\Api;
 
@@ -74,30 +74,30 @@ final class PublicPricingEstimateController extends Controller
                 : 0.001;
 
             $pricingPayload = [
-                'store_id' => null,
+                'store_id'           => null,
 
-                'pickup_address'    => (string) $data['pickup_address'],
-                'pickup_latitude'   => (float) $data['pickup_latitude'],
-                'pickup_longitude'  => (float) $data['pickup_longitude'],
+                'pickup_address'     => (string) $data['pickup_address'],
+                'pickup_latitude'    => (float) $data['pickup_latitude'],
+                'pickup_longitude'   => (float) $data['pickup_longitude'],
 
-                'delivery_address'  => (string) $data['delivery_address'],
-                'delivery_latitude' => (float) $data['delivery_latitude'],
-                'delivery_longitude'=> (float) $data['delivery_longitude'],
+                'delivery_address'   => (string) $data['delivery_address'],
+                'delivery_latitude'  => (float) $data['delivery_latitude'],
+                'delivery_longitude' => (float) $data['delivery_longitude'],
 
-                'service_type' => (string) $data['service_type'],
+                'service_type'       => (string) $data['service_type'],
 
                 /*
                  * Payment fields are internal compatibility values only.
                  * They are not exposed on the public estimator form.
                  */
-                'payment_type' => 'prepaid',
-                'pod_amount'   => 0.0,
+                'payment_type'       => 'prepaid',
+                'pod_amount'         => 0.0,
 
                 /*
                  * One public calculator request represents one physical
                  * packed parcel. Product details are not required.
                  */
-                'packets' => [
+                'packets'            => [
                     [
                         'packet_reference' => 'PUBLIC-PKT-001',
                         'product_id'       => null,
@@ -106,21 +106,21 @@ final class PublicPricingEstimateController extends Controller
 
                         'actual_weight_kg' => $engineActualWeight,
 
-                        'unit_price'     => 0.0,
-                        'declared_value' => 0.0,
+                        'unit_price'       => 0.0,
+                        'declared_value'   => 0.0,
 
-                        'parcel_type' => (string) $data['parcel_type'],
+                        'parcel_type'      => (string) $data['parcel_type'],
 
-                        'length_cm' => $lengthCm,
-                        'width_cm'  => $widthCm,
-                        'height_cm' => $heightCm,
+                        'length_cm'        => $lengthCm,
+                        'width_cm'         => $widthCm,
+                        'height_cm'        => $heightCm,
                     ],
                 ],
 
-                'packet_count'  => 1,
-                'parcel_weight' => $engineActualWeight,
-                'parcel_value'  => 0.0,
-                'parcel_type'   => (string) $data['parcel_type'],
+                'packet_count'       => 1,
+                'parcel_weight'      => $engineActualWeight,
+                'parcel_value'       => 0.0,
+                'parcel_type'        => (string) $data['parcel_type'],
             ];
 
             $result = $pricingEngine->calculate(
@@ -128,8 +128,7 @@ final class PublicPricingEstimateController extends Controller
                 null
             );
 
-            $finalPrice = data_get($result, 'final_price')
-                ?? data_get($result, 'breakdown.final_price');
+            $finalPrice = data_get($result, 'final_price') ?? data_get($result, 'breakdown.final_price');
 
             if ($finalPrice === null || (float) $finalPrice < 0) {
                 Log::warning(
@@ -200,38 +199,67 @@ final class PublicPricingEstimateController extends Controller
                 'success' => true,
                 'message' => 'Delivery price estimated successfully.',
                 'data'    => [
-                    'currency' => (string) data_get($result, 'currency', 'NPR'),
+                    'currency'                 => (string) data_get($result, 'currency', 'NPR'),
 
-                    'price'           => round((float) $finalPrice, 2),
-                    'delivery_charge' => round((float) $finalPrice, 2),
+                    'price'                    => round((float) $finalPrice, 2),
+                    'delivery_charge'          => round((float) $finalPrice, 2),
+                    'pickup_branch'            => [
+                        'id'                               => (int) data_get($result, 'pickup_branch.id'),
+                        'name'                             => (string) data_get($result, 'pickup_branch.name'),
+                        'distance_from_pickup_location_km' => round(
+                            (float) data_get($result, 'pickup_branch.distance_km', 0),
+                            3
+                        ),
+                    ],
 
-                    'packet_count' => 1,
-                    'parcel_type'  => (string) $data['parcel_type'],
+                    'delivery_branch'          => [
+                        'id'                               => (int) data_get($result, 'delivery_branch.id'),
+                        'name'                             => (string) data_get($result, 'delivery_branch.name'),
+                        'distance_to_delivery_location_km' => round(
+                            (float) data_get($result, 'delivery_branch.distance_km', 0),
+                            3
+                        ),
+                    ],
 
-                    'weight_calculation_rule' => 'higher_of_actual_or_volumetric',
+                    'route'                    => [
+                        'base_rate'         => round(
+                            (float) data_get($result, 'route.base_rate', 0),
+                            2
+                        ),
 
-                    'actual_weight_kg'     => $calculatedActualWeightKg,
-                    'volumetric_weight_kg' => $volumetricWeightKg,
-                    'chargeable_weight_kg' => $chargeableWeightKg,
-                    'final_weight_kg'      => $chargeableWeightKg,
+                        'total_distance_km' => round(
+                            (float) data_get($result, 'route.total_distance_km', 0),
+                            3
+                        ),
+                    ],
 
-                    'weight_source'      => $weightSource,
-                    'volumetric_applied' => $volumetricApplied,
+                    'packet_count'             => 1,
+                    'parcel_type'              => (string) $data['parcel_type'],
 
-                    'volumetric_divisor' => (float) data_get(
+                    'weight_calculation_rule'  => 'higher_of_actual_or_volumetric',
+
+                    'actual_weight_kg'         => $calculatedActualWeightKg,
+                    'volumetric_weight_kg'     => $volumetricWeightKg,
+                    'chargeable_weight_kg'     => $chargeableWeightKg,
+                    'final_weight_kg'          => $chargeableWeightKg,
+
+                    'weight_source'            => $weightSource,
+                    'volumetric_applied'       => $volumetricApplied,
+
+                    'volumetric_divisor'       => (float) data_get(
                         $result,
                         'packets.0.volumetric_divisor',
                         5000
                     ),
 
-                    'dimensions' => $dimensions,
+                    'dimensions'               => $dimensions,
 
                     'estimated_delivery_label' => $this->formatEstimatedDeliveryLabel(
                         $estimatedHours
                     ),
                     'estimated_delivery_hours' => $estimatedHours,
 
-                    'valid_until' => $this->serializeDate(
+                    'valid_until'              => $this->serializeDate(
                         data_get($result, 'valid_until')
                     ),
                 ],
@@ -244,13 +272,13 @@ final class PublicPricingEstimateController extends Controller
             Log::error(
                 'Public website pricing estimate failed.',
                 [
-                    'pickup_latitude'   => $data['pickup_latitude'] ?? null,
-                    'pickup_longitude'  => $data['pickup_longitude'] ?? null,
-                    'delivery_latitude' => $data['delivery_latitude'] ?? null,
-                    'delivery_longitude'=> $data['delivery_longitude'] ?? null,
-                    'service_type'      => $data['service_type'] ?? null,
-                    'actual_weight_kg'  => $data['actual_weight_kg'] ?? null,
-                    'exception'         => $exception->getMessage(),
+                    'pickup_latitude'    => $data['pickup_latitude'] ?? null,
+                    'pickup_longitude'   => $data['pickup_longitude'] ?? null,
+                    'delivery_latitude'  => $data['delivery_latitude'] ?? null,
+                    'delivery_longitude' => $data['delivery_longitude'] ?? null,
+                    'service_type'       => $data['service_type'] ?? null,
+                    'actual_weight_kg'   => $data['actual_weight_kg'] ?? null,
+                    'exception'          => $exception->getMessage(),
                 ]
             );
 

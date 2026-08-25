@@ -20,7 +20,7 @@ Route::prefix('v1/admin')
     ->name('admin.')
     ->middleware([
         'auth:sanctum',
-        'branch.scope',
+        // 'branch.scope',
     ])
     ->group(function () {
 

@@ -1,5 +1,4 @@
 <?php
-
 namespace Modules\Merchant\Http\Controllers;
 
 use App\Http\Controllers\Controller;
@@ -14,46 +13,203 @@ class MerchantController extends Controller
 {
     public function index(Request $request)
     {
-        $query = Merchant::with(['defaultBranch', 'defaultSubBranch'])->latest();
-        if ($request->filled('status')) $query->where('status', $request->status);
-        if ($request->filled('q')) {
-            $q = $request->q;
-            $query->where(fn ($x) => $x->where('name', 'like', "%$q%")->orWhere('code', 'like', "%$q%")->orWhere('phone', 'like', "%$q%"));
+        $user = $request->user();
+
+        $query = Merchant::with([
+            'defaultBranch',
+            'defaultSubBranch',
+        ])->latest();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Branch Scope
+        |--------------------------------------------------------------------------
+        |
+        | Super admin has global access.
+        |
+        | Every other authenticated admin user must have a branch_id.
+        |
+        */
+
+        $isSuperAdmin =
+        $user?->is_super_admin === true ||
+        in_array(
+            strtolower((string) $user?->role),
+            [
+                'super_admin',
+                'super-admin',
+                'superadmin',
+                'admin',
+                'web',
+            ],
+            true
+        );
+
+        if (! $isSuperAdmin) {
+            /*
+             * Determine the user's branch.
+             */
+            $branchId =
+            $user?->branch_id ??
+            $user?->default_branch_id ??
+            $user?->branch?->id ??
+            $user?->default_branch?->id;
+
+            /*
+             * No branch means no merchants.
+             *
+             * This is safer than accidentally returning
+             * the global merchant list.
+             */
+            if (! $branchId) {
+                return ApiResponse::success(
+                    [
+                        'data'         => [],
+                        'current_page' => 1,
+                        'per_page'     => (int) $request->get('per_page', 20),
+                        'total'        => 0,
+                        'last_page'    => 1,
+                    ],
+                    'No branch is assigned to this account.'
+                );
+            }
+
+            /*
+             * Branch-scoped merchant query.
+             */
+            $query->where(
+                'default_branch_id',
+                $branchId
+            );
         }
-        return ApiResponse::success($query->paginate((int) $request->get('per_page', 20)));
+
+        /*
+        |--------------------------------------------------------------------------
+        | Status Filter
+        |--------------------------------------------------------------------------
+        */
+
+        if ($request->filled('status')) {
+            $query->where(
+                'status',
+                $request->status
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Search
+        |--------------------------------------------------------------------------
+        |
+        | Support both:
+        |
+        | ?search=Kathmandu
+        |
+        | and the existing:
+        |
+        | ?q=Kathmandu
+        |
+        */
+
+        $search = $request->input(
+            'search',
+            $request->input('q')
+        );
+
+        if (
+            is_string($search) &&
+            trim($search) !== ''
+        ) {
+            $search = trim($search);
+
+            $query->where(function ($q) use ($search) {
+                $q->where(
+                    'name',
+                    'like',
+                    "%{$search}%"
+                )
+                    ->orWhere(
+                        'code',
+                        'like',
+                        "%{$search}%"
+                    )
+                    ->orWhere(
+                        'phone',
+                        'like',
+                        "%{$search}%"
+                    )
+                    ->orWhere(
+                        'email',
+                        'like',
+                        "%{$search}%"
+                    )
+                    ->orWhere(
+                        'owner_name',
+                        'like',
+                        "%{$search}%"
+                    );
+            });
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Pagination
+        |--------------------------------------------------------------------------
+        */
+
+        $perPage = (int) $request->get(
+            'per_page',
+            20
+        );
+
+        /*
+         * Prevent unreasonable page sizes.
+         */
+        $perPage = max(
+            1,
+            min($perPage, 100)
+        );
+
+        $merchants = $query->paginate(
+            $perPage
+        );
+
+        return ApiResponse::success(
+            $merchants
+        );
     }
 
     public function store(Request $request)
     {
         $data = $request->validate([
-            'name' => ['required', 'string'],
-            'code' => ['nullable', 'string', 'unique:merchants,code'],
-            'owner_name' => ['nullable', 'string'],
-            'contact_person' => ['nullable', 'string'],
-            'phone' => ['nullable', 'string'],
-            'email' => ['nullable', 'email'],
-            'website_url' => ['nullable', 'string'],
-            'business_type' => ['nullable', 'string'],
-            'pan_vat_number' => ['nullable', 'string'],
-            'address' => ['nullable', 'string'],
-            'default_branch_id' => ['nullable', 'exists:branches,id'],
+            'name'                  => ['required', 'string'],
+            'code'                  => ['nullable', 'string', 'unique:merchants,code'],
+            'owner_name'            => ['nullable', 'string'],
+            'contact_person'        => ['nullable', 'string'],
+            'phone'                 => ['nullable', 'string'],
+            'email'                 => ['nullable', 'email'],
+            'website_url'           => ['nullable', 'string'],
+            'business_type'         => ['nullable', 'string'],
+            'pan_vat_number'        => ['nullable', 'string'],
+            'address'               => ['nullable', 'string'],
+            'default_branch_id'     => ['nullable', 'exists:branches,id'],
             'default_sub_branch_id' => ['nullable', 'exists:branches,id'],
-            'create_login' => ['nullable', 'boolean'],
-            'password' => ['nullable', 'string', 'min:6'],
+            'create_login'          => ['nullable', 'boolean'],
+            'password'              => ['nullable', 'string', 'min:6'],
         ]);
-        $data['code'] = $data['code'] ?? 'MER-'.Str::upper(Str::random(6));
-        $merchant = Merchant::create($data);
+        $data['code'] = $data['code'] ?? 'MER-' . Str::upper(Str::random(6));
+        $merchant     = Merchant::create($data);
 
-        if (($data['create_login'] ?? true) && !empty($data['email'])) {
+        if (($data['create_login'] ?? true) && ! empty($data['email'])) {
             $merchantUser = User::firstOrCreate(['email' => $data['email']], [
-                'name' => $data['contact_person'] ?: $data['name'],
-                'phone' => $data['phone'] ?? null,
-                'role' => 'merchant',
+                'name'        => $data['contact_person'] ?: $data['name'],
+                'phone'       => $data['phone'] ?? null,
+                'role'        => 'merchant',
                 'merchant_id' => $merchant->id,
-                'password' => Hash::make($data['password'] ?? 'password'),
-                'is_active' => true,
+                'password'    => Hash::make($data['password'] ?? 'password'),
+                'is_active'   => true,
             ]);
-            try { $merchantUser->syncRoles(['merchant']); } catch (\Throwable $e) {}
+            try { $merchantUser->syncRoles(['merchant']);} catch (\Throwable $e) {}
         }
 
         return ApiResponse::success($merchant->load('users'), 'Merchant created.', 201);
@@ -67,24 +223,23 @@ class MerchantController extends Controller
     public function update(Request $request, Merchant $merchant)
     {
         $data = $request->validate([
-            'name' => ['sometimes', 'string'],
-            'code' => ['sometimes', 'string', 'unique:merchants,code,'.$merchant->id],
-            'owner_name' => ['nullable', 'string'],
-            'contact_person' => ['nullable', 'string'],
-            'phone' => ['nullable', 'string'],
-            'email' => ['nullable', 'email'],
-            'website_url' => ['nullable', 'string'],
-            'business_type' => ['nullable', 'string'],
-            'pan_vat_number' => ['nullable', 'string'],
-            'address' => ['nullable', 'string'],
-            'default_branch_id' => ['nullable', 'exists:branches,id'],
+            'name'                  => ['sometimes', 'string'],
+            'code'                  => ['sometimes', 'string', 'unique:merchants,code,' . $merchant->id],
+            'owner_name'            => ['nullable', 'string'],
+            'contact_person'        => ['nullable', 'string'],
+            'phone'                 => ['nullable', 'string'],
+            'email'                 => ['nullable', 'email'],
+            'website_url'           => ['nullable', 'string'],
+            'business_type'         => ['nullable', 'string'],
+            'pan_vat_number'        => ['nullable', 'string'],
+            'address'               => ['nullable', 'string'],
+            'default_branch_id'     => ['nullable', 'exists:branches,id'],
             'default_sub_branch_id' => ['nullable', 'exists:branches,id'],
-            'status' => ['nullable', 'in:pending,active,suspended,rejected'],
+            'status'                => ['nullable', 'in:pending,active,suspended,rejected'],
         ]);
         $merchant->update($data);
         return ApiResponse::success($merchant->fresh(), 'Merchant updated.');
     }
-
 
     public function destroy(Merchant $merchant)
     {

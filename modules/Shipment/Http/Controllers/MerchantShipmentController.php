@@ -1,5 +1,4 @@
 <?php
-
 namespace Modules\Shipment\Http\Controllers;
 
 use App\Http\Controllers\Controller;
@@ -14,35 +13,185 @@ class MerchantShipmentController extends Controller
 {
     public function index(Request $request)
     {
-        $merchant = $request->user()->merchant;
+        $user = $request->user();
 
-        if (!$merchant) {
-            return ApiResponse::error('Merchant account not found.', 404);
-        }
+        /*
+    |--------------------------------------------------------------------------
+    | Base Query
+    |--------------------------------------------------------------------------
+    */
 
         $query = Shipment::query()
             ->with([
-                'originBranch',
-                'originSubBranch',
-                'destinationBranch',
-                'destinationSubBranch',
+                'merchant',
+                'merchant.defaultBranch',
+                'merchant.defaultSubBranch',
             ])
-            ->where('merchant_id', $merchant->id)
             ->latest();
 
-        if ($request->filled('q')) {
-            $q = $request->q;
+        /*
+    |--------------------------------------------------------------------------
+    | Super Admin Check
+    |--------------------------------------------------------------------------
+    */
 
-            $query->where(function ($x) use ($q) {
-                $x->where('tracking_number', 'like', "%{$q}%")
-                    ->orWhere('merchant_order_id', 'like', "%{$q}%")
-                    ->orWhere('receiver_name', 'like', "%{$q}%")
-                    ->orWhere('receiver_phone', 'like', "%{$q}%");
+        $isSuperAdmin =
+        $user?->is_super_admin === true ||
+        in_array(
+            strtolower((string) $user?->role),
+            [
+                'super_admin',
+                'super-admin',
+                'superadmin',
+                'admin',
+                'web',
+            ],
+            true
+        );
+
+        /*
+    |--------------------------------------------------------------------------
+    | Branch Scope
+    |--------------------------------------------------------------------------
+    |
+    | Super admin:
+    |   → sees all shipments
+    |
+    | Branch user:
+    |   → sees shipments belonging to merchants
+    |     assigned to their branch.
+    |
+    */
+
+        if (! $isSuperAdmin) {
+            $branchId =
+            $user?->branch_id ??
+            $user?->default_branch_id ??
+            $user?->branch?->id ??
+            $user?->default_branch?->id;
+
+            /*
+         * No branch assigned:
+         * Never return the global shipment list.
+         */
+            if (! $branchId) {
+                return ApiResponse::success([
+                    'data'         => [],
+                    'current_page' => 1,
+                    'per_page'     => (int) $request->get('per_page', 20),
+                    'total'        => 0,
+                    'last_page'    => 1,
+                ]);
+            }
+
+            /*
+         * Scope shipments through their merchant.
+         */
+            $query->whereHas(
+                'merchant',
+                function ($merchantQuery) use ($branchId) {
+                    $merchantQuery->where(
+                        'default_branch_id',
+                        $branchId
+                    );
+                }
+            );
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | Status Filter
+    |--------------------------------------------------------------------------
+    */
+
+        if ($request->filled('status')) {
+            $query->where(
+                'status',
+                $request->input('status')
+            );
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | Search
+    |--------------------------------------------------------------------------
+    |
+    | Supports:
+    |
+    | ?search=...
+    | ?q=...
+    |
+    */
+
+        $search = $request->input(
+            'search',
+            $request->input('q')
+        );
+
+        if (
+            is_string($search) &&
+            trim($search) !== ''
+        ) {
+            $search = trim($search);
+
+            $query->where(function ($q) use ($search) {
+
+                $q->where(
+                    'tracking_number',
+                    'like',
+                    "%{$search}%"
+                )
+                    ->orWhere(
+                        'reference_number',
+                        'like',
+                        "%{$search}%"
+                    )
+                    ->orWhereHas(
+                        'merchant',
+                        function ($merchantQuery) use ($search) {
+                            $merchantQuery
+                                ->where(
+                                    'name',
+                                    'like',
+                                    "%{$search}%"
+                                )
+                                ->orWhere(
+                                    'code',
+                                    'like',
+                                    "%{$search}%"
+                                )
+                                ->orWhere(
+                                    'phone',
+                                    'like',
+                                    "%{$search}%"
+                                );
+                        }
+                    );
             });
         }
 
+        /*
+    |--------------------------------------------------------------------------
+    | Pagination
+    |--------------------------------------------------------------------------
+    */
+
+        $perPage = (int) $request->get(
+            'per_page',
+            20
+        );
+
+        $perPage = max(
+            1,
+            min($perPage, 100)
+        );
+
+        $shipments = $query->paginate(
+            $perPage
+        );
+
         return ApiResponse::success(
-            $query->paginate((int) $request->get('per_page', 20))
+            $shipments
         );
     }
 
@@ -53,7 +202,7 @@ class MerchantShipmentController extends Controller
     ) {
         $merchant = $request->user()->merchant;
 
-        if (!$merchant) {
+        if (! $merchant) {
             return ApiResponse::error('Merchant account not found.', 404);
         }
 
@@ -66,30 +215,30 @@ class MerchantShipmentController extends Controller
         $rate = $rateCalculator->calculate($data, $merchant->id);
 
         $deliveryCharge = (float) ($rate['delivery_charge'] ?? 0);
-        $codCharge = (float) ($rate['pod_charge'] ?? 0);
+        $codCharge      = (float) ($rate['pod_charge'] ?? 0);
 
         $paymentType = $data['payment_type'] ?? 'prepaid';
-        $codAmount = (float) ($data['pod_amount'] ?? 0);
-        $paidBy = $data['delivery_charge_paid_by'] ?? 'customer';
+        $codAmount   = (float) ($data['pod_amount'] ?? 0);
+        $paidBy      = $data['delivery_charge_paid_by'] ?? 'customer';
 
         $totalCollectable = $paymentType === 'pod'
             ? $codAmount + ($paidBy === 'customer' ? $deliveryCharge : 0)
             : ($paidBy === 'customer' ? $deliveryCharge : 0);
 
         return ApiResponse::success([
-            'merchant_order_id' => $data['merchant_order_id'],
-            'service_type' => [
+            'merchant_order_id'        => $data['merchant_order_id'],
+            'service_type'             => [
                 'code' => $data['service_type'] ?? 'standard',
                 'name' => $this->serviceTypeLabel($data['service_type'] ?? 'standard'),
             ],
-            'delivery_charge' => $deliveryCharge,
-            'pod_charge' => $codCharge,
-            'final_delivery_fee' => $deliveryCharge + $codCharge,
-            'pod_amount' => $codAmount,
+            'delivery_charge'          => $deliveryCharge,
+            'pod_charge'               => $codCharge,
+            'final_delivery_fee'       => $deliveryCharge + $codCharge,
+            'pod_amount'               => $codAmount,
             'total_collectable_amount' => $totalCollectable,
-            'payment_type' => $paymentType,
-            'delivery_charge_paid_by' => $paidBy,
-            'breakdown' => $rate,
+            'payment_type'             => $paymentType,
+            'delivery_charge_paid_by'  => $paidBy,
+            'breakdown'                => $rate,
         ], 'Fare calculated successfully.');
     }
 
@@ -100,7 +249,7 @@ class MerchantShipmentController extends Controller
     ) {
         $merchant = $request->user()->merchant;
 
-        if (!$merchant) {
+        if (! $merchant) {
             return ApiResponse::error('Merchant account not found.', 404);
         }
 
@@ -159,57 +308,57 @@ class MerchantShipmentController extends Controller
         $this->mergeFrontendAliases($request);
 
         return $request->validate([
-            'merchant_order_id' => ['required', 'string', 'max:120'],
-            'order_source' => ['nullable', 'string', 'max:60'],
+            'merchant_order_id'       => ['required', 'string', 'max:120'],
+            'order_source'            => ['nullable', 'string', 'max:60'],
 
-            'pickup_location_id' => [
+            'pickup_location_id'      => [
                 'required',
                 'integer',
                 'exists:merchant_pickup_locations,id',
             ],
 
-            'pickup_name' => ['nullable', 'string', 'max:150'],
-            'pickup_phone' => ['nullable', 'string', 'max:30'],
-            'pickup_address' => ['nullable', 'string', 'max:500'],
-            'pickup_city' => ['nullable', 'string', 'max:120'],
-            'pickup_area' => ['nullable', 'string', 'max:120'],
-            'pickup_lat' => ['nullable', 'numeric', 'between:-90,90'],
-            'pickup_lng' => ['nullable', 'numeric', 'between:-180,180'],
+            'pickup_name'             => ['nullable', 'string', 'max:150'],
+            'pickup_phone'            => ['nullable', 'string', 'max:30'],
+            'pickup_address'          => ['nullable', 'string', 'max:500'],
+            'pickup_city'             => ['nullable', 'string', 'max:120'],
+            'pickup_area'             => ['nullable', 'string', 'max:120'],
+            'pickup_lat'              => ['nullable', 'numeric', 'between:-90,90'],
+            'pickup_lng'              => ['nullable', 'numeric', 'between:-180,180'],
 
-            'sender_name' => ['nullable', 'string', 'max:150'],
-            'sender_phone' => ['nullable', 'string', 'max:30'],
+            'sender_name'             => ['nullable', 'string', 'max:150'],
+            'sender_phone'            => ['nullable', 'string', 'max:30'],
 
-            'customer_name' => ['required', 'string', 'max:150'],
-            'customer_phone' => ['required', 'string', 'max:30'],
-            'customer_email' => ['nullable', 'email', 'max:150'],
-            'customer_address' => ['required', 'string', 'max:500'],
-            'customer_city' => ['required', 'string', 'max:120'],
-            'customer_area' => ['nullable', 'string', 'max:120'],
+            'customer_name'           => ['required', 'string', 'max:150'],
+            'customer_phone'          => ['required', 'string', 'max:30'],
+            'customer_email'          => ['nullable', 'email', 'max:150'],
+            'customer_address'        => ['required', 'string', 'max:500'],
+            'customer_city'           => ['required', 'string', 'max:120'],
+            'customer_area'           => ['nullable', 'string', 'max:120'],
 
-            'delivery_lat' => ['required', 'numeric', 'between:-90,90'],
-            'delivery_lng' => ['required', 'numeric', 'between:-180,180'],
+            'delivery_lat'            => ['required', 'numeric', 'between:-90,90'],
+            'delivery_lng'            => ['required', 'numeric', 'between:-180,180'],
 
-            'service_type' => ['required', 'string', 'in:standard,express,same_day'],
+            'service_type'            => ['required', 'string', 'in:standard,express,same_day'],
 
-            'items' => ['required', 'array', 'min:1'],
-            'items.*.name' => ['required', 'string', 'max:255'],
-            'items.*.quantity' => ['required', 'integer', 'min:1'],
-            'items.*.value' => ['nullable', 'numeric', 'min:0'],
+            'items'                   => ['required', 'array', 'min:1'],
+            'items.*.name'            => ['required', 'string', 'max:255'],
+            'items.*.quantity'        => ['required', 'integer', 'min:1'],
+            'items.*.value'           => ['nullable', 'numeric', 'min:0'],
 
-            'parcel_type' => ['nullable', 'string', 'max:50'],
-            'product_description' => ['nullable', 'string', 'max:1000'],
-            'quantity' => ['nullable', 'integer', 'min:1'],
-            'weight' => ['required', 'numeric', 'min:0.1'],
-            'declared_value' => ['nullable', 'numeric', 'min:0'],
-            'fragile' => ['nullable', 'boolean'],
+            'parcel_type'             => ['nullable', 'string', 'max:50'],
+            'product_description'     => ['nullable', 'string', 'max:1000'],
+            'quantity'                => ['nullable', 'integer', 'min:1'],
+            'weight'                  => ['required', 'numeric', 'min:0.1'],
+            'declared_value'          => ['nullable', 'numeric', 'min:0'],
+            'fragile'                 => ['nullable', 'boolean'],
 
-            'payment_type' => ['required', 'in:pod,prepaid'],
-            'pod_amount' => ['nullable', 'numeric', 'min:0'],
+            'payment_type'            => ['required', 'in:pod,prepaid'],
+            'pod_amount'              => ['nullable', 'numeric', 'min:0'],
             'delivery_charge_paid_by' => ['nullable', 'in:customer,merchant'],
 
-            'self_drop' => ['nullable', 'boolean'],
-            'special_instructions' => ['nullable', 'string', 'max:1000'],
-            'remarks' => ['nullable', 'string', 'max:1000'],
+            'self_drop'               => ['nullable', 'boolean'],
+            'special_instructions'    => ['nullable', 'string', 'max:1000'],
+            'remarks'                 => ['nullable', 'string', 'max:1000'],
         ]);
     }
 
@@ -225,7 +374,7 @@ class MerchantShipmentController extends Controller
 
         $itemsValue = collect($items)->sum(function ($item) {
             $quantity = (int) ($item['quantity'] ?? 1);
-            $value = (float) ($item['value'] ?? 0);
+            $value    = (float) ($item['value'] ?? 0);
 
             return $quantity * $value;
         });
@@ -241,49 +390,49 @@ class MerchantShipmentController extends Controller
             ?: implode(', ', $itemNames);
 
         $request->merge([
-            'customer_name' => $request->input('customer_name')
+            'customer_name'           => $request->input('customer_name')
                 ?: $request->input('receiver_name'),
 
-            'customer_phone' => $request->input('customer_phone')
+            'customer_phone'          => $request->input('customer_phone')
                 ?: $request->input('receiver_phone'),
 
-            'customer_email' => $request->input('customer_email')
+            'customer_email'          => $request->input('customer_email')
                 ?: $request->input('receiver_email'),
 
-            'customer_address' => $request->input('customer_address')
+            'customer_address'        => $request->input('customer_address')
                 ?: $request->input('delivery_address'),
 
-            'customer_city' => $request->input('customer_city')
+            'customer_city'           => $request->input('customer_city')
                 ?: $request->input('delivery_city'),
 
-            'customer_area' => $request->input('customer_area')
+            'customer_area'           => $request->input('customer_area')
                 ?: $request->input('delivery_area'),
 
-            'delivery_lat' => $request->input('delivery_lat')
+            'delivery_lat'            => $request->input('delivery_lat')
                 ?: $request->input('delivery_latitude'),
 
-            'delivery_lng' => $request->input('delivery_lng')
+            'delivery_lng'            => $request->input('delivery_lng')
                 ?: $request->input('delivery_longitude'),
 
-            'weight' => $request->input('weight')
+            'weight'                  => $request->input('weight')
                 ?: $request->input('package_weight')
                 ?: $request->input('parcel_weight'),
 
-            'declared_value' => $request->input('declared_value')
+            'declared_value'          => $request->input('declared_value')
                 ?: $request->input('package_value')
                 ?: $request->input('parcel_value')
                 ?: $itemsValue,
 
-            'product_description' => $productDescription,
+            'product_description'     => $productDescription,
 
-            'quantity' => $request->input('quantity') ?: max($totalQuantity, 1),
+            'quantity'                => $request->input('quantity') ?: max($totalQuantity, 1),
 
-            'parcel_type' => $request->input('parcel_type') ?: 'product',
+            'parcel_type'             => $request->input('parcel_type') ?: 'product',
 
             'delivery_charge_paid_by' => $request->input('delivery_charge_paid_by')
                 ?: 'customer',
 
-            'remarks' => $request->input('remarks')
+            'remarks'                 => $request->input('remarks')
                 ?: $request->input('special_instructions'),
         ]);
     }
@@ -291,9 +440,9 @@ class MerchantShipmentController extends Controller
     private function serviceTypeLabel(string $serviceType): string
     {
         return match ($serviceType) {
-            'express' => 'Express Delivery',
+            'express'  => 'Express Delivery',
             'same_day' => 'Same Day Delivery',
-            default => 'Standard Delivery',
+            default    => 'Standard Delivery',
         };
     }
 }

@@ -21,15 +21,10 @@ class MerchantController extends Controller
         ])->latest();
 
         /*
-        |--------------------------------------------------------------------------
-        | Branch Scope
-        |--------------------------------------------------------------------------
-        |
-        | Super admin has global access.
-        |
-        | Every other authenticated admin user must have a branch_id.
-        |
-        */
+    |--------------------------------------------------------------------------
+    | Determine Super Admin
+    |--------------------------------------------------------------------------
+    */
 
         $isSuperAdmin =
         $user?->is_super_admin === true ||
@@ -45,10 +40,22 @@ class MerchantController extends Controller
             true
         );
 
+        /*
+    |--------------------------------------------------------------------------
+    | Branch Scope
+    |--------------------------------------------------------------------------
+    |
+    | Super admin:
+    |     sees ALL merchants.
+    |
+    | Branch manager:
+    |     sees ONLY merchants whose
+    |     default_branch_id matches
+    |     the authenticated user's branch.
+    |
+    */
+
         if (! $isSuperAdmin) {
-            /*
-             * Determine the user's branch.
-             */
             $branchId =
             $user?->branch_id ??
             $user?->default_branch_id ??
@@ -56,27 +63,39 @@ class MerchantController extends Controller
             $user?->default_branch?->id;
 
             /*
-             * No branch means no merchants.
-             *
-             * This is safer than accidentally returning
-             * the global merchant list.
-             */
+        |--------------------------------------------------------------------------
+        | No branch
+        |--------------------------------------------------------------------------
+        |
+        | Never expose the global merchant list.
+        |
+        */
+
             if (! $branchId) {
+                $perPage = max(
+                    1,
+                    min(
+                        (int) $request->get(
+                            'per_page',
+                            20
+                        ),
+                        100
+                    )
+                );
+
                 return ApiResponse::success(
-                    [
-                        'data'         => [],
-                        'current_page' => 1,
-                        'per_page'     => (int) $request->get('per_page', 20),
-                        'total'        => 0,
-                        'last_page'    => 1,
-                    ],
-                    'No branch is assigned to this account.'
+                    $query
+                        ->whereRaw('1 = 0')
+                        ->paginate($perPage)
                 );
             }
 
             /*
-             * Branch-scoped merchant query.
-             */
+        |--------------------------------------------------------------------------
+        | Branch restriction
+        |--------------------------------------------------------------------------
+        */
+
             $query->where(
                 'default_branch_id',
                 $branchId
@@ -84,37 +103,33 @@ class MerchantController extends Controller
         }
 
         /*
-        |--------------------------------------------------------------------------
-        | Status Filter
-        |--------------------------------------------------------------------------
-        */
+    |--------------------------------------------------------------------------
+    | Status Filter
+    |--------------------------------------------------------------------------
+    */
 
         if ($request->filled('status')) {
             $query->where(
                 'status',
-                $request->status
+                $request->input('status')
             );
         }
 
         /*
-        |--------------------------------------------------------------------------
-        | Search
-        |--------------------------------------------------------------------------
-        |
-        | Support both:
-        |
-        | ?search=Kathmandu
-        |
-        | and the existing:
-        |
-        | ?q=Kathmandu
-        |
-        */
+    |--------------------------------------------------------------------------
+    | Search
+    |--------------------------------------------------------------------------
+    |
+    | Supports:
+    |
+    | ?search=abc
+    | ?q=abc
+    |
+    */
 
-        $search = $request->input(
-            'search',
-            $request->input('q')
-        );
+        $search =
+        $request->input('search') ??
+        $request->input('q');
 
         if (
             is_string($search) &&
@@ -122,55 +137,55 @@ class MerchantController extends Controller
         ) {
             $search = trim($search);
 
-            $query->where(function ($q) use ($search) {
-                $q->where(
-                    'name',
-                    'like',
-                    "%{$search}%"
-                )
-                    ->orWhere(
-                        'code',
-                        'like',
-                        "%{$search}%"
-                    )
-                    ->orWhere(
-                        'phone',
-                        'like',
-                        "%{$search}%"
-                    )
-                    ->orWhere(
-                        'email',
-                        'like',
-                        "%{$search}%"
-                    )
-                    ->orWhere(
-                        'owner_name',
-                        'like',
-                        "%{$search}%"
-                    );
-            });
+            $query->where(
+                function ($q) use ($search) {
+
+                    $q
+                        ->where(
+                            'name',
+                            'like',
+                            "%{$search}%"
+                        )
+                        ->orWhere(
+                            'code',
+                            'like',
+                            "%{$search}%"
+                        )
+                        ->orWhere(
+                            'phone',
+                            'like',
+                            "%{$search}%"
+                        )
+                        ->orWhere(
+                            'email',
+                            'like',
+                            "%{$search}%"
+                        );
+                }
+            );
         }
 
         /*
-        |--------------------------------------------------------------------------
-        | Pagination
-        |--------------------------------------------------------------------------
-        */
+    |--------------------------------------------------------------------------
+    | Pagination
+    |--------------------------------------------------------------------------
+    */
 
         $perPage = (int) $request->get(
             'per_page',
             20
         );
 
-        /*
-         * Prevent unreasonable page sizes.
-         */
         $perPage = max(
             1,
-            min($perPage, 100)
+            min(
+                $perPage,
+                100
+            )
         );
 
-        $merchants = $query->paginate(
+        $merchants =
+        $query->paginate(
             $perPage
         );
 

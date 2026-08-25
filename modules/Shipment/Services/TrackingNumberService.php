@@ -8,7 +8,7 @@ class TrackingNumberService
 {
     public function generate(): string
     {
-        return 'TKT-'
+        return 'Tex-'
             . now()->format('Ymd')
             . '-'
             . strtoupper(

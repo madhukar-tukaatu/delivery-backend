@@ -8,7 +8,7 @@ class ShipmentNumberService
 {
     public function generate(): string
     {
-        return 'TKT-'
+        return 'TEX-'
             . now()->format('Ymd')
             . '-'
             . strtoupper(

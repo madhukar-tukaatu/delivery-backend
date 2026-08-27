@@ -160,9 +160,9 @@ Route::prefix('v1/merchant')
 
 Route::prefix('v1/gateway')
     ->name('gateway.')
-    ->middleware([
-        'merchant.api-key',
-    ])
+    // ->middleware([
+    //     'merchant.api-key',
+    // ])
     ->group(function () {
 
         /*

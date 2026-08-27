@@ -1,33 +1,102 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Modules\Pickup\Models;
 
-use App\Models\User;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Modules\Branch\Models\Branch;
 use Modules\Merchant\Models\Merchant;
-use Modules\Shipment\Models\Shipment;
+use Modules\Merchant\Models\MerchantPickupLocation;
+use Modules\Pickup\Support\PickupStatus;
 
-class PickupRequest extends Model
+final class PickupRequest extends Model
 {
-    protected $guarded = [];
+    protected $table = 'pickup_requests';
+
+    protected $fillable = [
+        'request_number',
+
+        'merchant_id',
+
+        'branch_id',
+        'sub_branch_id',
+
+        'shipment_id',
+
+        'pickup_branch_id',
+        'pickup_sub_branch_id',
+
+        'assigned_to',
+        'picked_up_by',
+
+        'pickup_name',
+        'pickup_phone',
+        'pickup_address',
+        'pickup_city',
+        'pickup_area',
+
+        'pickup_lat',
+        'pickup_lng',
+
+        'preferred_pickup_at',
+
+        'parcel_quantity',
+
+        'status',
+
+        'remarks',
+
+        'requested_at',
+        'assigned_at',
+        'picked_up_at',
+        'failed_at',
+        'failed_reason',
+
+        'pickup_location_id',
+
+        'accepted_at',
+        'received_at_origin_at',
+
+        'assigned_by',
+        'arrived_at',
+        'completed_at',
+        'cancelled_at',
+    ];
 
     protected $casts = [
+        'pickup_lat' => 'float',
+        'pickup_lng' => 'float',
+
         'preferred_pickup_at' => 'datetime',
+
         'requested_at' => 'datetime',
         'assigned_at' => 'datetime',
-        'rider_arrived_at' => 'datetime',
-        'collection_started_at' => 'datetime',
+        'picked_up_at' => 'datetime',
+        'failed_at' => 'datetime',
+        'accepted_at' => 'datetime',
+        'received_at_origin_at' => 'datetime',
+        'arrived_at' => 'datetime',
         'completed_at' => 'datetime',
+        'cancelled_at' => 'datetime',
+
+        'parcel_quantity' => 'integer',
     ];
+
+    /*
+    |--------------------------------------------------------------------------
+    | Relationships
+    |--------------------------------------------------------------------------
+    */
 
     public function merchant(): BelongsTo
     {
         return $this->belongsTo(
-            Merchant::class
+            Merchant::class,
+            'merchant_id'
         );
     }
 
@@ -47,37 +116,126 @@ class PickupRequest extends Model
         );
     }
 
-    public function shipments(): BelongsToMany
+    public function pickupBranch(): BelongsTo
     {
-        return $this->belongsToMany(
-            Shipment::class,
-            'pickup_request_shipments'
-        )
-            ->withPivot([
-                'added_at',
-                'added_by',
-                'removed_at',
-                'removed_by',
-                'collection_status',
-                'collected_at',
-                'collected_by',
-                'remarks',
-            ])
-            ->withTimestamps();
+        return $this->belongsTo(
+            Branch::class,
+            'pickup_branch_id'
+        );
+    }
+
+    public function pickupSubBranch(): BelongsTo
+    {
+        return $this->belongsTo(
+            Branch::class,
+            'pickup_sub_branch_id'
+        );
+    }
+
+    public function pickupLocation(): BelongsTo
+    {
+        return $this->belongsTo(
+            MerchantPickupLocation::class,
+            'pickup_location_id'
+        );
     }
 
     public function assignedStaff(): BelongsTo
     {
         return $this->belongsTo(
-            User::class,
+            \App\Models\User::class,
             'assigned_to'
         );
     }
 
-    public function attempts(): HasMany
+    public function assignedBy(): BelongsTo
+    {
+        return $this->belongsTo(
+            \App\Models\User::class,
+            'assigned_by'
+        );
+    }
+
+    public function pickedUpBy(): BelongsTo
+    {
+        return $this->belongsTo(
+            \App\Models\User::class,
+            'picked_up_by'
+        );
+    }
+
+    public function shipments(): HasMany
     {
         return $this->hasMany(
-            PickupAttempt::class
+            PickupRequestShipment::class,
+            'pickup_request_id'
         );
+    }
+
+    public function activeShipments(): HasMany
+    {
+        return $this->hasMany(
+            PickupRequestShipment::class,
+            'pickup_request_id'
+        )->whereNull('removed_at');
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Scopes
+    |--------------------------------------------------------------------------
+    */
+
+    public function scopeActive(
+        Builder $query
+    ): Builder {
+        return $query->whereIn(
+            'status',
+            PickupStatus::active()
+        );
+    }
+
+    public function scopeAcceptingShipments(
+        Builder $query
+    ): Builder {
+        return $query->whereIn(
+            'status',
+            PickupStatus::acceptingShipments()
+        );
+    }
+
+    public function scopeForMerchant(
+        Builder $query,
+        int $merchantId
+    ): Builder {
+        return $query->where(
+            'merchant_id',
+            $merchantId
+        );
+    }
+
+    public function scopeForBranch(
+        Builder $query,
+        int $branchId
+    ): Builder {
+        return $query->where(function (Builder $q) use ($branchId) {
+
+            $q->where(
+                'branch_id',
+                $branchId
+            )
+            ->orWhere(
+                'sub_branch_id',
+                $branchId
+            )
+            ->orWhere(
+                'pickup_branch_id',
+                $branchId
+            )
+            ->orWhere(
+                'pickup_sub_branch_id',
+                $branchId
+            );
+        });
     }
 }

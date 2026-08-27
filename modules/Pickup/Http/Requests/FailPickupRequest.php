@@ -6,7 +6,7 @@ namespace Modules\Pickup\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
 
-final class AddShipmentToPickupRequest extends FormRequest
+final class FailPickupRequest extends FormRequest
 {
     public function authorize(): bool
     {
@@ -16,16 +16,10 @@ final class AddShipmentToPickupRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'shipment_id' => [
+            'reason' => [
                 'required',
-                'integer',
-                'exists:shipments,id',
-            ],
-
-            'remarks' => [
-                'nullable',
                 'string',
-                'max:500',
+                'max:1000',
             ],
         ];
     }

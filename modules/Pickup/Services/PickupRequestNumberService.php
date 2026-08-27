@@ -1,22 +1,16 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Modules\Pickup\Services;
 
-use Illuminate\Support\Str;
-
-class PickupRequestNumberService
+final class PickupRequestNumberService
 {
-    public function generate(): string
+    public function generate(int $id): string
     {
-        return 'PR-' .
-            now()->format('Ymd') .
-            '-' .
-            strtoupper(
-                Str::padLeft(
-                    (string) random_int(1, 999999),
-                    6,
-                    '0'
-                )
-            );
+        return sprintf(
+            'PICKUP-REQ-%06d',
+            $id
+        );
     }
 }

@@ -26,7 +26,7 @@ use Modules\Pickup\Http\Controllers\PickupController;
 Route::prefix('v1/gateway')
     ->name('gateway.')
     ->middleware([
-        'tukaatu.gateway',
+         'merchant.api-key',
     ])
     ->group(function () {
 

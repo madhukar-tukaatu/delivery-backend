@@ -8,56 +8,70 @@ final class PickupStatus
 {
     public const REQUESTED = 'requested';
 
-    public const ASSIGNED = 'assigned';
+    public const RIDER_ASSIGNED = 'rider_assigned';
 
-    public const STARTED = 'started';
+    public const RIDER_STARTED = 'rider_started';
 
-    public const ARRIVED = 'arrived';
+    public const RIDER_ARRIVED = 'rider_arrived';
 
     public const COLLECTING = 'collecting';
-
-    public const COLLECTED = 'collected';
-
-    public const RECEIVED = 'received';
 
     public const COMPLETED = 'completed';
 
     public const FAILED = 'failed';
 
+    public const RESCHEDULED = 'rescheduled';
+
     public const CANCELLED = 'cancelled';
 
     /**
-     * Pickup requests which are operationally active.
+     * Pickup is still operationally open.
+     *
+     * IMPORTANT:
+     *
+     * A rider being assigned does NOT close the pickup.
+     * A rider starting does NOT close the pickup.
+     *
+     * The pickup remains open until the rider reaches
+     * the store / collection starts.
      */
+    public static function open(): array
+    {
+        return [
+            self::REQUESTED,
+            self::RIDER_ASSIGNED,
+            self::RIDER_STARTED,
+        ];
+    }
+
+    /**
+     * Pickup is active but shipment addition is no longer allowed.
+     */
+    public static function locked(): array
+    {
+        return [
+            self::RIDER_ARRIVED,
+            self::COLLECTING,
+        ];
+    }
+
     public static function active(): array
     {
         return [
             self::REQUESTED,
-            self::ASSIGNED,
-            self::STARTED,
-            self::ARRIVED,
+            self::RIDER_ASSIGNED,
+            self::RIDER_STARTED,
+            self::RIDER_ARRIVED,
             self::COLLECTING,
-            self::COLLECTED,
         ];
     }
 
-    /**
-     * Pickup requests which may still accept shipments.
-     */
-    public static function acceptingShipments(): array
+    public static function closed(): array
     {
         return [
-            self::REQUESTED,
-            self::ASSIGNED,
-        ];
-    }
-
-    public static function terminal(): array
-    {
-        return [
-            self::RECEIVED,
             self::COMPLETED,
             self::FAILED,
+            self::RESCHEDULED,
             self::CANCELLED,
         ];
     }

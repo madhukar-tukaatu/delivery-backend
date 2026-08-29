@@ -1,6 +1,6 @@
 <?php
 
-declare(strict_types=1);
+declare (strict_types = 1);
 
 namespace Modules\Pickup\Http\Controllers;
 
@@ -27,20 +27,10 @@ final class GatewayPickupController extends Controller
         GatewayCreatePickupRequest $request
     ): JsonResponse {
 
-        /*
-        |--------------------------------------------------------------------------
-        | Merchant authentication
-        |--------------------------------------------------------------------------
-        |
-        | Your X-Tukaatu-Key / X-Tukaatu-Secret middleware should put
-        | merchant_id into request attributes.
-        |
-        */
-
         $merchantId =
-            (int) $request
-                ->attributes
-                ->get('merchant_id');
+        (int) $request
+            ->attributes
+            ->get('merchant_id');
 
         abort_unless(
             $merchantId > 0,
@@ -51,10 +41,10 @@ final class GatewayPickupController extends Controller
         try {
 
             $pickup =
-                $this->pickupService->create(
-                    merchantId: $merchantId,
-                    data: $request->validated(),
-                );
+            $this->pickupService->create(
+                merchantId: $merchantId,
+                data: $request->validated(),
+            );
 
             return ApiResponse::success(
                 $pickup,
@@ -68,10 +58,10 @@ final class GatewayPickupController extends Controller
                 'success' => false,
 
                 'message' =>
-                    'Pickup request validation failed.',
+                'Pickup request validation failed.',
 
-                'errors' =>
-                    $e->errors(),
+                'errors'  =>
+                $e->errors(),
 
             ], 422);
 
@@ -83,17 +73,16 @@ final class GatewayPickupController extends Controller
                 'success' => false,
 
                 'message' =>
-                    'Unable to create pickup request.',
+                'Unable to create pickup request.',
 
-                'errors' => [
+                'errors'  => [
                     'exception' =>
-                        $e->getMessage(),
+                    $e->getMessage(),
                 ],
 
             ], 422);
         }
     }
-
     /**
      * Get pickup request.
      */
@@ -103,9 +92,9 @@ final class GatewayPickupController extends Controller
     ): JsonResponse {
 
         $merchantId =
-            (int) $request
-                ->attributes
-                ->get('merchant_id');
+        (int) $request
+            ->attributes
+            ->get('merchant_id');
 
         abort_unless(
             $merchantId > 0,
@@ -114,23 +103,23 @@ final class GatewayPickupController extends Controller
         );
 
         $pickup =
-            \Modules\Pickup\Models\PickupRequest::query()
-                ->where(
-                    'merchant_id',
-                    $merchantId
-                )
-                ->where(
-                    'request_number',
-                    $requestNumber
-                )
-                ->with([
-                    'pickupLocation',
-                    'pickupBranch',
-                    'pickupSubBranch',
-                    'assignedStaff',
-                    'shipments.shipment',
-                ])
-                ->firstOrFail();
+        \Modules\Pickup\Models\PickupRequest::query()
+            ->where(
+                'merchant_id',
+                $merchantId
+            )
+            ->where(
+                'request_number',
+                $requestNumber
+            )
+            ->with([
+                'pickupLocation',
+                'pickupBranch',
+                'pickupSubBranch',
+                'assignedStaff',
+                'shipments.shipment',
+            ])
+            ->firstOrFail();
 
         return ApiResponse::success(
             $pickup,

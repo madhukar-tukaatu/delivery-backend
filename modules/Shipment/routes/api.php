@@ -100,7 +100,6 @@ Route::prefix('v1/admin')
         });
     });
 
-
 /*
 |--------------------------------------------------------------------------
 | Tukaatu Internal Merchant Routes
@@ -135,7 +134,6 @@ Route::prefix('v1/merchant')
         });
     });
 
-
 /*
 |--------------------------------------------------------------------------
 | External Store Manager / Integration Routes
@@ -165,36 +163,28 @@ Route::prefix('v1/gateway')
     ])
     ->group(function () {
 
-        /*
-        |--------------------------------------------------------------------------
-        | Create Shipment
-        |--------------------------------------------------------------------------
-        */
-
         Route::post(
             'shipments',
             [GatewayShipmentController::class, 'store']
         )->name('shipments.store');
-
-        /*
-        |--------------------------------------------------------------------------
-        | Get Shipment
-        |--------------------------------------------------------------------------
-        */
 
         Route::get(
             'shipments/{trackingNumber}',
             [GatewayShipmentController::class, 'show']
         )->name('shipments.show');
 
-        /*
-        |--------------------------------------------------------------------------
-        | Cancel Shipment
-        |--------------------------------------------------------------------------
-        */
-
         Route::post(
             'shipments/{trackingNumber}/cancel',
             [GatewayShipmentController::class, 'cancel']
         )->name('shipments.cancel');
+
+        Route::post(
+            'pickups',
+            [GatewayPickupController::class, 'store']
+        )->name('pickups.store');
+
+        Route::get(
+            'pickups/{requestNumber}',
+            [GatewayPickupController::class, 'show']
+        )->name('pickups.show');
     });

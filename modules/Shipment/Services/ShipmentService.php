@@ -5,54 +5,40 @@ declare(strict_types=1);
 namespace Modules\Shipment\Services;
 
 use App\Support\CourierStatus;
-use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Modules\Merchant\Models\Merchant;
+use Modules\Pickup\Services\ShipmentPickupAttachmentService;
 use Modules\Shipment\Models\Shipment;
 
 final class ShipmentService
 {
-    /**
-     * Service assignment cutoff.
-     *
-     * Express and Same Day orders must be assigned
-     * to Tukaatu before 11:00 Nepal time.
-     */
-    private const SERVICE_ASSIGNMENT_CUTOFF = '11:00';
-
     public function __construct(
         private readonly MerchantPickupLocationResolver $pickupResolver,
         private readonly BranchAssignmentService $branchAssignment,
         private readonly ShipmentNumberService $shipmentNumberService,
+        private readonly ShipmentPickupAttachmentService $pickupAttachmentService,
     ) {
     }
 
     /**
      * Create shipment from external Store Manager.
      *
-     * External store:
-     *
-     *     Store order
-     *          ↓
-     *     Assign to Tukaatu
-     *          ↓
-     *     Gateway
-     *          ↓
-     *     Shipment
-     *          ↓
-     *     Tracking number
-     *          ↓
-     *     AWAITING_PICKUP
-     *
      * IMPORTANT:
      *
-     * Express / Same Day assignment cutoff:
+     * Shipment creation is NOT blocked by pickup cutoff time.
      *
-     *     Before 11:00 AM
+     * A shipment can be created:
      *
-     * Pickup cutoff is handled separately
-     * by the Pickup module.
+     * - before pickup assignment
+     * - after pickup assignment
+     * - while rider is travelling
+     * - while rider is at store
+     *
+     * If an active pickup already exists for the same merchant +
+     * pickup location, the shipment is attached to that pickup.
+     *
+     * If no active pickup exists, the Pickup module creates one.
      */
     public function createFromGateway(
         int $merchantId,
@@ -74,17 +60,13 @@ final class ShipmentService
         }
 
         /*
-        |--------------------------------------------------------------------------
-        | Validate service assignment cutoff
-        |--------------------------------------------------------------------------
-        |
-        | This happens BEFORE creating the shipment.
-        |
-        */
-
-        $this->validateServiceAssignmentCutoff(
-            serviceType: $data['service_type'] ?? null
-        );
+         * IMPORTANT:
+         *
+         * There is intentionally NO pickup cutoff validation here.
+         *
+         * The store is allowed to create shipments until the
+         * existing pickup is completed/closed.
+         */
 
         $packet = $data['packet'] ?? null;
 
@@ -135,10 +117,11 @@ final class ShipmentService
                 |--------------------------------------------------------------------------
                 */
 
-                $pickupLocation = $this->pickupResolver->resolve(
-                    $merchant,
-                    $data
-                );
+                $pickupLocation =
+                    $this->pickupResolver->resolve(
+                        $merchant,
+                        $data
+                    );
 
                 if (! $pickupLocation) {
                     throw ValidationException::withMessages([
@@ -275,20 +258,8 @@ final class ShipmentService
 
                 $shipmentData = [
 
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Tracking
-                    |--------------------------------------------------------------------------
-                    */
-
                     'tracking_number' =>
                         $trackingNumber,
-
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Merchant
-                    |--------------------------------------------------------------------------
-                    */
 
                     'merchant_id' =>
                         $merchant->id,
@@ -299,12 +270,6 @@ final class ShipmentService
                     'order_source' =>
                         'store_manager',
 
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Pickup
-                    |--------------------------------------------------------------------------
-                    */
-
                     'pickup_location_id' =>
                         $pickupLocation->id,
 
@@ -314,23 +279,11 @@ final class ShipmentService
                     'pickup_lng' =>
                         $pickupCoordinates['lng'],
 
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Origin
-                    |--------------------------------------------------------------------------
-                    */
-
                     'origin_branch_id' =>
                         $origin['branch_id'],
 
                     'origin_sub_branch_id' =>
                         $origin['sub_branch_id'],
-
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Receiver
-                    |--------------------------------------------------------------------------
-                    */
 
                     'receiver_name' =>
                         $data['receiver_name'],
@@ -340,12 +293,6 @@ final class ShipmentService
 
                     'receiver_email' =>
                         $data['receiver_email'] ?? null,
-
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Delivery
-                    |--------------------------------------------------------------------------
-                    */
 
                     'delivery_address' =>
                         $data['delivery_address'] ?? null,
@@ -362,32 +309,14 @@ final class ShipmentService
                     'delivery_lng' =>
                         $data['delivery_lng'],
 
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Destination
-                    |--------------------------------------------------------------------------
-                    */
-
                     'destination_branch_id' =>
                         $destination['branch_id'],
 
                     'destination_sub_branch_id' =>
                         $destination['sub_branch_id'],
 
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Service
-                    |--------------------------------------------------------------------------
-                    */
-
                     'service_type' =>
                         $data['service_type'],
-
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Packet
-                    |--------------------------------------------------------------------------
-                    */
 
                     'parcel_type' =>
                         $packet['parcel_type'],
@@ -407,20 +336,8 @@ final class ShipmentService
                     'fragile' =>
                         $packet['fragile'],
 
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Products
-                    |--------------------------------------------------------------------------
-                    */
-
                     'packet_products' =>
                         $packetProducts,
-
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Payment
-                    |--------------------------------------------------------------------------
-                    */
 
                     'payment_type' =>
                         $data['payment_type'],
@@ -428,20 +345,8 @@ final class ShipmentService
                     'delivery_charge_paid_by' =>
                         $data['delivery_charge_paid_by'],
 
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Pickup mode
-                    |--------------------------------------------------------------------------
-                    */
-
                     'self_drop' =>
                         $selfDrop,
-
-                    /*
-                    |--------------------------------------------------------------------------
-                    | Additional
-                    |--------------------------------------------------------------------------
-                    */
 
                     'special_instructions' =>
                         $data['special_instructions'] ?? null,
@@ -450,11 +355,8 @@ final class ShipmentService
                         $data['remarks'] ?? null,
 
                     /*
-                    |--------------------------------------------------------------------------
-                    | Initial status
-                    |--------------------------------------------------------------------------
-                    */
-
+                     * Shipment starts as awaiting pickup.
+                     */
                     'status' =>
                         CourierStatus::AWAITING_PICKUP,
                 ];
@@ -508,103 +410,39 @@ final class ShipmentService
                     oldStatus: null,
                     newStatus: CourierStatus::AWAITING_PICKUP,
                     description:
-                        'Shipment assigned to Tukaatu Express successfully. Awaiting pickup.'
+                        'Shipment created successfully. Awaiting pickup.'
                 );
+
+                /*
+                |--------------------------------------------------------------------------
+                | ATTACH TO PICKUP
+                |--------------------------------------------------------------------------
+                |
+                | This is the important part of the new workflow.
+                |
+                | The shipment does NOT ask the Store Manager to create
+                | another pickup.
+                |
+                | The Pickup module will:
+                |
+                | 1. Find existing open pickup.
+                | 2. Attach shipment to it.
+                | 3. Preserve the existing rider assignment.
+                | 4. Notify the rider.
+                | 5. Create a pickup only when no open pickup exists.
+                |
+                */
+
+                $this->pickupAttachmentService
+                    ->attachShipmentToActivePickup(
+                        shipment: $shipment,
+                        merchant: $merchant,
+                        pickupLocation: $pickupLocation,
+                    );
 
                 return $shipment->fresh();
             }
         );
-    }
-
-    /**
-     * Validate service assignment cutoff.
-     *
-     * Express:
-     *     Assignment must happen before 11:00.
-     *
-     * Same Day:
-     *     Assignment must happen before 11:00.
-     *
-     * Standard:
-     *     No service assignment cutoff.
-     *
-     * The application timezone should be Asia/Kathmandu.
-     */
-    private function validateServiceAssignmentCutoff(
-        ?string $serviceType
-    ): void {
-        if (! $serviceType) {
-            return;
-        }
-
-        $normalized = strtolower(
-            trim($serviceType)
-        );
-
-        /*
-        |--------------------------------------------------------------------------
-        | Services that require assignment before cutoff
-        |--------------------------------------------------------------------------
-        */
-
-        $cutoffServices = [
-            'express',
-            'same_day',
-            'same-day',
-            'sameday',
-        ];
-
-        if (! in_array(
-            $normalized,
-            $cutoffServices,
-            true
-        )) {
-            return;
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Nepal local time
-        |--------------------------------------------------------------------------
-        */
-
-        $now = Carbon::now(
-            config(
-                'app.timezone',
-                'Asia/Kathmandu'
-            )
-        );
-
-        $cutoff = Carbon::createFromFormat(
-            'Y-m-d H:i',
-            $now->format('Y-m-d') .
-            ' ' .
-            self::SERVICE_ASSIGNMENT_CUTOFF,
-            $now->getTimezone()
-        );
-
-        /*
-        |--------------------------------------------------------------------------
-        | Cutoff exceeded
-        |--------------------------------------------------------------------------
-        */
-
-        if ($now->greaterThanOrEqualTo($cutoff)) {
-            throw ValidationException::withMessages([
-                'service_type' => sprintf(
-                    '%s orders must be assigned to Tukaatu before %s. Current time is %s.',
-                    ucfirst(
-                        str_replace(
-                            '_',
-                            ' ',
-                            $normalized
-                        )
-                    ),
-                    $cutoff->format('h:i A'),
-                    $now->format('h:i A')
-                ),
-            ]);
-        }
     }
 
     /**
@@ -621,8 +459,7 @@ final class ShipmentService
         $packetProducts = [];
 
         foreach (
-            array_values($products)
-            as $index => $product
+            array_values($products) as $index => $product
         ) {
             $productNumber = $index + 1;
 

@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\Pickup\Http\Controllers\GatewayPickupController;
 use Modules\Shipment\Http\Controllers\Api\AdminNotificationController;
 use Modules\Shipment\Http\Controllers\Api\AdminShipmentTaskController;
 use Modules\Shipment\Http\Controllers\Api\MerchantShipmentController;

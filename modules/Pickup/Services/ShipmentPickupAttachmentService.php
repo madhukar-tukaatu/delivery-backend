@@ -16,39 +16,29 @@ final class ShipmentPickupAttachmentService
     /**
      * Attach a shipment to the merchant's currently active pickup.
      *
-     * Pickup grouping:
+     * Workflow:
      *
-     *     merchant
-     *          +
-     *     pickup location
+     * 1. Find an active pickup for this merchant + pickup location.
+     * 2. If one exists, attach the shipment to it.
+     * 3. If none exists, create a pickup request.
+     * 4. Attach the shipment to the new pickup.
      *
-     * This means:
-     *
-     * Store A / Location 1 -> Pickup A
-     * Store A / Location 2 -> Pickup B
-     * Store B / Location 1 -> Pickup C
-     *
-     * A shipment created while an active pickup exists
-     * is attached to that pickup.
-     *
-     * If no active pickup exists, a new pickup is created.
+     * There is no shipment creation cutoff.
      */
     public function attachShipmentToActivePickup(
         Shipment $shipment,
         Merchant $merchant,
         MerchantPickupLocation $pickupLocation,
-    ): PickupRequest {
-
+    ): void {
         /*
         |--------------------------------------------------------------------------
-        | Merchant ownership
+        | Validate ownership
         |--------------------------------------------------------------------------
         */
 
         if (
-            isset($pickupLocation->merchant_id)
-            &&
-            (int) $pickupLocation->merchant_id !== (int) $merchant->id
+            (int) $pickupLocation->merchant_id !==
+            (int) $merchant->id
         ) {
             throw ValidationException::withMessages([
                 'pickup_location_id' => [
@@ -57,294 +47,103 @@ final class ShipmentPickupAttachmentService
             ]);
         }
 
-        return DB::transaction(
-            function () use (
-                $shipment,
-                $merchant,
-                $pickupLocation
-            ): PickupRequest {
+        /*
+        |--------------------------------------------------------------------------
+        | Find active pickup
+        |--------------------------------------------------------------------------
+        |
+        | IMPORTANT:
+        |
+        | We intentionally do NOT use pickup_shipments.
+        |
+        | Shipments are related to pickups through:
+        |
+        | pickup_request_shipments
+        |
+        */
 
-                /*
-                |--------------------------------------------------------------------------
-                | Find existing active pickup
-                |--------------------------------------------------------------------------
-                */
+        $pickup = PickupRequest::query()
+            ->where('merchant_id', $merchant->id)
+            ->where(
+                'pickup_location_id',
+                $pickupLocation->id
+            )
+            ->whereIn('status', [
+                'pending',
+                'assigned',
+                'started',
+                'arrived',
+            ])
+            ->latest('id')
+            ->first();
 
-                $pickup = PickupRequest::query()
-                    ->where(
-                        'merchant_id',
-                        $merchant->id
-                    )
-                    ->where(
-                        'pickup_location_id',
-                        $pickupLocation->id
-                    )
-                    ->whereIn(
-                        'status',
-                        $this->attachableStatuses()
-                    )
-                    ->lockForUpdate()
-                    ->latest('id')
-                    ->first();
+        /*
+        |--------------------------------------------------------------------------
+        | Create pickup if no active pickup exists
+        |--------------------------------------------------------------------------
+        */
 
-                /*
-                |--------------------------------------------------------------------------
-                | Create pickup if none exists
-                |--------------------------------------------------------------------------
-                */
+        if (! $pickup) {
+            $pickup = $this->createPickup(
+                merchant: $merchant,
+                pickupLocation: $pickupLocation,
+            );
+        }
 
-                if (! $pickup) {
-                    $pickup = $this->createPickup(
-                        merchant: $merchant,
-                        pickupLocation: $pickupLocation,
-                    );
-                }
+        /*
+        |--------------------------------------------------------------------------
+        | Attach shipment
+        |--------------------------------------------------------------------------
+        */
 
-                /*
-                |--------------------------------------------------------------------------
-                | Attach shipment
-                |--------------------------------------------------------------------------
-                */
-
-                $this->attachShipment(
-                    pickup: $pickup,
-                    shipment: $shipment,
-                );
-
-                /*
-                |--------------------------------------------------------------------------
-                | Return fresh pickup
-                |--------------------------------------------------------------------------
-                */
-
-                return $pickup->fresh([
-                    'merchant',
-                    'branch',
-                    'subBranch',
-                    'pickupBranch',
-                    'pickupSubBranch',
-                    'pickupLocation',
-                    'assignedStaff',
-                    'shipments.shipment',
-                ]);
-            }
+        $this->attachShipment(
+            pickup: $pickup,
+            shipment: $shipment,
         );
     }
 
     /**
-     * Pickup statuses that can still receive new shipments.
-     */
-    private function attachableStatuses(): array
-    {
-        return [
-            'pending',
-            'assigned',
-            'accepted',
-            'started',
-            'on_the_way',
-            'arrived',
-        ];
-    }
-
-    /**
-     * Create a pickup request from MerchantPickupLocation.
-     *
-     * IMPORTANT:
-     *
-     * pickup_requests has required pickup information.
-     *
-     * Therefore we copy the merchant pickup-location data
-     * into the pickup request.
+     * Create a pickup request.
      */
     private function createPickup(
         Merchant $merchant,
         MerchantPickupLocation $pickupLocation,
     ): PickupRequest {
+        /*
+        |--------------------------------------------------------------------------
+        | Resolve pickup name
+        |--------------------------------------------------------------------------
+        |
+        | Your pickup_requests table requires pickup_name.
+        |
+        | MerchantPickupLocation normally contains the merchant's
+        | configured pickup/store name.
+        |
+        */
+
+        $pickupName =
+            $pickupLocation->name
+            ?? $pickupLocation->pickup_name
+            ?? $pickupLocation->location_name
+            ?? $merchant->business_name
+            ?? $merchant->name
+            ?? 'Merchant Pickup';
 
         /*
         |--------------------------------------------------------------------------
-        | Build pickup request data
+        | Build pickup data
         |--------------------------------------------------------------------------
         */
 
         $data = [
-            /*
-            |----------------------------------------------------------------------
-            | Ownership
-            |----------------------------------------------------------------------
-            */
-
             'merchant_id' =>
                 $merchant->id,
 
             'pickup_location_id' =>
                 $pickupLocation->id,
 
-            /*
-            |----------------------------------------------------------------------
-            | Pickup information
-            |----------------------------------------------------------------------
-            */
-
             'pickup_name' =>
-                $this->value(
-                    $pickupLocation,
-                    [
-                        'name',
-                        'pickup_name',
-                        'location_name',
-                        'store_name',
-                    ]
-                )
-                ??
-                $merchant->name
-                ??
-                'Merchant Pickup',
-
-            'pickup_phone' =>
-                $this->value(
-                    $pickupLocation,
-                    [
-                        'phone',
-                        'pickup_phone',
-                        'contact_phone',
-                        'mobile',
-                    ]
-                )
-                ??
-                $this->value(
-                    $merchant,
-                    [
-                        'phone',
-                        'mobile',
-                        'contact_phone',
-                    ]
-                ),
-
-            'pickup_email' =>
-                $this->value(
-                    $pickupLocation,
-                    [
-                        'email',
-                        'pickup_email',
-                        'contact_email',
-                    ]
-                )
-                ??
-                $this->value(
-                    $merchant,
-                    [
-                        'email',
-                        'contact_email',
-                    ]
-                ),
-
-            'pickup_address' =>
-                $this->value(
-                    $pickupLocation,
-                    [
-                        'address',
-                        'pickup_address',
-                        'full_address',
-                    ]
-                ),
-
-            'pickup_city' =>
-                $this->value(
-                    $pickupLocation,
-                    [
-                        'city',
-                        'pickup_city',
-                    ]
-                ),
-
-            'pickup_area' =>
-                $this->value(
-                    $pickupLocation,
-                    [
-                        'area',
-                        'pickup_area',
-                        'locality',
-                    ]
-                ),
-
-            'pickup_lat' =>
-                $this->value(
-                    $pickupLocation,
-                    [
-                        'latitude',
-                        'lat',
-                        'pickup_lat',
-                    ]
-                ),
-
-            'pickup_lng' =>
-                $this->value(
-                    $pickupLocation,
-                    [
-                        'longitude',
-                        'lng',
-                        'pickup_lng',
-                    ]
-                ),
-
-            /*
-            |----------------------------------------------------------------------
-            | Branch information
-            |----------------------------------------------------------------------
-            */
-
-            'branch_id' =>
-                $this->value(
-                    $pickupLocation,
-                    [
-                        'branch_id',
-                    ]
-                ),
-
-            'sub_branch_id' =>
-                $this->value(
-                    $pickupLocation,
-                    [
-                        'sub_branch_id',
-                    ]
-                ),
-
-            'pickup_branch_id' =>
-                $this->value(
-                    $pickupLocation,
-                    [
-                        'pickup_branch_id',
-                    ]
-                )
-                ??
-                $this->value(
-                    $pickupLocation,
-                    [
-                        'branch_id',
-                    ]
-                ),
-
-            'pickup_sub_branch_id' =>
-                $this->value(
-                    $pickupLocation,
-                    [
-                        'pickup_sub_branch_id',
-                    ]
-                )
-                ??
-                $this->value(
-                    $pickupLocation,
-                    [
-                        'sub_branch_id',
-                    ]
-                ),
-
-            /*
-            |----------------------------------------------------------------------
-            | Status
-            |----------------------------------------------------------------------
-            */
+                $pickupName,
 
             'status' =>
                 'pending',
@@ -355,28 +154,67 @@ final class ShipmentPickupAttachmentService
 
         /*
         |--------------------------------------------------------------------------
-        | Remove null values only
+        | Optional pickup fields
         |--------------------------------------------------------------------------
         |
-        | IMPORTANT:
+        | These are added only if the columns actually exist.
         |
-        | Do NOT remove pickup_name.
+        | This protects the service from minor schema differences.
         |
         */
 
-        $data = array_filter(
-            $data,
-            static fn ($value) => $value !== null
-        );
+        $columns = DB::getSchemaBuilder()
+            ->getColumnListing('pickup_requests');
+
+        $optionalData = [
+            'pickup_phone' =>
+                $pickupLocation->phone
+                ?? $pickupLocation->contact_phone
+                ?? null,
+
+            'pickup_email' =>
+                $pickupLocation->email
+                ?? $pickupLocation->contact_email
+                ?? null,
+
+            'pickup_address' =>
+                $pickupLocation->address
+                ?? $pickupLocation->pickup_address
+                ?? null,
+
+            'pickup_city' =>
+                $pickupLocation->city
+                ?? null,
+
+            'pickup_area' =>
+                $pickupLocation->area
+                ?? null,
+
+            'pickup_lat' =>
+                $pickupLocation->latitude
+                ?? $pickupLocation->lat
+                ?? null,
+
+            'pickup_lng' =>
+                $pickupLocation->longitude
+                ?? $pickupLocation->lng
+                ?? null,
+        ];
+
+        foreach ($optionalData as $key => $value) {
+            if (
+                in_array($key, $columns, true)
+                && $value !== null
+            ) {
+                $data[$key] = $value;
+            }
+        }
 
         /*
         |--------------------------------------------------------------------------
         | Protect against schema differences
         |--------------------------------------------------------------------------
         */
-
-        $columns = DB::getSchemaBuilder()
-            ->getColumnListing('pickup_requests');
 
         $data = array_intersect_key(
             $data,
@@ -385,48 +223,36 @@ final class ShipmentPickupAttachmentService
 
         /*
         |--------------------------------------------------------------------------
-        | Required field protection
+        | Create
         |--------------------------------------------------------------------------
         */
 
-        if (
-            empty($data['pickup_name'])
-        ) {
-            throw ValidationException::withMessages([
-                'pickup_location_id' => [
-                    'Pickup location does not contain a valid pickup name.',
-                ],
-            ]);
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Create pickup
-        |--------------------------------------------------------------------------
-        */
-
-        return PickupRequest::query()->create(
-            $data
-        );
+        return PickupRequest::query()->create($data);
     }
 
     /**
-     * Attach shipment to pickup_shipments.
+     * Attach shipment to pickup.
      */
     private function attachShipment(
         PickupRequest $pickup,
         Shipment $shipment,
     ): void {
-
         /*
         |--------------------------------------------------------------------------
-        | Prevent duplicate attachment
+        | IMPORTANT
         |--------------------------------------------------------------------------
+        |
+        | Correct table:
+        |
+        | pickup_request_shipments
+        |
+        | NOT:
+        |
+        | pickup_shipments
+        |
         */
 
-        $exists = DB::table(
-            'pickup_shipments'
-        )
+        $exists = DB::table('pickup_request_shipments')
             ->where(
                 'pickup_request_id',
                 $pickup->id
@@ -441,53 +267,41 @@ final class ShipmentPickupAttachmentService
             return;
         }
 
-        DB::table(
-            'pickup_shipments'
-        )->insert([
+        /*
+        |--------------------------------------------------------------------------
+        | Insert pivot relationship
+        |--------------------------------------------------------------------------
+        */
+
+        $columns = DB::getSchemaBuilder()
+            ->getColumnListing('pickup_request_shipments');
+
+        $data = [
             'pickup_request_id' =>
                 $pickup->id,
 
             'shipment_id' =>
                 $shipment->id,
 
+            'added_at' =>
+                now(),
+
+            'status' =>
+                'pending',
+
             'created_at' =>
                 now(),
 
             'updated_at' =>
                 now(),
-        ]);
-    }
+        ];
 
-    /**
-     * Safely retrieve a value from a model.
-     *
-     * Different projects may use:
-     *
-     * name
-     * pickup_name
-     * location_name
-     * etc.
-     */
-    private function value(
-        object $model,
-        array $attributes
-    ): mixed {
+        $data = array_intersect_key(
+            $data,
+            array_flip($columns)
+        );
 
-        foreach ($attributes as $attribute) {
-
-            $value = $model->getAttribute(
-                $attribute
-            );
-
-            if (
-                $value !== null
-                &&
-                $value !== ''
-            ) {
-                return $value;
-            }
-        }
-
-        return null;
+        DB::table('pickup_request_shipments')
+            ->insert($data);
     }
 }

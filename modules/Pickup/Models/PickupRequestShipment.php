@@ -10,7 +10,8 @@ use Modules\Shipment\Models\Shipment;
 
 final class PickupRequestShipment extends Model
 {
-    protected $table = 'pickup_request_shipments';
+    protected $table =
+        'pickup_request_shipments';
 
     protected $fillable = [
         'pickup_request_id',

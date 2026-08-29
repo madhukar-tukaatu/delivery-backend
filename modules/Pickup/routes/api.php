@@ -177,6 +177,11 @@ Route::prefix('v1/staff')
             )->name('pickups.shipments.collect');
 
             Route::post(
+                'pickups/{pickup}/complete',
+                [PickupController::class, 'complete']
+            )->name('pickups.complete');
+
+            Route::post(
                 'pickups/{pickup}/shipments/{shipment}/receive',
                 [PickupController::class, 'receiveShipment']
             )->name('pickups.shipments.receive');

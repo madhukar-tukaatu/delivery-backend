@@ -1,6 +1,6 @@
 <?php
 
-declare(strict_types=1);
+declare (strict_types = 1);
 
 namespace Modules\Pickup\Http\Controllers;
 
@@ -30,26 +30,55 @@ final class PickupController extends Controller
                 'pickupSubBranch',
                 'pickupLocation',
                 'assignedStaff',
+                'shipments.shipment',
             ]);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Super Admin / Main Admin
+        |--------------------------------------------------------------------------
+        */
 
         if (
             $user->isSuperAdmin()
             ||
             $user->hasRole('main_admin')
         ) {
-            // unrestricted
-        } elseif ($user->hasRole('merchant')) {
+
+            // All pickups.
+
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Merchant
+        |--------------------------------------------------------------------------
+        */
+
+        elseif ($user->hasRole('merchant')) {
 
             if (! $user->merchant_id) {
-                return ApiResponse::success([]);
+                return ApiResponse::success([
+                    'data'         => [],
+                    'current_page' => 1,
+                    'per_page'     => 20,
+                    'total'        => 0,
+                ]);
             }
 
             $query->where(
                 'merchant_id',
                 $user->merchant_id
             );
+        }
 
-        } elseif (
+        /*
+        |--------------------------------------------------------------------------
+        | Branch Manager
+        |--------------------------------------------------------------------------
+        */
+
+        elseif (
             $user->hasRole('branch_manager')
             ||
             $user->hasRole('sub_branch_manager')
@@ -58,25 +87,48 @@ final class PickupController extends Controller
             $query->forBranch(
                 (int) $user->branch_id
             );
+        }
 
-        } else {
+        /*
+        |--------------------------------------------------------------------------
+        | Rider / Staff
+        |--------------------------------------------------------------------------
+        */
+
+        else {
 
             $query->where(
-                'assigned_to',
+                'assigned_staff_id',
                 $user->id
             );
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Status
+        |--------------------------------------------------------------------------
+        */
+
         if ($request->filled('status')) {
+
             $query->where(
                 'status',
-                $request->string('status')->toString()
+                $request
+                    ->string('status')
+                    ->toString()
             );
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Search
+        |--------------------------------------------------------------------------
+        */
+
         if ($request->filled('search')) {
 
-            $search = $request
+            $search =
+            $request
                 ->string('search')
                 ->toString();
 
@@ -100,9 +152,40 @@ final class PickupController extends Controller
             });
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Branch filter
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            $request->filled('branch_id')
+            &&
+            (
+                $user->isSuperAdmin()
+                ||
+                $user->hasRole('main_admin')
+            )
+        ) {
+
+            $query->where(
+                'branch_id',
+                (int) $request->branch_id
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Pagination
+        |--------------------------------------------------------------------------
+        */
+
         $perPage = min(
             max(
-                (int) $request->get('per_page', 20),
+                (int) $request->get(
+                    'per_page',
+                    20
+                ),
                 1
             ),
             100
@@ -130,11 +213,20 @@ final class PickupController extends Controller
         );
     }
 
+    /**
+     * Manual/internal shipment attachment.
+     *
+     * Normal Store Manager shipments should NOT use this.
+     *
+     * Gateway shipment creation automatically attaches
+     * the shipment to the active pickup.
+     */
     public function addShipment(
         AddShipmentToPickupRequest $request,
         PickupRequestService $service
     ) {
-        $shipment = Shipment::query()
+        $shipment =
+        Shipment::query()
             ->whereKey(
                 $request->validated('shipment_id')
             )
@@ -145,7 +237,8 @@ final class PickupController extends Controller
             $shipment
         );
 
-        $item = $service->attachShipment(
+        $item =
+        $service->attachShipment(
             shipment: $shipment,
             userId: $request->user()->id,
             remarks: $request->validated('remarks')
@@ -170,12 +263,14 @@ final class PickupController extends Controller
             $pickup
         );
 
-        $staff = \App\Models\User::query()
+        $staff =
+        \App\Models\User::query()
             ->findOrFail(
                 $request->validated('staff_id')
             );
 
-        $pickup = $service->assign(
+        $pickup =
+        $service->assign(
             pickup: $pickup,
             staff: $staff,
             assignedBy: $request->user()
@@ -192,7 +287,8 @@ final class PickupController extends Controller
         PickupRequestModel $pickup,
         PickupRequestService $service
     ) {
-        $pickup = $service->start(
+        $pickup =
+        $service->start(
             pickup: $pickup,
             user: $request->user()
         );
@@ -208,7 +304,8 @@ final class PickupController extends Controller
         PickupRequestModel $pickup,
         PickupRequestService $service
     ) {
-        $pickup = $service->arrive(
+        $pickup =
+        $service->arrive(
             pickup: $pickup,
             user: $request->user()
         );
@@ -219,17 +316,166 @@ final class PickupController extends Controller
         );
     }
 
+    public function complete(
+        PickupRequest $pickup,
+        User $user
+    ): PickupRequest {
+
+        return DB::transaction(
+            function () use (
+                $pickup,
+                $user
+            ): PickupRequest {
+
+                $pickup =
+                PickupRequest::query()
+                    ->lockForUpdate()
+                    ->findOrFail(
+                        $pickup->id
+                    );
+
+                /*
+            |--------------------------------------------------------------------------
+            | Only assigned rider can complete
+            |--------------------------------------------------------------------------
+            */
+
+                if (
+                    (int) $pickup->assigned_staff_id !==
+                    (int) $user->id
+                ) {
+                    throw ValidationException::withMessages([
+                        'pickup' => [
+                            'Only the assigned rider can complete this pickup.',
+                        ],
+                    ]);
+                }
+
+                /*
+            |--------------------------------------------------------------------------
+            | Pickup must be open
+            |--------------------------------------------------------------------------
+            */
+
+                if (
+                    ! in_array(
+                        $pickup->status,
+                        [
+                            'accepted',
+                            'started',
+                            'on_the_way',
+                            'arrived',
+                        ],
+                        true
+                    )
+                ) {
+                    throw ValidationException::withMessages([
+                        'status' => [
+                            'This pickup cannot be completed from its current status.',
+                        ],
+                    ]);
+                }
+
+                /*
+            |--------------------------------------------------------------------------
+            | Make sure rider has arrived
+            |--------------------------------------------------------------------------
+            */
+
+                if (
+                    ! in_array(
+                        $pickup->status,
+                        [
+                            'arrived',
+                        ],
+                        true
+                    )
+                ) {
+                    throw ValidationException::withMessages([
+                        'status' => [
+                            'Rider must arrive at the store before completing pickup.',
+                        ],
+                    ]);
+                }
+
+                /*
+            |--------------------------------------------------------------------------
+            | Check remaining shipments
+            |--------------------------------------------------------------------------
+            */
+
+                $pendingShipments =
+                DB::table('pickup_shipments')
+                    ->join(
+                        'shipments',
+                        'shipments.id',
+                        '=',
+                        'pickup_shipments.shipment_id'
+                    )
+                    ->where(
+                        'pickup_shipments.pickup_request_id',
+                        $pickup->id
+                    )
+                    ->whereNotIn(
+                        'shipments.status',
+                        [
+                            CourierStatus::PICKED_UP,
+                            CourierStatus::CANCELLED,
+                        ]
+                    )
+                    ->count();
+
+                if ($pendingShipments > 0) {
+                    throw ValidationException::withMessages([
+                        'shipments' => [
+                            'All pickup shipments must be collected before completing the pickup.',
+                        ],
+                    ]);
+                }
+
+                /*
+            |--------------------------------------------------------------------------
+            | Close pickup
+            |--------------------------------------------------------------------------
+            */
+
+                $pickup->status =
+                    'completed';
+
+                $pickup->completed_at =
+                    now();
+
+                $pickup->save();
+
+                /*
+            |--------------------------------------------------------------------------
+            | Return latest
+            |--------------------------------------------------------------------------
+            */
+
+                return $pickup->fresh([
+                    'merchant',
+                    'pickupLocation',
+                    'assignedStaff',
+                    'shipments.shipment',
+                ]);
+            }
+        );
+    }
+
     public function collectShipment(
         CollectShipmentRequest $request,
         PickupRequestModel $pickup,
         Shipment $shipment,
         PickupRequestService $service
     ) {
-        $item = $service->collectShipment(
+        $item =
+        $service->collectShipment(
             pickup: $pickup,
             shipment: $shipment,
             user: $request->user(),
-            remarks: $request->validated('remarks')
+            remarks:
+            $request->validated('remarks')
         );
 
         return ApiResponse::success(
@@ -244,7 +490,8 @@ final class PickupController extends Controller
         Shipment $shipment,
         PickupRequestService $service
     ) {
-        $item = $service->receiveShipment(
+        $item =
+        $service->receiveShipment(
             pickup: $pickup,
             shipment: $shipment,
             staff: $request->user()
@@ -261,10 +508,12 @@ final class PickupController extends Controller
         PickupRequestModel $pickup,
         PickupRequestService $service
     ) {
-        $pickup = $service->fail(
+        $pickup =
+        $service->fail(
             pickup: $pickup,
             user: $request->user(),
-            reason: $request->validated('reason')
+            reason:
+            $request->validated('reason')
         );
 
         return ApiResponse::success(
@@ -304,7 +553,8 @@ final class PickupController extends Controller
             $user->hasRole('sub_branch_manager')
         ) {
 
-            $branchId = (int) $user->branch_id;
+            $branchId =
+            (int) $user->branch_id;
 
             abort_unless(
                 $branchId === (int) $pickup->branch_id
@@ -321,7 +571,7 @@ final class PickupController extends Controller
         }
 
         abort_unless(
-            (int) $pickup->assigned_to ===
+            (int) $pickup->assigned_staff_id ===
             (int) $user->id,
             403
         );
@@ -347,7 +597,8 @@ final class PickupController extends Controller
             $user->hasRole('sub_branch_manager')
         ) {
 
-            $branchId = (int) $user->branch_id;
+            $branchId =
+            (int) $user->branch_id;
 
             abort_unless(
                 $branchId === (int) $pickup->branch_id

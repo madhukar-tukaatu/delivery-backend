@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Modules\Shipment\Services;
 
-use App\Support\CourierStatus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Modules\Merchant\Models\Merchant;
 use Modules\Pickup\Services\ShipmentPickupAttachmentService;
 use Modules\Shipment\Models\Shipment;
+use App\Support\CourierStatus;
 
 final class ShipmentService
 {
@@ -26,19 +26,19 @@ final class ShipmentService
      *
      * IMPORTANT:
      *
-     * Shipment creation is NOT blocked by pickup cutoff time.
+     * There is NO shipment creation cutoff.
      *
-     * A shipment can be created:
+     * Store may create shipments:
      *
-     * - before pickup assignment
-     * - after pickup assignment
+     * - before rider assignment
+     * - after rider assignment
      * - while rider is travelling
-     * - while rider is at store
+     * - after rider has arrived
      *
-     * If an active pickup already exists for the same merchant +
-     * pickup location, the shipment is attached to that pickup.
+     * BUT:
      *
-     * If no active pickup exists, the Pickup module creates one.
+     * Once the pickup is completed/closed,
+     * the shipment belongs to a new pickup.
      */
     public function createFromGateway(
         int $merchantId,
@@ -49,30 +49,27 @@ final class ShipmentService
 
         if (! $merchant) {
             throw ValidationException::withMessages([
-                'merchant' => 'Authenticated merchant was not found.',
+                'merchant' => [
+                    'Authenticated merchant was not found.',
+                ],
             ]);
         }
 
         if ($merchant->status !== 'active') {
             throw ValidationException::withMessages([
-                'merchant' => 'Merchant account is not active.',
+                'merchant' => [
+                    'Merchant account is not active.',
+                ],
             ]);
         }
-
-        /*
-         * IMPORTANT:
-         *
-         * There is intentionally NO pickup cutoff validation here.
-         *
-         * The store is allowed to create shipments until the
-         * existing pickup is completed/closed.
-         */
 
         $packet = $data['packet'] ?? null;
 
         if (! is_array($packet)) {
             throw ValidationException::withMessages([
-                'packet' => 'Packet details are required.',
+                'packet' => [
+                    'Packet details are required.',
+                ],
             ]);
         }
 
@@ -125,25 +122,22 @@ final class ShipmentService
 
                 if (! $pickupLocation) {
                     throw ValidationException::withMessages([
-                        'pickup_location_id' =>
+                        'pickup_location_id' => [
                             'Pickup location could not be resolved.',
+                        ],
                     ]);
                 }
-
-                /*
-                |--------------------------------------------------------------------------
-                | Verify pickup belongs to merchant
-                |--------------------------------------------------------------------------
-                */
 
                 if (
                     isset($pickupLocation->merchant_id)
                     &&
-                    (int) $pickupLocation->merchant_id !== $merchant->id
+                    (int) $pickupLocation->merchant_id !==
+                    (int) $merchant->id
                 ) {
                     throw ValidationException::withMessages([
-                        'pickup_location_id' =>
+                        'pickup_location_id' => [
                             'Pickup location does not belong to this merchant.',
+                        ],
                     ]);
                 }
 
@@ -161,7 +155,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Origin branch
+                | Origin
                 |--------------------------------------------------------------------------
                 */
 
@@ -173,14 +167,15 @@ final class ShipmentService
 
                 if (! $origin['branch_id']) {
                     throw ValidationException::withMessages([
-                        'pickup_location_id' =>
+                        'pickup_location_id' => [
                             'Unable to determine origin branch.',
+                        ],
                     ]);
                 }
 
                 /*
                 |--------------------------------------------------------------------------
-                | Destination branch
+                | Destination
                 |--------------------------------------------------------------------------
                 */
 
@@ -201,8 +196,9 @@ final class ShipmentService
 
                 if (! $destination['branch_id']) {
                     throw ValidationException::withMessages([
-                        'delivery_lat' =>
+                        'delivery_lat' => [
                             'Unable to determine destination branch.',
+                        ],
                     ]);
                 }
 
@@ -229,7 +225,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Packet products
+                | Products
                 |--------------------------------------------------------------------------
                 */
 
@@ -252,7 +248,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Shipment data
+                | Shipment
                 |--------------------------------------------------------------------------
                 */
 
@@ -270,6 +266,12 @@ final class ShipmentService
                     'order_source' =>
                         'store_manager',
 
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Pickup
+                    |--------------------------------------------------------------------------
+                    */
+
                     'pickup_location_id' =>
                         $pickupLocation->id,
 
@@ -279,11 +281,23 @@ final class ShipmentService
                     'pickup_lng' =>
                         $pickupCoordinates['lng'],
 
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Origin
+                    |--------------------------------------------------------------------------
+                    */
+
                     'origin_branch_id' =>
                         $origin['branch_id'],
 
                     'origin_sub_branch_id' =>
                         $origin['sub_branch_id'],
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Receiver
+                    |--------------------------------------------------------------------------
+                    */
 
                     'receiver_name' =>
                         $data['receiver_name'],
@@ -293,6 +307,12 @@ final class ShipmentService
 
                     'receiver_email' =>
                         $data['receiver_email'] ?? null,
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Delivery
+                    |--------------------------------------------------------------------------
+                    */
 
                     'delivery_address' =>
                         $data['delivery_address'] ?? null,
@@ -309,14 +329,32 @@ final class ShipmentService
                     'delivery_lng' =>
                         $data['delivery_lng'],
 
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Destination
+                    |--------------------------------------------------------------------------
+                    */
+
                     'destination_branch_id' =>
                         $destination['branch_id'],
 
                     'destination_sub_branch_id' =>
                         $destination['sub_branch_id'],
 
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Service
+                    |--------------------------------------------------------------------------
+                    */
+
                     'service_type' =>
                         $data['service_type'],
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Packet
+                    |--------------------------------------------------------------------------
+                    */
 
                     'parcel_type' =>
                         $packet['parcel_type'],
@@ -339,14 +377,32 @@ final class ShipmentService
                     'packet_products' =>
                         $packetProducts,
 
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Payment
+                    |--------------------------------------------------------------------------
+                    */
+
                     'payment_type' =>
                         $data['payment_type'],
 
                     'delivery_charge_paid_by' =>
                         $data['delivery_charge_paid_by'],
 
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Pickup mode
+                    |--------------------------------------------------------------------------
+                    */
+
                     'self_drop' =>
                         $selfDrop,
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Additional
+                    |--------------------------------------------------------------------------
+                    */
 
                     'special_instructions' =>
                         $data['special_instructions'] ?? null,
@@ -355,8 +411,11 @@ final class ShipmentService
                         $data['remarks'] ?? null,
 
                     /*
-                     * Shipment starts as awaiting pickup.
-                     */
+                    |--------------------------------------------------------------------------
+                    | Initial status
+                    |--------------------------------------------------------------------------
+                    */
+
                     'status' =>
                         CourierStatus::AWAITING_PICKUP,
                 ];
@@ -379,7 +438,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Filter database columns
+                | Protect against schema differences
                 |--------------------------------------------------------------------------
                 */
 
@@ -415,21 +474,27 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | ATTACH TO PICKUP
+                | AUTOMATIC PICKUP ATTACHMENT
                 |--------------------------------------------------------------------------
                 |
-                | This is the important part of the new workflow.
+                | This is the key part of the new workflow.
                 |
-                | The shipment does NOT ask the Store Manager to create
-                | another pickup.
+                | We do NOT ask the merchant to create another pickup.
                 |
-                | The Pickup module will:
+                | The service finds the merchant's currently open pickup
+                | for this pickup location.
                 |
-                | 1. Find existing open pickup.
-                | 2. Attach shipment to it.
-                | 3. Preserve the existing rider assignment.
-                | 4. Notify the rider.
-                | 5. Create a pickup only when no open pickup exists.
+                | If found:
+                |
+                |     shipment -> existing pickup
+                |
+                | If rider assigned:
+                |
+                |     rider -> notification
+                |
+                | If none exists:
+                |
+                |     create pickup -> attach shipment
                 |
                 */
 
@@ -446,7 +511,7 @@ final class ShipmentService
     }
 
     /**
-     * Build products stored inside packet_products.
+     * Build packet products.
      */
     private function buildPacketProducts(
         array $products,
@@ -459,15 +524,17 @@ final class ShipmentService
         $packetProducts = [];
 
         foreach (
-            array_values($products) as $index => $product
+            array_values($products)
+            as $index => $product
         ) {
             $productNumber = $index + 1;
 
-            $productTrackingNumber = sprintf(
-                '%s-%02d',
-                $packetTrackingNumber,
-                $productNumber
-            );
+            $productTrackingNumber =
+                sprintf(
+                    '%s-%02d',
+                    $packetTrackingNumber,
+                    $productNumber
+                );
 
             $packetProducts[] = [
                 'product_tracking_number' =>
@@ -500,9 +567,12 @@ final class ShipmentService
 
                 'parcel_type' =>
                     $product['parcel_type']
-                    ?? $product['package_type']
-                    ?? $product['parcelType']
-                    ?? null,
+                    ??
+                    $product['package_type']
+                    ??
+                    $product['parcelType']
+                    ??
+                    null,
             ];
         }
 
@@ -592,7 +662,7 @@ final class ShipmentService
     }
 
     /**
-     * Filter shipment fields against actual schema.
+     * Filter shipment fields.
      */
     private function filterShipmentColumns(
         array $data
@@ -652,7 +722,9 @@ final class ShipmentService
                     oldStatus: $oldStatus,
                     newStatus: $status,
                     description:
-                        $note ?? 'Shipment status updated.'
+                        $note
+                        ??
+                        'Shipment status updated.'
                 );
 
                 return $shipment->fresh();

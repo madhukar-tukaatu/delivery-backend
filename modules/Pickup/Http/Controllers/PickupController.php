@@ -7,7 +7,6 @@ namespace Modules\Pickup\Http\Controllers;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Support\ApiResponse;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Modules\Pickup\Http\Requests\AddShipmentToPickupRequest;
 use Modules\Pickup\Http\Requests\AssignPickupRequest;
@@ -21,31 +20,8 @@ final class PickupController extends Controller
 {
     /*
     |--------------------------------------------------------------------------
-    | INDEX
+    | List pickups
     |--------------------------------------------------------------------------
-    |
-    | Visibility rules:
-    |
-    | Super Admin:
-    |   - sees all pickups
-    |   - may filter by branch_id
-    |
-    | Main Admin:
-    |   - sees all pickups
-    |   - may filter by branch_id
-    |
-    | Branch Manager:
-    |   - only sees pickups belonging to their branch/sub-branch scope
-    |
-    | Sub Branch Manager:
-    |   - only sees pickups belonging to their branch/sub-branch scope
-    |
-    | Merchant:
-    |   - only sees their own pickups
-    |
-    | Rider / Staff:
-    |   - only sees pickups assigned to them
-    |
     */
 
     public function index(Request $request)
@@ -66,96 +42,94 @@ final class PickupController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | ACCESS SCOPE
+        | SUPER ADMIN / MAIN ADMIN
         |--------------------------------------------------------------------------
         */
 
-        if ($this->isGlobalAdmin($user)) {
-
-            /*
-             * Super admin/main admin:
-             *
-             * No restriction unless branch_id was explicitly
-             * selected from the frontend.
-             *
-             * Example:
-             *
-             * GET /api/v1/admin/pickups?branch_id=185
-             */
-            if ($request->filled('branch_id')) {
-
-                $this->applyBranchFilter(
-                    $query,
-                    (int) $request->input('branch_id')
-                );
-            }
+        if (
+            $user->isSuperAdmin()
+            || $user->hasRole('main_admin')
+        ) {
+            // Can see all pickups.
         }
+
+        /*
+        |--------------------------------------------------------------------------
+        | MERCHANT
+        |--------------------------------------------------------------------------
+        */
 
         elseif ($user->hasRole('merchant')) {
 
-            /*
-             * Merchant can only see its own pickups.
-             */
-
             if (! $user->merchant_id) {
-
                 return ApiResponse::success([
                     'data' => [],
                     'current_page' => 1,
-                    'per_page' => (int) $request->get('per_page', 20),
+                    'per_page' => 20,
                     'total' => 0,
                 ]);
             }
 
             $query->where(
                 'merchant_id',
-                (int) $user->merchant_id
+                $user->merchant_id
             );
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | BRANCH MANAGER
+        |--------------------------------------------------------------------------
+        */
+
         elseif (
             $user->hasRole('branch_manager')
-            ||
-            $user->hasRole('sub_branch_manager')
+            || $user->hasRole('sub_branch_manager')
         ) {
 
-            /*
-             * Branch users must NEVER be allowed to choose
-             * an arbitrary branch from the frontend.
-             *
-             * Their branch comes from the authenticated user
-             * / branch.scope middleware.
-             */
+            $branchId = (int) $user->branch_id;
 
-            $branchId = $this->resolveUserBranchId($request, $user);
-
-            if (! $branchId) {
-
+            if ($branchId <= 0) {
                 return ApiResponse::success([
                     'data' => [],
                     'current_page' => 1,
-                    'per_page' => (int) $request->get('per_page', 20),
+                    'per_page' => 20,
                     'total' => 0,
                 ]);
             }
 
-            $this->applyBranchFilter(
-                $query,
-                $branchId
-            );
+            $query->where(function ($q) use ($branchId) {
+
+                $q->where(
+                    'pickup_branch_id',
+                    $branchId
+                )
+                    ->orWhere(
+                        'pickup_sub_branch_id',
+                        $branchId
+                    )
+                    ->orWhere(
+                        'branch_id',
+                        $branchId
+                    )
+                    ->orWhere(
+                        'sub_branch_id',
+                        $branchId
+                    );
+            });
         }
+
+        /*
+        |--------------------------------------------------------------------------
+        | RIDER / STAFF
+        |--------------------------------------------------------------------------
+        */
 
         else {
 
-            /*
-             * Rider / staff:
-             *
-             * Only pickups assigned to the authenticated user.
-             */
-
             $query->where(
                 'assigned_to',
-                (int) $user->id
+                $user->id
             );
         }
 
@@ -169,7 +143,9 @@ final class PickupController extends Controller
 
             $query->where(
                 'status',
-                $request->string('status')->toString()
+                $request
+                    ->string('status')
+                    ->toString()
             );
         }
 
@@ -177,170 +153,74 @@ final class PickupController extends Controller
         |--------------------------------------------------------------------------
         | SEARCH
         |--------------------------------------------------------------------------
-        |
-        | Supports:
-        |
-        | request number
-        | pickup name
-        | pickup phone
-        | merchant order / shipment tracking through relationship
-        |
         */
 
         if ($request->filled('search')) {
 
             $search = trim(
-                $request->string('search')->toString()
+                $request
+                    ->string('search')
+                    ->toString()
             );
 
             if ($search !== '') {
 
-                $query->where(function (Builder $q) use ($search) {
+                $query->where(function ($q) use ($search) {
 
                     $q->where(
                         'request_number',
                         'like',
                         "%{$search}%"
                     )
-
-                    ->orWhere(
-                        'pickup_name',
-                        'like',
-                        "%{$search}%"
-                    )
-
-                    ->orWhere(
-                        'pickup_phone',
-                        'like',
-                        "%{$search}%"
-                    )
-
-                    /*
-                     * Search attached shipments.
-                     *
-                     * This assumes PickupRequest has:
-                     *
-                     * shipments()
-                     *
-                     * and the pivot/model points to Shipment.
-                     */
-                    ->orWhereHas(
-                        'shipments.shipment',
-                        function (Builder $shipmentQuery) use ($search) {
-
-                            $shipmentQuery
-                                ->where(
-                                    'tracking_number',
-                                    'like',
-                                    "%{$search}%"
-                                )
-                                ->orWhere(
-                                    'merchant_order_id',
-                                    'like',
-                                    "%{$search}%"
-                                )
-                                ->orWhere(
-                                    'receiver_name',
-                                    'like',
-                                    "%{$search}%"
-                                )
-                                ->orWhere(
-                                    'receiver_phone',
-                                    'like',
-                                    "%{$search}%"
-                                );
-                        }
-                    );
+                        ->orWhere(
+                            'pickup_name',
+                            'like',
+                            "%{$search}%"
+                        )
+                        ->orWhere(
+                            'pickup_phone',
+                            'like',
+                            "%{$search}%"
+                        );
                 });
             }
         }
 
         /*
         |--------------------------------------------------------------------------
-        | MERCHANT FILTER
+        | BRANCH FILTER
         |--------------------------------------------------------------------------
-        |
-        | Only global admins can use this filter.
-        |
         */
 
         if (
-            $request->filled('merchant_id')
-            &&
-            $this->isGlobalAdmin($user)
+            $request->filled('branch_id')
+            && (
+                $user->isSuperAdmin()
+                || $user->hasRole('main_admin')
+            )
         ) {
 
-            $query->where(
-                'merchant_id',
-                (int) $request->input('merchant_id')
-            );
-        }
+            $branchId = (int) $request->branch_id;
 
-        /*
-        |--------------------------------------------------------------------------
-        | ASSIGNED STAFF FILTER
-        |--------------------------------------------------------------------------
-        |
-        | Useful for branch dashboards.
-        |
-        */
+            $query->where(function ($q) use ($branchId) {
 
-        if (
-            $request->filled('assigned_to')
-            &&
-            $this->isGlobalAdmin($user)
-        ) {
-
-            $query->where(
-                'assigned_to',
-                (int) $request->input('assigned_to')
-            );
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | PICKUP LOCATION FILTER
-        |--------------------------------------------------------------------------
-        */
-
-        if ($request->filled('pickup_location_id')) {
-
-            $query->where(
-                'pickup_location_id',
-                (int) $request->input('pickup_location_id')
-            );
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | DATE FILTER
-        |--------------------------------------------------------------------------
-        */
-
-        if ($request->filled('date')) {
-
-            $query->whereDate(
-                'created_at',
-                $request->input('date')
-            );
-        }
-
-        if ($request->filled('from_date')) {
-
-            $query->whereDate(
-                'created_at',
-                '>=',
-                $request->input('from_date')
-            );
-        }
-
-        if ($request->filled('to_date')) {
-
-            $query->whereDate(
-                'created_at',
-                '<=',
-                $request->input('to_date')
-            );
+                $q->where(
+                    'pickup_branch_id',
+                    $branchId
+                )
+                    ->orWhere(
+                        'pickup_sub_branch_id',
+                        $branchId
+                    )
+                    ->orWhere(
+                        'branch_id',
+                        $branchId
+                    )
+                    ->orWhere(
+                        'sub_branch_id',
+                        $branchId
+                    );
+            });
         }
 
         /*
@@ -351,27 +231,25 @@ final class PickupController extends Controller
 
         $perPage = min(
             max(
-                (int) $request->get('per_page', 20),
+                (int) $request->get(
+                    'per_page',
+                    20
+                ),
                 1
             ),
             100
         );
 
-        $pickups = $query
-            ->latest('id')
-            ->paginate($perPage)
-            ->appends(
-                $request->query()
-            );
-
         return ApiResponse::success(
-            $pickups
+            $query
+                ->latest('id')
+                ->paginate($perPage)
         );
     }
 
     /*
     |--------------------------------------------------------------------------
-    | SHOW
+    | Show
     |--------------------------------------------------------------------------
     */
 
@@ -393,8 +271,11 @@ final class PickupController extends Controller
 
     /*
     |--------------------------------------------------------------------------
-    | MANUAL SHIPMENT ATTACHMENT
+    | Manual shipment attachment
     |--------------------------------------------------------------------------
+    |
+    | This is an internal fallback only.
+    |
     */
 
     public function addShipment(
@@ -430,7 +311,7 @@ final class PickupController extends Controller
 
     /*
     |--------------------------------------------------------------------------
-    | ASSIGN
+    | Assign rider
     |--------------------------------------------------------------------------
     */
 
@@ -450,19 +331,6 @@ final class PickupController extends Controller
                 $request->validated('staff_id')
             );
 
-        /*
-         * Staff must belong to the same operational branch
-         * as the pickup.
-         *
-         * Global admin can still assign across branches only
-         * if the staff branch matches the pickup branch.
-         */
-
-        $this->authorizeStaffAssignment(
-            $pickup,
-            $staff
-        );
-
         $pickup = $service->assign(
             pickup: $pickup,
             staff: $staff,
@@ -470,21 +338,14 @@ final class PickupController extends Controller
         );
 
         return ApiResponse::success(
-            $pickup->load([
-                'merchant',
-                'branch',
-                'subBranch',
-                'pickupBranch',
-                'pickupSubBranch',
-                'assignedStaff',
-            ]),
+            $pickup,
             'Pickup rider assigned successfully.'
         );
     }
 
     /*
     |--------------------------------------------------------------------------
-    | START
+    | Rider starts pickup
     |--------------------------------------------------------------------------
     */
 
@@ -493,11 +354,6 @@ final class PickupController extends Controller
         PickupRequestModel $pickup,
         PickupRequestService $service
     ) {
-
-        $this->authorizePickupAction(
-            $request,
-            $pickup
-        );
 
         $pickup = $service->start(
             pickup: $pickup,
@@ -512,7 +368,7 @@ final class PickupController extends Controller
 
     /*
     |--------------------------------------------------------------------------
-    | ARRIVE
+    | Rider arrives
     |--------------------------------------------------------------------------
     */
 
@@ -521,11 +377,6 @@ final class PickupController extends Controller
         PickupRequestModel $pickup,
         PickupRequestService $service
     ) {
-
-        $this->authorizePickupAction(
-            $request,
-            $pickup
-        );
 
         $pickup = $service->arrive(
             pickup: $pickup,
@@ -540,7 +391,7 @@ final class PickupController extends Controller
 
     /*
     |--------------------------------------------------------------------------
-    | COLLECT SHIPMENT
+    | Collect shipment
     |--------------------------------------------------------------------------
     */
 
@@ -550,11 +401,6 @@ final class PickupController extends Controller
         Shipment $shipment,
         PickupRequestService $service
     ) {
-
-        $this->authorizePickupAction(
-            $request,
-            $pickup
-        );
 
         $item = $service->collectShipment(
             pickup: $pickup,
@@ -571,7 +417,7 @@ final class PickupController extends Controller
 
     /*
     |--------------------------------------------------------------------------
-    | COMPLETE
+    | Complete pickup
     |--------------------------------------------------------------------------
     */
 
@@ -580,11 +426,6 @@ final class PickupController extends Controller
         PickupRequestModel $pickup,
         PickupRequestService $service
     ) {
-
-        $this->authorizePickupAction(
-            $request,
-            $pickup
-        );
 
         $pickup = $service->complete(
             pickup: $pickup,
@@ -599,7 +440,7 @@ final class PickupController extends Controller
 
     /*
     |--------------------------------------------------------------------------
-    | RECEIVE SHIPMENT AT ORIGIN
+    | Receive shipment at origin branch
     |--------------------------------------------------------------------------
     */
 
@@ -610,7 +451,7 @@ final class PickupController extends Controller
         PickupRequestService $service
     ) {
 
-        $this->authorizePickupAction(
+        $this->authorizePickupView(
             $request,
             $pickup
         );
@@ -629,7 +470,7 @@ final class PickupController extends Controller
 
     /*
     |--------------------------------------------------------------------------
-    | FAIL
+    | Fail pickup
     |--------------------------------------------------------------------------
     */
 
@@ -638,11 +479,6 @@ final class PickupController extends Controller
         PickupRequestModel $pickup,
         PickupRequestService $service
     ) {
-
-        $this->authorizePickupAction(
-            $request,
-            $pickup
-        );
 
         $pickup = $service->fail(
             pickup: $pickup,
@@ -658,119 +494,7 @@ final class PickupController extends Controller
 
     /*
     |--------------------------------------------------------------------------
-    | BRANCH FILTER
-    |--------------------------------------------------------------------------
-    |
-    | A pickup is visible to a branch when that branch appears anywhere
-    | in its operational ownership/lifecycle.
-    |
-    | branch_id
-    | sub_branch_id
-    | pickup_branch_id
-    | pickup_sub_branch_id
-    |
-    */
-
-    private function applyBranchFilter(
-        Builder $query,
-        int $branchId
-    ): void {
-
-        $query->where(function (Builder $q) use ($branchId) {
-
-            $q->where(
-                'branch_id',
-                $branchId
-            )
-
-            ->orWhere(
-                'sub_branch_id',
-                $branchId
-            )
-
-            ->orWhere(
-                'pickup_branch_id',
-                $branchId
-            )
-
-            ->orWhere(
-                'pickup_sub_branch_id',
-                $branchId
-            );
-        });
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | RESOLVE USER BRANCH
-    |--------------------------------------------------------------------------
-    */
-
-    private function resolveUserBranchId(
-        Request $request,
-        $user
-    ): ?int {
-
-        /*
-         * Prefer the authenticated user's branch.
-         */
-
-        if ($user?->branch_id) {
-
-            return (int) $user->branch_id;
-        }
-
-        /*
-         * branch.scope middleware may provide the trusted scope.
-         */
-
-        $scopedBranchId =
-            $request->attributes->get(
-                '_scope_branch_id'
-            );
-
-        if ($scopedBranchId) {
-
-            return (int) $scopedBranchId;
-        }
-
-        /*
-         * Backward compatibility if middleware currently
-         * injects it as a request parameter.
-         */
-
-        if ($request->filled('_scope_branch_id')) {
-
-            return (int) $request->input(
-                '_scope_branch_id'
-            );
-        }
-
-        return null;
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | GLOBAL ADMIN
-    |--------------------------------------------------------------------------
-    */
-
-    private function isGlobalAdmin($user): bool
-    {
-        return (bool) (
-            $user?->isSuperAdmin()
-            ||
-            $user?->is_super_admin
-            ||
-            $user?->hasRole('main_admin')
-            ||
-            $user?->role === 'main_admin'
-        );
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | VIEW AUTHORIZATION
+    | Pickup authorization
     |--------------------------------------------------------------------------
     */
 
@@ -782,21 +506,29 @@ final class PickupController extends Controller
         $user = $request->user();
 
         /*
-         * Super admin / main admin
-         */
+        |--------------------------------------------------------------------------
+        | Admin
+        |--------------------------------------------------------------------------
+        */
 
-        if ($this->isGlobalAdmin($user)) {
+        if (
+            $user->isSuperAdmin()
+            || $user->hasRole('main_admin')
+        ) {
             return;
         }
 
         /*
-         * Merchant
-         */
+        |--------------------------------------------------------------------------
+        | Merchant
+        |--------------------------------------------------------------------------
+        */
 
         if ($user->hasRole('merchant')) {
 
             abort_unless(
-                (int) $pickup->merchant_id ===
+                (int) $pickup->merchant_id
+                ===
                 (int) $user->merchant_id,
                 403
             );
@@ -805,28 +537,26 @@ final class PickupController extends Controller
         }
 
         /*
-         * Branch manager / sub branch manager
-         */
+        |--------------------------------------------------------------------------
+        | Branch
+        |--------------------------------------------------------------------------
+        */
 
         if (
             $user->hasRole('branch_manager')
-            ||
-            $user->hasRole('sub_branch_manager')
+            || $user->hasRole('sub_branch_manager')
         ) {
 
-            $branchId =
-                $this->resolveUserBranchId(
-                    $request,
-                    $user
-                );
+            $branchId = (int) $user->branch_id;
 
             abort_unless(
-                $branchId
-                &&
-                $this->pickupBelongsToBranch(
-                    $pickup,
-                    $branchId
-                ),
+                $branchId === (int) $pickup->pickup_branch_id
+                ||
+                $branchId === (int) $pickup->pickup_sub_branch_id
+                ||
+                $branchId === (int) $pickup->branch_id
+                ||
+                $branchId === (int) $pickup->sub_branch_id,
                 403
             );
 
@@ -834,11 +564,14 @@ final class PickupController extends Controller
         }
 
         /*
-         * Rider / staff
-         */
+        |--------------------------------------------------------------------------
+        | Rider / Staff
+        |--------------------------------------------------------------------------
+        */
 
         abort_unless(
-            (int) $pickup->assigned_to ===
+            (int) $pickup->assigned_to
+            ===
             (int) $user->id,
             403
         );
@@ -846,7 +579,7 @@ final class PickupController extends Controller
 
     /*
     |--------------------------------------------------------------------------
-    | MANAGEMENT AUTHORIZATION
+    | Pickup management authorization
     |--------------------------------------------------------------------------
     */
 
@@ -857,37 +590,28 @@ final class PickupController extends Controller
 
         $user = $request->user();
 
-        /*
-         * Global admin
-         */
-
-        if ($this->isGlobalAdmin($user)) {
+        if (
+            $user->isSuperAdmin()
+            || $user->hasRole('main_admin')
+        ) {
             return;
         }
 
-        /*
-         * Branch manager
-         */
-
         if (
             $user->hasRole('branch_manager')
-            ||
-            $user->hasRole('sub_branch_manager')
+            || $user->hasRole('sub_branch_manager')
         ) {
 
-            $branchId =
-                $this->resolveUserBranchId(
-                    $request,
-                    $user
-                );
+            $branchId = (int) $user->branch_id;
 
             abort_unless(
-                $branchId
-                &&
-                $this->pickupBelongsToBranch(
-                    $pickup,
-                    $branchId
-                ),
+                $branchId === (int) $pickup->pickup_branch_id
+                ||
+                $branchId === (int) $pickup->pickup_sub_branch_id
+                ||
+                $branchId === (int) $pickup->branch_id
+                ||
+                $branchId === (int) $pickup->sub_branch_id,
                 403
             );
 
@@ -899,129 +623,7 @@ final class PickupController extends Controller
 
     /*
     |--------------------------------------------------------------------------
-    | PICKUP ACTION AUTHORIZATION
-    |--------------------------------------------------------------------------
-    */
-
-    private function authorizePickupAction(
-        Request $request,
-        PickupRequestModel $pickup
-    ): void {
-
-        $user = $request->user();
-
-        /*
-         * Global admin
-         */
-
-        if ($this->isGlobalAdmin($user)) {
-            return;
-        }
-
-        /*
-         * Branch managers can operate on their branch pickups.
-         */
-
-        if (
-            $user->hasRole('branch_manager')
-            ||
-            $user->hasRole('sub_branch_manager')
-        ) {
-
-            $branchId =
-                $this->resolveUserBranchId(
-                    $request,
-                    $user
-                );
-
-            abort_unless(
-                $branchId
-                &&
-                $this->pickupBelongsToBranch(
-                    $pickup,
-                    $branchId
-                ),
-                403
-            );
-
-            return;
-        }
-
-        /*
-         * Rider can only operate on assigned pickup.
-         */
-
-        abort_unless(
-            (int) $pickup->assigned_to ===
-            (int) $user->id,
-            403
-        );
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | PICKUP BELONGS TO BRANCH
-    |--------------------------------------------------------------------------
-    */
-
-    private function pickupBelongsToBranch(
-        PickupRequestModel $pickup,
-        int $branchId
-    ): bool {
-
-        return
-            (int) $pickup->branch_id === $branchId
-            ||
-            (int) $pickup->sub_branch_id === $branchId
-            ||
-            (int) $pickup->pickup_branch_id === $branchId
-            ||
-            (int) $pickup->pickup_sub_branch_id === $branchId;
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | STAFF ASSIGNMENT AUTHORIZATION
-    |--------------------------------------------------------------------------
-    */
-
-    private function authorizeStaffAssignment(
-        PickupRequestModel $pickup,
-        User $staff
-    ): void {
-
-        /*
-         * If staff has no branch configured, don't allow
-         * cross-branch assignment.
-         */
-
-        $pickupBranchIds = array_filter([
-            (int) $pickup->branch_id,
-            (int) $pickup->sub_branch_id,
-            (int) $pickup->pickup_branch_id,
-            (int) $pickup->pickup_sub_branch_id,
-        ]);
-
-        if (
-            $staff->branch_id
-            &&
-            ! in_array(
-                (int) $staff->branch_id,
-                $pickupBranchIds,
-                true
-            )
-        ) {
-
-            abort(
-                422,
-                'The selected staff does not belong to the pickup branch.'
-            );
-        }
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | MERCHANT SHIPMENT AUTHORIZATION
+    | Merchant shipment authorization
     |--------------------------------------------------------------------------
     */
 
@@ -1032,17 +634,12 @@ final class PickupController extends Controller
 
         $user = $request->user();
 
-        /*
-         * Global admin
-         */
-
-        if ($this->isGlobalAdmin($user)) {
+        if (
+            $user->isSuperAdmin()
+            || $user->hasRole('main_admin')
+        ) {
             return;
         }
-
-        /*
-         * Only merchant can manually attach shipments.
-         */
 
         abort_unless(
             $user->hasRole('merchant'),
@@ -1050,7 +647,8 @@ final class PickupController extends Controller
         );
 
         abort_unless(
-            (int) $shipment->merchant_id ===
+            (int) $shipment->merchant_id
+            ===
             (int) $user->merchant_id,
             403
         );

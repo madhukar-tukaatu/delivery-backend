@@ -22,25 +22,27 @@ final class GatewayShipmentController extends Controller
     }
 
     /**
-     * Store / Merchant Gateway
+     * Create shipment from an external Store Manager.
      *
-     * External store assigns an order to Tukaatu Express.
+     * IMPORTANT:
      *
-     * This endpoint:
+     * Creating a shipment does NOT create a pickup request.
      *
-     * 1. Authenticates merchant through gateway middleware.
-     * 2. Validates request.
-     * 3. Validates service cutoff.
-     * 4. Resolves pickup location.
-     * 5. Resolves nearest origin branch.
-     * 6. Resolves destination branch.
-     * 7. Builds route.
-     * 8. Creates shipment.
-     * 9. Returns Tukaatu tracking number.
+     * Shipment lifecycle:
      *
-     * Shipment starts as:
-     *
-     * AWAITING_PICKUP
+     * Store Manager
+     *      ↓
+     * POST /gateway/shipments
+     *      ↓
+     * Shipment created
+     *      ↓
+     * awaiting_pickup
+     *      ↓
+     * Store Manager prepares parcel
+     *      ↓
+     * POST /gateway/pickups
+     *      ↓
+     * Pickup request created
      */
     public function store(Request $request): JsonResponse
     {
@@ -57,7 +59,7 @@ final class GatewayShipmentController extends Controller
         $data = $request->validate([
             /*
             |--------------------------------------------------------------------------
-            | Merchant Order
+            | Merchant order
             |--------------------------------------------------------------------------
             */
 
@@ -69,7 +71,7 @@ final class GatewayShipmentController extends Controller
 
             /*
             |--------------------------------------------------------------------------
-            | Pickup
+            | Pickup location
             |--------------------------------------------------------------------------
             */
 
@@ -216,13 +218,13 @@ final class GatewayShipmentController extends Controller
             ],
 
             'packet.products.*.name' => [
-                'required_with:packet.products',
+                'required',
                 'string',
                 'max:255',
             ],
 
             'packet.products.*.quantity' => [
-                'required_with:packet.products',
+                'required',
                 'integer',
                 'min:1',
             ],
@@ -265,7 +267,7 @@ final class GatewayShipmentController extends Controller
 
             /*
             |--------------------------------------------------------------------------
-            | Pickup Mode
+            | Pickup mode
             |--------------------------------------------------------------------------
             */
 
@@ -299,11 +301,11 @@ final class GatewayShipmentController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        $data['self_drop'] = $data['self_drop'] ?? false;
+        $data['self_drop'] =
+            $data['self_drop'] ?? false;
 
-        $data['order_source'] = 'store_manager';
-
-        $data['merchant_id'] = $merchantId;
+        $data['order_source'] =
+            'store_manager';
 
         /*
         |--------------------------------------------------------------------------
@@ -312,10 +314,12 @@ final class GatewayShipmentController extends Controller
         */
 
         try {
-            $shipment = $this->shipmentService->createFromGateway(
-                merchantId: $merchantId,
-                data: $data,
-            );
+
+            $shipment =
+                $this->shipmentService->createFromGateway(
+                    merchantId: $merchantId,
+                    data: $data,
+                );
 
             return ApiResponse::success(
                 $shipment,
@@ -346,12 +350,13 @@ final class GatewayShipmentController extends Controller
     }
 
     /**
-     * Retrieve shipment from gateway.
+     * Retrieve shipment belonging to authenticated merchant.
      */
     public function show(
         Request $request,
         string $trackingNumber
     ): JsonResponse {
+
         $merchantId = (int) $request
             ->attributes
             ->get('merchant_id');
@@ -389,12 +394,13 @@ final class GatewayShipmentController extends Controller
     }
 
     /**
-     * Cancel shipment from Store Manager.
+     * Cancel shipment belonging to authenticated merchant.
      */
     public function cancel(
         Request $request,
         string $trackingNumber
     ): JsonResponse {
+
         $merchantId = (int) $request
             ->attributes
             ->get('merchant_id');
@@ -416,13 +422,25 @@ final class GatewayShipmentController extends Controller
             )
             ->firstOrFail();
 
+        /*
+        |--------------------------------------------------------------------------
+        | Cancellation rules
+        |--------------------------------------------------------------------------
+        |
+        | Once the parcel has actually been collected, the Store Manager
+        | cannot cancel it through the gateway.
+        |
+        */
+
+        $cancellableStatuses = [
+            CourierStatus::BOOKED,
+            CourierStatus::AWAITING_PICKUP,
+            CourierStatus::PICKUP_ASSIGNED,
+        ];
+
         if (! in_array(
             $shipment->status,
-            [
-                CourierStatus::BOOKED,
-                CourierStatus::AWAITING_PICKUP,
-                CourierStatus::PICKUP_ASSIGNED,
-            ],
+            $cancellableStatuses,
             true
         )) {
             return ApiResponse::error(
@@ -431,12 +449,13 @@ final class GatewayShipmentController extends Controller
             );
         }
 
-        $updated = $this->shipmentService->updateStatus(
-            shipment: $shipment,
-            status: CourierStatus::CANCELLED,
-            userId: null,
-            note: 'Cancelled by Store Manager API.'
-        );
+        $updated =
+            $this->shipmentService->updateStatus(
+                shipment: $shipment,
+                status: CourierStatus::CANCELLED,
+                userId: null,
+                note: 'Cancelled by Store Manager API.'
+            );
 
         return ApiResponse::success(
             $updated,

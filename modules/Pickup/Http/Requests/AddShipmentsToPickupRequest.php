@@ -10,7 +10,7 @@ final class AddShipmentToPickupRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user() !== null;
+        return true;
     }
 
     public function rules(): array
@@ -19,13 +19,13 @@ final class AddShipmentToPickupRequest extends FormRequest
             'shipment_id' => [
                 'required',
                 'integer',
-                'exists:shipments,id',
+                'min:1',
             ],
 
             'remarks' => [
                 'nullable',
                 'string',
-                'max:500',
+                'max:1000',
             ],
         ];
     }

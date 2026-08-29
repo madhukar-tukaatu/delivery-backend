@@ -6,64 +6,69 @@ namespace Modules\Pickup\Support;
 
 final class PickupStatus
 {
+    /*
+    |--------------------------------------------------------------------------
+    | Main lifecycle
+    |--------------------------------------------------------------------------
+    */
+
     public const REQUESTED = 'requested';
 
-    public const RIDER_ASSIGNED = 'rider_assigned';
+    public const ASSIGNED = 'assigned';
 
-    public const RIDER_STARTED = 'rider_started';
+    public const STARTED = 'started';
 
-    public const RIDER_ARRIVED = 'rider_arrived';
-
-    public const COLLECTING = 'collecting';
+    public const ARRIVED = 'arrived';
 
     public const COMPLETED = 'completed';
 
     public const FAILED = 'failed';
 
-    public const RESCHEDULED = 'rescheduled';
-
     public const CANCELLED = 'cancelled';
 
-    /**
-     * Pickup is still operationally open.
-     *
-     * IMPORTANT:
-     *
-     * A rider being assigned does NOT close the pickup.
-     * A rider starting does NOT close the pickup.
-     *
-     * The pickup remains open until the rider reaches
-     * the store / collection starts.
-     */
-    public static function open(): array
-    {
-        return [
-            self::REQUESTED,
-            self::RIDER_ASSIGNED,
-            self::RIDER_STARTED,
-        ];
-    }
-
-    /**
-     * Pickup is active but shipment addition is no longer allowed.
-     */
-    public static function locked(): array
-    {
-        return [
-            self::RIDER_ARRIVED,
-            self::COLLECTING,
-        ];
-    }
+    /*
+    |--------------------------------------------------------------------------
+    | Active pickup
+    |--------------------------------------------------------------------------
+    |
+    | A pickup remains the active container until it is completed,
+    | failed or cancelled.
+    |
+    */
 
     public static function active(): array
     {
         return [
             self::REQUESTED,
-            self::RIDER_ASSIGNED,
-            self::RIDER_STARTED,
-            self::RIDER_ARRIVED,
-            self::COLLECTING,
+            self::ASSIGNED,
+            self::STARTED,
+            self::ARRIVED,
         ];
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Pickups accepting new shipments
+    |--------------------------------------------------------------------------
+    |
+    | According to the agreed workflow, shipments can continue to
+    | enter the same pickup container until the pickup is closed.
+    |
+    */
+
+    public static function acceptingShipments(): array
+    {
+        return [
+            self::REQUESTED,
+            self::ASSIGNED,
+            self::STARTED,
+            self::ARRIVED,
+        ];
+    }
+
+    public static function open(): array
+    {
+        return self::active();
     }
 
     public static function closed(): array
@@ -71,7 +76,6 @@ final class PickupStatus
         return [
             self::COMPLETED,
             self::FAILED,
-            self::RESCHEDULED,
             self::CANCELLED,
         ];
     }

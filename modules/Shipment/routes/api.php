@@ -1,12 +1,22 @@
 <?php
 
+declare(strict_types=1);
+
 use Illuminate\Support\Facades\Route;
-use Modules\Pickup\Http\Controllers\GatewayPickupController;
 use Modules\Shipment\Http\Controllers\Api\AdminNotificationController;
 use Modules\Shipment\Http\Controllers\Api\AdminShipmentTaskController;
 use Modules\Shipment\Http\Controllers\Api\MerchantShipmentController;
 use Modules\Shipment\Http\Controllers\GatewayShipmentController;
 use Modules\Shipment\Http\Controllers\ShipmentController;
+
+/*
+|--------------------------------------------------------------------------
+| Shipment API Routes
+|--------------------------------------------------------------------------
+|
+|--------------------------------------------------------------------------
+*/
+
 
 /*
 |--------------------------------------------------------------------------
@@ -23,9 +33,17 @@ Route::prefix('v1/admin')
         'auth:sanctum',
         // 'branch.scope',
     ])
-    ->group(function () {
+    ->group(function (): void {
 
-        Route::middleware(['route.permission'])->group(function () {
+        Route::middleware([
+            'route.permission',
+        ])->group(function (): void {
+
+            /*
+            |--------------------------------------------------------------------------
+            | Shipments
+            |--------------------------------------------------------------------------
+            */
 
             Route::get(
                 'shipments',
@@ -57,6 +75,7 @@ Route::prefix('v1/admin')
                 [ShipmentController::class, 'cancel']
             )->name('shipments.cancel');
 
+
             /*
             |--------------------------------------------------------------------------
             | Shipment Tasks
@@ -66,17 +85,18 @@ Route::prefix('v1/admin')
             Route::get(
                 'shipment-tasks',
                 [AdminShipmentTaskController::class, 'index']
-            );
+            )->name('shipment-tasks.index');
 
             Route::post(
                 'shipment-tasks/{id}/assign',
                 [AdminShipmentTaskController::class, 'assign']
-            );
+            )->name('shipment-tasks.assign');
 
             Route::post(
                 'shipment-tasks/{id}/status',
                 [AdminShipmentTaskController::class, 'updateStatus']
-            );
+            )->name('shipment-tasks.status');
+
 
             /*
             |--------------------------------------------------------------------------
@@ -87,33 +107,27 @@ Route::prefix('v1/admin')
             Route::get(
                 'notifications',
                 [AdminNotificationController::class, 'index']
-            );
+            )->name('notifications.index');
 
             Route::post(
                 'notifications/{id}/read',
                 [AdminNotificationController::class, 'markRead']
-            );
+            )->name('notifications.read');
 
             Route::post(
                 'notifications/read-all',
                 [AdminNotificationController::class, 'markAllRead']
-            );
+            )->name('notifications.read-all');
         });
     });
+
 
 /*
 |--------------------------------------------------------------------------
 | Tukaatu Internal Merchant Routes
 |--------------------------------------------------------------------------
 |
-| These are merchants who registered directly with Tukaatu.
-|
-| Authentication:
-|   Laravel Sanctum
-|
-| Example:
-|
-|   POST /api/v1/merchant/shipments
+| Merchants registered directly with Tukaatu.
 |
 */
 
@@ -124,9 +138,11 @@ Route::prefix('v1/merchant')
         'role:merchant',
         'branch.scope',
     ])
-    ->group(function () {
+    ->group(function (): void {
 
-        Route::middleware(['route.permission'])->group(function () {
+        Route::middleware([
+            'route.permission',
+        ])->group(function (): void {
 
             Route::post(
                 'shipments',
@@ -135,26 +151,28 @@ Route::prefix('v1/merchant')
         });
     });
 
+
 /*
 |--------------------------------------------------------------------------
-| External Store Manager / Integration Routes
+| External Store Manager / Gateway
 |--------------------------------------------------------------------------
-|
-| These are stores that integrate their own Store Manager system
-| with Tukaatu.
 |
 | Authentication:
 |
 |   X-Tukaatu-Key
 |   X-Tukaatu-Secret
 |
+| merchant.api-key middleware must populate:
+|
+|   request()->attributes->get('merchant_id')
+|
 | IMPORTANT:
 |
-| No Sanctum.
-| No role:merchant.
-| No branch.scope.
-| No route.permission.
+| Pickup routes are NOT registered here.
 |
+| Pickup belongs to the Pickup module.
+|
+|--------------------------------------------------------------------------
 */
 
 Route::prefix('v1/gateway')
@@ -162,30 +180,47 @@ Route::prefix('v1/gateway')
     ->middleware([
         'merchant.api-key',
     ])
-    ->group(function () {
+    ->group(function (): void {
+
+        /*
+        |--------------------------------------------------------------------------
+        | Create shipment
+        |--------------------------------------------------------------------------
+        |
+        | Store Manager creates the shipment.
+        |
+        | Result:
+        |
+        | awaiting_pickup
+        |
+        */
 
         Route::post(
             'shipments',
             [GatewayShipmentController::class, 'store']
         )->name('shipments.store');
 
+
+        /*
+        |--------------------------------------------------------------------------
+        | Get shipment
+        |--------------------------------------------------------------------------
+        */
+
         Route::get(
             'shipments/{trackingNumber}',
             [GatewayShipmentController::class, 'show']
         )->name('shipments.show');
 
+
+        /*
+        |--------------------------------------------------------------------------
+        | Cancel shipment
+        |--------------------------------------------------------------------------
+        */
+
         Route::post(
             'shipments/{trackingNumber}/cancel',
             [GatewayShipmentController::class, 'cancel']
         )->name('shipments.cancel');
-
-        Route::post(
-            'pickups',
-            [GatewayPickupController::class, 'store']
-        )->name('pickups.store');
-
-        Route::get(
-            'pickups/{requestNumber}',
-            [GatewayPickupController::class, 'show']
-        )->name('pickups.show');
     });

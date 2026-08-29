@@ -8,7 +8,6 @@ use App\Support\CourierStatus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Modules\Merchant\Models\Merchant;
-use Modules\Pickup\Services\ShipmentPickupAttachmentService;
 use Modules\Shipment\Models\Shipment;
 
 final class ShipmentService
@@ -17,39 +16,45 @@ final class ShipmentService
         private readonly MerchantPickupLocationResolver $pickupResolver,
         private readonly BranchAssignmentService $branchAssignment,
         private readonly ShipmentNumberService $shipmentNumberService,
-        private readonly ShipmentPickupAttachmentService $pickupAttachmentService,
     ) {
     }
 
     /**
      * Create shipment from external Store Manager.
      *
+     * IMPORTANT:
+     *
+     * This method ONLY creates the shipment.
+     *
+     * It does NOT create a pickup request.
+     *
      * Workflow:
      *
      * Store Manager
      *      ↓
-     * Gateway
+     * Gateway shipment API
      *      ↓
      * Shipment
      *      ↓
-     * AWAITING_PICKUP
+     * awaiting_pickup
+     *
+     * Later:
+     *
+     * Store Manager
      *      ↓
-     * Active Pickup
+     * Gateway pickup API
+     *      ↓
+     * PickupRequest
      *      ↓
      * pickup_request_shipments
-     *
-     * Pickup behavior:
-     *
-     * - Existing active pickup is reused.
-     * - If no active pickup exists, one is created.
-     * - Shipment is attached to the pickup.
-     * - Rider assignment does not close pickup.
-     * - New shipments can be attached until pickup completion.
+     *      ↓
+     * Rider / Staff
      */
     public function createFromGateway(
         int $merchantId,
         array $data
     ): Shipment {
+
         /*
         |--------------------------------------------------------------------------
         | Merchant
@@ -118,6 +123,9 @@ final class ShipmentService
                 |--------------------------------------------------------------------------
                 | Idempotency
                 |--------------------------------------------------------------------------
+                |
+                | The same merchant_order_id cannot create two shipments.
+                |
                 */
 
                 $existing =
@@ -190,7 +198,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Origin
+                | Origin branch
                 |--------------------------------------------------------------------------
                 */
 
@@ -211,7 +219,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Destination
+                | Destination branch
                 |--------------------------------------------------------------------------
                 */
 
@@ -241,7 +249,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Route
+                | Build route
                 |--------------------------------------------------------------------------
                 */
 
@@ -264,7 +272,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Products
+                | Packet products
                 |--------------------------------------------------------------------------
                 */
 
@@ -288,11 +296,15 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Shipment
+                | Shipment data
                 |--------------------------------------------------------------------------
                 */
 
                 $shipmentData = [
+
+                    /*
+                    | Identity
+                    */
 
                     'tracking_number' =>
                         $trackingNumber,
@@ -327,7 +339,7 @@ final class ShipmentService
                         $origin['branch_id'],
 
                     'origin_sub_branch_id' =>
-                        $origin['sub_branch_id'],
+                        $origin['sub_branch_id'] ?? null,
 
                     /*
                     | Receiver
@@ -369,7 +381,14 @@ final class ShipmentService
                         $destination['branch_id'],
 
                     'destination_sub_branch_id' =>
-                        $destination['sub_branch_id'],
+                        $destination['sub_branch_id'] ?? null,
+
+                    /*
+                    | Route
+                    */
+
+                    'route_id' =>
+                        $route['route_id'] ?? null,
 
                     /*
                     | Service
@@ -431,7 +450,7 @@ final class ShipmentService
                         $data['remarks'] ?? null,
 
                     /*
-                    | Initial status
+                    | Initial lifecycle
                     */
 
                     'status' =>
@@ -451,7 +470,27 @@ final class ShipmentService
                     )
                 ) {
                     $shipmentData['requires_transfer'] =
-                        $route['requires_transfer'];
+                        (bool) (
+                            $route['requires_transfer']
+                            ?? false
+                        );
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | Optional route fields
+                |--------------------------------------------------------------------------
+                */
+
+                if (
+                    array_key_exists(
+                        'route_distance_km',
+                        $this->shipmentColumns()
+                    )
+                ) {
+                    $shipmentData['route_distance_km'] =
+                        $route['distance_km']
+                        ?? 0;
                 }
 
                 /*
@@ -487,36 +526,22 @@ final class ShipmentService
                     newStatus:
                         CourierStatus::AWAITING_PICKUP,
                     description:
-                        'Shipment created successfully. Awaiting pickup.'
+                        'Shipment created successfully. Awaiting pickup request.'
                 );
 
                 /*
                 |--------------------------------------------------------------------------
-                | AUTOMATIC PICKUP ATTACHMENT
+                | IMPORTANT
                 |--------------------------------------------------------------------------
                 |
-                | This is now handled by the Pickup module.
+                | DO NOT attach shipment to a pickup here.
                 |
-                | It will:
+                | Pickup is explicitly requested later by:
                 |
-                | 1. Find active pickup.
-                | 2. Reuse it.
-                | 3. Or create a new pickup.
-                | 4. Attach through pickup_request_shipments.
+                | POST /api/v1/gateway/pickups
                 |
-                */
-
-                $this->pickupAttachmentService
-                    ->attachShipmentToActivePickup(
-                        shipment: $shipment,
-                        merchant: $merchant,
-                        pickupLocation: $pickupLocation,
-                    );
-
-                /*
-                |--------------------------------------------------------------------------
-                | Return
-                |--------------------------------------------------------------------------
+                | The Pickup module then decides which shipments are attached.
+                |
                 */
 
                 return $shipment->fresh();
@@ -531,6 +556,7 @@ final class ShipmentService
         array $products,
         string $packetTrackingNumber
     ): array {
+
         if ($products === []) {
             return [];
         }
@@ -541,6 +567,7 @@ final class ShipmentService
             array_values($products)
             as $index => $product
         ) {
+
             $productNumber =
                 $index + 1;
 
@@ -596,7 +623,7 @@ final class ShipmentService
     }
 
     /**
-     * Create tracking event.
+     * Create shipment tracking event.
      */
     private function createTrackingEvent(
         Shipment $shipment,
@@ -604,8 +631,8 @@ final class ShipmentService
         string $newStatus,
         string $description
     ): void {
-        $table =
-            'tracking_events';
+
+        $table = 'tracking_events';
 
         if (
             ! DB::getSchemaBuilder()
@@ -657,9 +684,7 @@ final class ShipmentService
 
         $columns =
             DB::getSchemaBuilder()
-                ->getColumnListing(
-                    $table
-                );
+                ->getColumnListing($table);
 
         $data =
             array_intersect_key(
@@ -672,24 +697,23 @@ final class ShipmentService
     }
 
     /**
-     * Shipment columns.
+     * Get shipments table columns.
      */
     private function shipmentColumns(): array
     {
         return array_flip(
             DB::getSchemaBuilder()
-                ->getColumnListing(
-                    'shipments'
-                )
+                ->getColumnListing('shipments')
         );
     }
 
     /**
-     * Filter shipment data.
+     * Protect against optional/mismatched schema fields.
      */
     private function filterShipmentColumns(
         array $data
     ): array {
+
         return array_intersect_key(
             $data,
             $this->shipmentColumns()
@@ -705,6 +729,7 @@ final class ShipmentService
         ?int $userId = null,
         ?string $note = null
     ): Shipment {
+
         return DB::transaction(
             function () use (
                 $shipment,
@@ -724,12 +749,24 @@ final class ShipmentService
                         $status
                     );
 
+                /*
+                |--------------------------------------------------------------------------
+                | Delivered
+                |--------------------------------------------------------------------------
+                */
+
                 if (
                     $status === CourierStatus::DELIVERED
                 ) {
                     $shipment->delivered_at =
                         now();
                 }
+
+                /*
+                |--------------------------------------------------------------------------
+                | Cancelled
+                |--------------------------------------------------------------------------
+                */
 
                 if (
                     $status === CourierStatus::CANCELLED
@@ -738,7 +775,19 @@ final class ShipmentService
                         now();
                 }
 
+                /*
+                |--------------------------------------------------------------------------
+                | Save
+                |--------------------------------------------------------------------------
+                */
+
                 $shipment->save();
+
+                /*
+                |--------------------------------------------------------------------------
+                | Tracking event
+                |--------------------------------------------------------------------------
+                */
 
                 $this->createTrackingEvent(
                     shipment: $shipment,

@@ -6,20 +6,20 @@ namespace Modules\Pickup\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
 
-final class AssignPickupRequest extends FormRequest
+final class CollectShipmentRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        return $this->user() !== null;
+        return true;
     }
 
     public function rules(): array
     {
         return [
-            'staff_id' => [
-                'required',
-                'integer',
-                'exists:users,id',
+            'remarks' => [
+                'nullable',
+                'string',
+                'max:1000',
             ],
         ];
     }

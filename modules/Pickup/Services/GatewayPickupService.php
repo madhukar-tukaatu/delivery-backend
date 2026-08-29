@@ -4,15 +4,12 @@ declare(strict_types=1);
 
 namespace Modules\Pickup\Services;
 
-use App\Support\CourierStatus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Modules\Merchant\Models\Merchant;
 use Modules\Merchant\Models\MerchantPickupLocation;
 use Modules\Pickup\Models\PickupRequest;
-use Modules\Pickup\Models\PickupRequestShipment;
 use Modules\Pickup\Support\PickupStatus;
-use Modules\Shipment\Models\Shipment;
 
 final class GatewayPickupService
 {
@@ -20,21 +17,23 @@ final class GatewayPickupService
         int $merchantId,
         array $data
     ): PickupRequest {
-        $merchant =
-            Merchant::query()
-                ->find($merchantId);
+
+        $merchant = Merchant::query()
+            ->find($merchantId);
 
         if (! $merchant) {
             throw ValidationException::withMessages([
-                'merchant' =>
+                'merchant' => [
                     'Authenticated merchant was not found.',
+                ],
             ]);
         }
 
         if ($merchant->status !== 'active') {
             throw ValidationException::withMessages([
-                'merchant' =>
+                'merchant' => [
                     'Merchant account is not active.',
+                ],
             ]);
         }
 
@@ -64,340 +63,98 @@ final class GatewayPickupService
 
                 if (! $pickupLocation) {
                     throw ValidationException::withMessages([
-                        'pickup_location_id' =>
+                        'pickup_location_id' => [
                             'Pickup location does not belong to this merchant.',
+                        ],
                     ]);
                 }
 
                 /*
                 |--------------------------------------------------------------------------
-                | Check whether an OPEN pickup already exists
-                |--------------------------------------------------------------------------
-                |
-                | Store should normally create only one pickup request.
-                |
-                | If it retries, return the same open pickup.
-                |
-                */
-
-                $existing =
-                    PickupRequest::query()
-                        ->where(
-                            'merchant_id',
-                            $merchant->id
-                        )
-                        ->where(
-                            'pickup_location_id',
-                            $pickupLocation->id
-                        )
-                        ->whereIn(
-                            'status',
-                            PickupStatus::open()
-                        )
-                        ->lockForUpdate()
-                        ->latest('id')
-                        ->first();
-
-                if ($existing) {
-                    return $existing->load([
-                        'merchant',
-                        'pickupLocation',
-                        'shipments.shipment',
-                        'pickupBranch',
-                        'pickupSubBranch',
-                        'assignedStaff',
-                    ]);
-                }
-
-                /*
-                |--------------------------------------------------------------------------
-                | Get shipment tracking numbers
+                | Find current open pickup
                 |--------------------------------------------------------------------------
                 */
 
-                $trackingNumbers =
-                    collect(
-                        $data[
-                            'shipment_tracking_numbers'
-                        ]
+                $pickup = PickupRequest::query()
+                    ->where(
+                        'merchant_id',
+                        $merchant->id
                     )
-                    ->map(
-                        static fn ($value): string =>
-                            trim((string) $value)
+                    ->where(
+                        'pickup_location_id',
+                        $pickupLocation->id
                     )
-                    ->filter()
-                    ->unique()
-                    ->values()
-                    ->all();
+                    ->whereIn(
+                        'status',
+                        PickupStatus::active()
+                    )
+                    ->lockForUpdate()
+                    ->latest('id')
+                    ->first();
 
-                if ($trackingNumbers === []) {
+                if (! $pickup) {
                     throw ValidationException::withMessages([
-                        'shipment_tracking_numbers' =>
-                            'At least one shipment is required.',
+                        'pickup' => [
+                            'There is no open pickup request for this pickup location. '
+                            . 'Create at least one shipment first.',
+                        ],
                     ]);
                 }
 
                 /*
                 |--------------------------------------------------------------------------
-                | Load shipments
+                | Mark pickup as requested
                 |--------------------------------------------------------------------------
                 */
 
-                $shipments =
-                    Shipment::query()
-                        ->where(
-                            'merchant_id',
-                            $merchant->id
-                        )
-                        ->whereIn(
-                            'tracking_number',
-                            $trackingNumbers
-                        )
-                        ->get();
-
-                $found =
-                    $shipments
-                        ->pluck('tracking_number')
-                        ->map(
-                            static fn ($value): string =>
-                                (string) $value
-                        )
-                        ->all();
-
-                $missing =
-                    array_values(
-                        array_diff(
-                            $trackingNumbers,
-                            $found
-                        )
-                    );
-
-                if ($missing !== []) {
-                    throw ValidationException::withMessages([
-                        'shipment_tracking_numbers' =>
-                            'Some shipments were not found.',
-
-                        'missing_shipments' =>
-                            $missing,
-                    ]);
+                if (
+                    $pickup->status === PickupStatus::REQUESTED
+                ) {
+                    $pickup->requested_at =
+                        $pickup->requested_at
+                        ?? now();
                 }
 
                 /*
                 |--------------------------------------------------------------------------
-                | Validate shipments
+                | Update remarks
                 |--------------------------------------------------------------------------
                 */
 
-                foreach ($shipments as $shipment) {
-
-                    if (
-                        ! in_array(
-                            $shipment->status,
-                            [
-                                CourierStatus::AWAITING_PICKUP,
-                                CourierStatus::BOOKED,
-                                CourierStatus::PICKUP_ASSIGNED,
-                            ],
-                            true
-                        )
-                    ) {
-                        throw ValidationException::withMessages([
-                            'shipment_tracking_numbers' =>
-                                "Shipment {$shipment->tracking_number} "
-                                . 'is not eligible for pickup.',
-                        ]);
-                    }
-
-                    if (
-                        (int) $shipment->pickup_location_id
-                        !== (int) $pickupLocation->id
-                    ) {
-                        throw ValidationException::withMessages([
-                            'shipment_tracking_numbers' =>
-                                "Shipment {$shipment->tracking_number} "
-                                . 'belongs to a different pickup location.',
-                        ]);
-                    }
-
-                    $alreadyInPickup =
-                        PickupRequestShipment::query()
-                            ->where(
-                                'shipment_id',
-                                $shipment->id
-                            )
-                            ->whereNull('removed_at')
-                            ->whereHas(
-                                'pickupRequest',
-                                function ($query) {
-                                    $query->whereIn(
-                                        'status',
-                                        PickupStatus::active()
-                                    );
-                                }
-                            )
-                            ->exists();
-
-                    if ($alreadyInPickup) {
-                        throw ValidationException::withMessages([
-                            'shipment_tracking_numbers' =>
-                                "Shipment {$shipment->tracking_number} "
-                                . 'is already assigned to an active pickup request.',
-                        ]);
-                    }
+                if (
+                    ! empty($data['remarks'])
+                ) {
+                    $pickup->remarks =
+                        $data['remarks'];
                 }
 
                 /*
                 |--------------------------------------------------------------------------
-                | Origin branch
+                | Preferred pickup
                 |--------------------------------------------------------------------------
                 */
 
-                $originBranchIds =
-                    $shipments
-                        ->pluck('origin_branch_id')
-                        ->filter()
-                        ->unique()
-                        ->values();
-
-                $originSubBranchIds =
-                    $shipments
-                        ->pluck('origin_sub_branch_id')
-                        ->filter()
-                        ->unique()
-                        ->values();
-
-                if ($originBranchIds->count() !== 1) {
-                    throw ValidationException::withMessages([
-                        'shipment_tracking_numbers' =>
-                            'All shipments must belong to the same origin branch.',
-                    ]);
+                if (
+                    ! empty(
+                        $data['preferred_pickup_at']
+                    )
+                ) {
+                    $pickup->preferred_pickup_at =
+                        $data['preferred_pickup_at'];
                 }
-
-                $branchId =
-                    (int) $originBranchIds->first();
-
-                $subBranchId =
-                    $originSubBranchIds->count() === 1
-                        ? (int) $originSubBranchIds->first()
-                        : null;
 
                 /*
                 |--------------------------------------------------------------------------
-                | CREATE PICKUP
-                |--------------------------------------------------------------------------
-                |
-                | NO pickup cutoff here.
-                |
-                */
-
-                $pickup =
-                    PickupRequest::query()
-                        ->create([
-                            'request_number' =>
-                                $data['pickup_request_number'],
-
-                            'merchant_id' =>
-                                $merchant->id,
-
-                            'branch_id' =>
-                                $branchId,
-
-                            'sub_branch_id' =>
-                                $subBranchId,
-
-                            'pickup_branch_id' =>
-                                $branchId,
-
-                            'pickup_sub_branch_id' =>
-                                $subBranchId,
-
-                            'pickup_location_id' =>
-                                $pickupLocation->id,
-
-                            'pickup_name' =>
-                                $pickupLocation->name
-                                ?? $merchant->name
-                                ?? null,
-
-                            'pickup_phone' =>
-                                $pickupLocation->phone
-                                ?? null,
-
-                            'pickup_address' =>
-                                $pickupLocation->address
-                                ?? null,
-
-                            'pickup_city' =>
-                                $pickupLocation->city
-                                ?? null,
-
-                            'pickup_area' =>
-                                $pickupLocation->area
-                                ?? null,
-
-                            'pickup_lat' =>
-                                $pickupLocation->latitude
-                                ?? $pickupLocation->lat
-                                ?? null,
-
-                            'pickup_lng' =>
-                                $pickupLocation->longitude
-                                ?? $pickupLocation->lng
-                                ?? null,
-
-                            'preferred_pickup_at' =>
-                                $data['preferred_pickup_at']
-                                ?? null,
-
-                            'parcel_quantity' =>
-                                $shipments->count(),
-
-                            'status' =>
-                                PickupStatus::REQUESTED,
-
-                            'remarks' =>
-                                $data['remarks']
-                                ?? null,
-
-                            'requested_at' =>
-                                now(),
-                        ]);
-
-                /*
-                |--------------------------------------------------------------------------
-                | Attach initial shipments
+                | Recalculate shipment count
                 |--------------------------------------------------------------------------
                 */
 
-                foreach ($shipments as $shipment) {
+                $pickup->parcel_quantity =
+                    $pickup
+                        ->activeShipments()
+                        ->count();
 
-                    PickupRequestShipment::query()
-                        ->create([
-                            'pickup_request_id' =>
-                                $pickup->id,
-
-                            'shipment_id' =>
-                                $shipment->id,
-
-                            'remarks' =>
-                                null,
-                        ]);
-
-                    if (
-                        $shipment->status
-                        === CourierStatus::AWAITING_PICKUP
-                    ) {
-                        $shipment->status =
-                            CourierStatus::PICKUP_ASSIGNED;
-
-                        $shipment->merchant_status =
-                            CourierStatus::merchantStatus(
-                                CourierStatus::PICKUP_ASSIGNED
-                            );
-
-                        $shipment->save();
-                    }
-                }
+                $pickup->save();
 
                 return $pickup->fresh([
                     'merchant',
@@ -409,5 +166,29 @@ final class GatewayPickupService
                 ]);
             }
         );
+    }
+
+    public function findForMerchant(
+        int $merchantId,
+        string $requestNumber
+    ): PickupRequest {
+
+        return PickupRequest::query()
+            ->where(
+                'merchant_id',
+                $merchantId
+            )
+            ->where(
+                'request_number',
+                $requestNumber
+            )
+            ->with([
+                'pickupLocation',
+                'pickupBranch',
+                'pickupSubBranch',
+                'assignedStaff',
+                'shipments.shipment',
+            ])
+            ->firstOrFail();
     }
 }

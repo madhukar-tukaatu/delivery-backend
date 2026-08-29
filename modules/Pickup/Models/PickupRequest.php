@@ -25,8 +25,6 @@ final class PickupRequest extends Model
         'branch_id',
         'sub_branch_id',
 
-        'shipment_id',
-
         'pickup_branch_id',
         'pickup_sub_branch_id',
 
@@ -77,8 +75,10 @@ final class PickupRequest extends Model
         'assigned_at' => 'datetime',
         'picked_up_at' => 'datetime',
         'failed_at' => 'datetime',
+
         'accepted_at' => 'datetime',
         'received_at_origin_at' => 'datetime',
+
         'arrived_at' => 'datetime',
         'completed_at' => 'datetime',
         'cancelled_at' => 'datetime',
@@ -224,18 +224,18 @@ final class PickupRequest extends Model
                 'branch_id',
                 $branchId
             )
-            ->orWhere(
-                'sub_branch_id',
-                $branchId
-            )
-            ->orWhere(
-                'pickup_branch_id',
-                $branchId
-            )
-            ->orWhere(
-                'pickup_sub_branch_id',
-                $branchId
-            );
+                ->orWhere(
+                    'sub_branch_id',
+                    $branchId
+                )
+                ->orWhere(
+                    'pickup_branch_id',
+                    $branchId
+                )
+                ->orWhere(
+                    'pickup_sub_branch_id',
+                    $branchId
+                );
         });
     }
 }

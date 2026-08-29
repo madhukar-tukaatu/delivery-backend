@@ -8,7 +8,7 @@ use Modules\Pickup\Http\Controllers\PickupController;
 
 /*
 |--------------------------------------------------------------------------
-| External Store Gateway
+| External Store Manager / Gateway
 |--------------------------------------------------------------------------
 |
 | Authentication:
@@ -16,7 +16,7 @@ use Modules\Pickup\Http\Controllers\PickupController;
 | X-Tukaatu-Key
 | X-Tukaatu-Secret
 |
-| Your existing gateway authentication middleware must populate:
+| The middleware must populate:
 |
 | request()->attributes->get('merchant_id')
 |
@@ -26,14 +26,35 @@ use Modules\Pickup\Http\Controllers\PickupController;
 Route::prefix('v1/gateway')
     ->name('gateway.')
     ->middleware([
-         'merchant.api-key',
+        'merchant.api-key',
     ])
     ->group(function () {
+
+        /*
+        |--------------------------------------------------------------------------
+        | Request pickup
+        |--------------------------------------------------------------------------
+        |
+        | Store Manager sends ONLY:
+        |
+        | pickup_location_id
+        | preferred_pickup_at
+        | remarks
+        |
+        | It does NOT send shipment tracking numbers.
+        |
+        */
 
         Route::post(
             'pickups',
             [GatewayPickupController::class, 'store']
         )->name('pickups.store');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Get pickup
+        |--------------------------------------------------------------------------
+        */
 
         Route::get(
             'pickups/{requestNumber}',
@@ -90,7 +111,7 @@ Route::prefix('v1/admin')
 
 /*
 |--------------------------------------------------------------------------
-| Merchant Portal
+| Internal Merchant Portal
 |--------------------------------------------------------------------------
 */
 
@@ -118,12 +139,10 @@ Route::prefix('v1/merchant')
             )->name('pickups.show');
 
             /*
-             * Internal merchant portal only.
-             *
-             * External Store Manager should use:
-             *
-             * POST /api/v1/gateway/pickups
-             */
+            |--------------------------------------------------------------------------
+            | Manual/internal attachment only
+            |--------------------------------------------------------------------------
+            */
 
             Route::post(
                 'pickups/shipments',

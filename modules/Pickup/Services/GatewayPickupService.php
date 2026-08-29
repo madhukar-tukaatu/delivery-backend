@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Modules\Pickup\Services;
 
+use App\Support\CourierStatus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Modules\Merchant\Models\Merchant;
@@ -17,34 +18,22 @@ final class GatewayPickupService
     /**
      * Create a pickup request from an external Store Manager.
      *
-     * IMPORTANT:
+     * Shipment creation and pickup creation are deliberately separate.
      *
-     * Shipment creation does NOT create a pickup request.
+     * POST /gateway/shipments
+     *      ↓
+     * shipment = awaiting_pickup
      *
-     * The merchant explicitly requests pickup through:
-     *
-     * POST /api/v1/gateway/pickups
-     *
-     * At that point we:
-     *
-     * 1. Validate merchant
-     * 2. Validate pickup location
-     * 3. Find an existing active pickup, if any
-     * 4. Otherwise create a new pickup request
-     * 5. Find all eligible awaiting_pickup shipments
-     * 6. Attach those shipments to the pickup
-     * 7. Return the pickup
+     * POST /gateway/pickups
+     *      ↓
+     * pickup request created
+     *      ↓
+     * eligible shipments attached
      */
     public function create(
         int $merchantId,
         array $data
     ): PickupRequest {
-
-        /*
-        |--------------------------------------------------------------------------
-        | Merchant
-        |--------------------------------------------------------------------------
-        */
 
         $merchant = Merchant::query()
             ->find($merchantId);
@@ -98,11 +87,36 @@ final class GatewayPickupService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Find existing active pickup
+                | Find eligible shipments FIRST
                 |--------------------------------------------------------------------------
                 |
-                | If there is already a pickup which has not been completed,
-                | failed, or cancelled, do not create another pickup batch.
+                | We should never create an empty pickup request.
+                |
+                */
+
+                $shipments = $this->findEligibleShipments(
+                    merchantId: $merchant->id,
+                    pickupLocationId: $pickupLocation->id,
+                );
+
+                if ($shipments->isEmpty()) {
+                    throw ValidationException::withMessages([
+                        'pickup' => [
+                            'There are no shipments awaiting pickup for this pickup location.',
+                        ],
+                    ]);
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | Find reusable pickup
+                |--------------------------------------------------------------------------
+                |
+                | Only a pickup which is still waiting to be processed can
+                | accept additional shipments.
+                |
+                | Once a rider has been assigned / started / arrived,
+                | the pickup batch should be frozen.
                 |
                 */
 
@@ -117,7 +131,7 @@ final class GatewayPickupService
                     )
                     ->whereIn(
                         'status',
-                        PickupStatus::active()
+                        $this->reusablePickupStatuses()
                     )
                     ->lockForUpdate()
                     ->latest('id')
@@ -125,52 +139,25 @@ final class GatewayPickupService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Create pickup request if none exists
+                | Create new pickup
                 |--------------------------------------------------------------------------
                 */
 
                 if (! $pickup) {
 
-                    $pickup = PickupRequest::query()->create([
-                        'merchant_id' =>
-                            $merchant->id,
+                    $pickup = $this->createPickupRequest(
+                        merchant: $merchant,
+                        pickupLocation: $pickupLocation,
+                        data: $data,
+                    );
 
-                        'pickup_location_id' =>
-                            $pickupLocation->id,
-
-                        'status' =>
-                            PickupStatus::REQUESTED,
-
-                        'requested_at' =>
-                            now(),
-
-                        'preferred_pickup_at' =>
-                            $data['preferred_pickup_at']
-                            ?? null,
-
-                        'remarks' =>
-                            $data['remarks']
-                            ?? null,
-
-                        'parcel_quantity' =>
-                            0,
-                    ]);
                 } else {
 
                     /*
                     |--------------------------------------------------------------------------
-                    | Existing active pickup
+                    | Existing reusable pickup
                     |--------------------------------------------------------------------------
                     */
-
-                    if (
-                        $pickup->status ===
-                        PickupStatus::REQUESTED
-                    ) {
-                        $pickup->requested_at =
-                            $pickup->requested_at
-                            ?? now();
-                    }
 
                     if (
                         ! empty(
@@ -195,22 +182,13 @@ final class GatewayPickupService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Attach eligible shipments
+                | Attach shipments
                 |--------------------------------------------------------------------------
-                |
-                | Only shipments which:
-                |
-                | - belong to this merchant
-                | - belong to this pickup location
-                | - are awaiting pickup
-                | - are not already attached to another active pickup
-                |
                 */
 
-                $this->attachEligibleShipments(
+                $this->attachShipments(
                     pickup: $pickup,
-                    merchantId: $merchant->id,
-                    pickupLocationId: $pickupLocation->id
+                    shipments: $shipments,
                 );
 
                 /*
@@ -225,39 +203,6 @@ final class GatewayPickupService
                         ->count();
 
                 $pickup->save();
-
-                /*
-                |--------------------------------------------------------------------------
-                | Safety check
-                |--------------------------------------------------------------------------
-                */
-
-                if (
-                    $pickup->parcel_quantity <= 0
-                ) {
-
-                    /*
-                    |--------------------------------------------------------------
-                    | If we just created an empty pickup, remove it.
-                    |--------------------------------------------------------------
-                    |
-                    | This prevents meaningless pickup requests when the
-                    | merchant has no awaiting shipments.
-                    |
-                    */
-
-                    if (
-                        $pickup->wasRecentlyCreated
-                    ) {
-                        $pickup->delete();
-                    }
-
-                    throw ValidationException::withMessages([
-                        'pickup' => [
-                            'There are no shipments awaiting pickup for this pickup location.',
-                        ],
-                    ]);
-                }
 
                 /*
                 |--------------------------------------------------------------------------
@@ -278,23 +223,21 @@ final class GatewayPickupService
     }
 
     /**
-     * Attach shipments which are ready for pickup.
+     * Find shipments eligible for a pickup request.
      *
-     * A shipment can belong to only one pickup batch.
+     * Conditions:
+     *
+     * - belongs to merchant
+     * - belongs to pickup location
+     * - awaiting pickup
+     * - not already attached to an active pickup
      */
-    private function attachEligibleShipments(
-        PickupRequest $pickup,
+    private function findEligibleShipments(
         int $merchantId,
         int $pickupLocationId
-    ): void {
+    ) {
 
-        /*
-        |--------------------------------------------------------------------------
-        | Find shipments
-        |--------------------------------------------------------------------------
-        */
-
-        $shipments = Shipment::query()
+        return Shipment::query()
             ->where(
                 'merchant_id',
                 $merchantId
@@ -305,7 +248,7 @@ final class GatewayPickupService
             )
             ->where(
                 'status',
-                'awaiting_pickup'
+                CourierStatus::AWAITING_PICKUP
             )
             ->whereDoesntHave(
                 'pickupRequests',
@@ -318,21 +261,223 @@ final class GatewayPickupService
             )
             ->lockForUpdate()
             ->get();
+    }
+
+    /**
+     * Pickup statuses which can still accept shipments.
+     *
+     * IMPORTANT:
+     *
+     * Once assigned to a rider, the batch should be frozen.
+     */
+    private function reusablePickupStatuses(): array
+    {
+        return [
+            PickupStatus::REQUESTED,
+        ];
+    }
+
+    /**
+     * Create a pickup request.
+     *
+     * pickup_name is REQUIRED by the database.
+     */
+    private function createPickupRequest(
+        Merchant $merchant,
+        MerchantPickupLocation $pickupLocation,
+        array $data
+    ): PickupRequest {
 
         /*
         |--------------------------------------------------------------------------
-        | Attach
+        | Resolve pickup identity
+        |--------------------------------------------------------------------------
+        |
+        | These are intentionally resolved from the merchant pickup location.
+        |
+        */
+
+        $pickupName =
+            $pickupLocation->name
+            ?? $pickupLocation->pickup_name
+            ?? $merchant->name
+            ?? 'Merchant Pickup';
+
+        $pickupPhone =
+            $pickupLocation->phone
+            ?? $pickupLocation->pickup_phone
+            ?? $merchant->phone
+            ?? null;
+
+        $pickupEmail =
+            $pickupLocation->email
+            ?? $pickupLocation->pickup_email
+            ?? $merchant->email
+            ?? null;
+
+        $pickupAddress =
+            $pickupLocation->address
+            ?? $pickupLocation->pickup_address
+            ?? null;
+
+        $pickupCity =
+            $pickupLocation->city
+            ?? null;
+
+        $pickupArea =
+            $pickupLocation->area
+            ?? null;
+
+        /*
+        |--------------------------------------------------------------------------
+        | Build data
         |--------------------------------------------------------------------------
         */
 
-        foreach ($shipments as $shipment) {
+        $pickupData = [
+
+            'merchant_id' =>
+                $merchant->id,
+
+            'pickup_location_id' =>
+                $pickupLocation->id,
 
             /*
-            |----------------------------------------------------------------------
-            | Adjust this relation name if your Shipment model uses another
-            | relationship name.
-            |----------------------------------------------------------------------
+            |--------------------------------------------------------------------------
+            | Required pickup information
+            |--------------------------------------------------------------------------
             */
+
+            'pickup_name' =>
+                $pickupName,
+
+            'pickup_phone' =>
+                $pickupPhone,
+
+            'pickup_email' =>
+                $pickupEmail,
+
+            'pickup_address' =>
+                $pickupAddress,
+
+            'pickup_city' =>
+                $pickupCity,
+
+            'pickup_area' =>
+                $pickupArea,
+
+            /*
+            |--------------------------------------------------------------------------
+            | Lifecycle
+            |--------------------------------------------------------------------------
+            */
+
+            'status' =>
+                PickupStatus::REQUESTED,
+
+            'requested_at' =>
+                now(),
+
+            /*
+            |--------------------------------------------------------------------------
+            | Merchant request
+            |--------------------------------------------------------------------------
+            */
+
+            'preferred_pickup_at' =>
+                $data['preferred_pickup_at']
+                ?? null,
+
+            'remarks' =>
+                $data['remarks']
+                ?? null,
+
+            /*
+            |--------------------------------------------------------------------------
+            | Initial quantity
+            |--------------------------------------------------------------------------
+            */
+
+            'parcel_quantity' =>
+                0,
+        ];
+
+        /*
+        |--------------------------------------------------------------------------
+        | Optional coordinates
+        |--------------------------------------------------------------------------
+        */
+
+        $columns =
+            $this->pickupRequestColumns();
+
+        if (
+            array_key_exists(
+                'pickup_lat',
+                $columns
+            )
+        ) {
+
+            $pickupData['pickup_lat'] =
+                $this->getLocationValue(
+                    $pickupLocation,
+                    [
+                        'latitude',
+                        'lat',
+                        'pickup_lat',
+                    ]
+                );
+        }
+
+        if (
+            array_key_exists(
+                'pickup_lng',
+                $columns
+            )
+        ) {
+
+            $pickupData['pickup_lng'] =
+                $this->getLocationValue(
+                    $pickupLocation,
+                    [
+                        'longitude',
+                        'lng',
+                        'pickup_lng',
+                    ]
+                );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Schema protection
+        |--------------------------------------------------------------------------
+        */
+
+        $pickupData =
+            array_intersect_key(
+                $pickupData,
+                $columns
+            );
+
+        /*
+        |--------------------------------------------------------------------------
+        | Create
+        |--------------------------------------------------------------------------
+        */
+
+        return PickupRequest::query()
+            ->create($pickupData);
+    }
+
+    /**
+     * Attach shipments to pickup.
+     */
+    private function attachShipments(
+        PickupRequest $pickup,
+        $shipments
+    ): void {
+
+        foreach ($shipments as $shipment) {
 
             $pickup->shipments()->firstOrCreate([
                 'shipment_id' =>
@@ -342,7 +487,40 @@ final class GatewayPickupService
     }
 
     /**
-     * Retrieve pickup belonging to merchant.
+     * Safely resolve a pickup-location attribute.
+     */
+    private function getLocationValue(
+        MerchantPickupLocation $location,
+        array $attributes
+    ) {
+
+        foreach ($attributes as $attribute) {
+
+            if (
+                isset($location->{$attribute})
+            ) {
+                return $location->{$attribute};
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Get pickup_requests columns.
+     */
+    private function pickupRequestColumns(): array
+    {
+        return array_flip(
+            DB::getSchemaBuilder()
+                ->getColumnListing(
+                    'pickup_requests'
+                )
+        );
+    }
+
+    /**
+     * Get pickup request for merchant.
      */
     public function findForMerchant(
         int $merchantId,

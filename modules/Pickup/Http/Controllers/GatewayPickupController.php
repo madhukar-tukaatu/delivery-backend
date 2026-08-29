@@ -1,6 +1,6 @@
 <?php
 
-declare (strict_types = 1);
+declare(strict_types=1);
 
 namespace Modules\Pickup\Http\Controllers;
 
@@ -21,18 +21,31 @@ final class GatewayPickupController extends Controller
     }
 
     /**
-     * Request pickup from external Store Manager.
+     * Request pickup from an external Store Manager.
      *
      * IMPORTANT:
      *
-     * This endpoint creates the PickupRequest.
+     * Creating a shipment does NOT create a pickup request.
      *
-     * Shipment creation happens separately through:
+     * Shipment:
      *
-     * POST /gateway/shipments
+     * POST /api/v1/gateway/shipments
      *
-     * This endpoint then collects the merchant's currently
-     * eligible awaiting_pickup shipments into a pickup batch.
+     * creates:
+     *
+     * awaiting_pickup
+     *
+     * Then the merchant explicitly requests collection:
+     *
+     * POST /api/v1/gateway/pickups
+     *
+     * At that point Tukaatu:
+     *
+     * 1. Validates the merchant.
+     * 2. Validates the pickup location.
+     * 3. Finds eligible awaiting_pickup shipments.
+     * 4. Creates or reuses an appropriate pickup batch.
+     * 5. Attaches the shipments to that pickup.
      */
     public function store(
         GatewayCreatePickupRequest $request
@@ -67,10 +80,10 @@ final class GatewayPickupController extends Controller
                 'success' => false,
 
                 'message' =>
-                'Pickup request validation failed.',
+                    'Pickup request validation failed.',
 
-                'errors'  =>
-                $e->errors(),
+                'errors' =>
+                    $e->errors(),
 
             ], 422);
 
@@ -82,11 +95,11 @@ final class GatewayPickupController extends Controller
                 'success' => false,
 
                 'message' =>
-                'Unable to request pickup.',
+                    'Unable to request pickup.',
 
-                'errors'  => [
+                'errors' => [
                     'exception' =>
-                    $e->getMessage(),
+                        $e->getMessage(),
                 ],
 
             ], 422);

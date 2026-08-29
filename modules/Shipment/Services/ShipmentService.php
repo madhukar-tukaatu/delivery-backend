@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Modules\Shipment\Services;
 
+use App\Support\CourierStatus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Modules\Merchant\Models\Merchant;
 use Modules\Pickup\Services\ShipmentPickupAttachmentService;
 use Modules\Shipment\Models\Shipment;
-use App\Support\CourierStatus;
 
 final class ShipmentService
 {
@@ -24,26 +24,26 @@ final class ShipmentService
     /**
      * Create shipment from external Store Manager.
      *
-     * IMPORTANT:
+     * Pickup workflow:
      *
-     * There is NO shipment creation cutoff.
+     * - Store Manager creates shipment.
+     * - Shipment is assigned to the merchant's pickup location.
+     * - Existing active pickup for that location is reused.
+     * - Otherwise a new pickup request is created.
+     * - Shipment is attached to that pickup.
      *
-     * Store may create shipments:
-     *
-     * - before rider assignment
-     * - after rider assignment
-     * - while rider is travelling
-     * - after rider has arrived
-     *
-     * BUT:
-     *
-     * Once the pickup is completed/closed,
-     * the shipment belongs to a new pickup.
+     * There is no shipment creation cutoff while a pickup is active.
      */
     public function createFromGateway(
         int $merchantId,
         array $data
     ): Shipment {
+        /*
+        |--------------------------------------------------------------------------
+        | Merchant
+        |--------------------------------------------------------------------------
+        */
+
         $merchant = Merchant::query()
             ->find($merchantId);
 
@@ -62,6 +62,12 @@ final class ShipmentService
                 ],
             ]);
         }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Packet
+        |--------------------------------------------------------------------------
+        */
 
         $packet = $data['packet'] ?? null;
 
@@ -110,7 +116,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Resolve pickup location
+                | Resolve merchant pickup location
                 |--------------------------------------------------------------------------
                 */
 
@@ -127,6 +133,12 @@ final class ShipmentService
                         ],
                     ]);
                 }
+
+                /*
+                |--------------------------------------------------------------------------
+                | Pickup location ownership
+                |--------------------------------------------------------------------------
+                */
 
                 if (
                     isset($pickupLocation->merchant_id)
@@ -155,7 +167,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Origin
+                | Origin branch
                 |--------------------------------------------------------------------------
                 */
 
@@ -175,7 +187,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Destination
+                | Destination branch
                 |--------------------------------------------------------------------------
                 */
 
@@ -248,7 +260,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Shipment
+                | Shipment data
                 |--------------------------------------------------------------------------
                 */
 
@@ -477,24 +489,16 @@ final class ShipmentService
                 | AUTOMATIC PICKUP ATTACHMENT
                 |--------------------------------------------------------------------------
                 |
-                | This is the key part of the new workflow.
+                | IMPORTANT:
                 |
-                | We do NOT ask the merchant to create another pickup.
+                | We don't create a pickup manually here.
                 |
-                | The service finds the merchant's currently open pickup
-                | for this pickup location.
+                | ShipmentPickupAttachmentService handles:
                 |
-                | If found:
-                |
-                |     shipment -> existing pickup
-                |
-                | If rider assigned:
-                |
-                |     rider -> notification
-                |
-                | If none exists:
-                |
-                |     create pickup -> attach shipment
+                | 1. Find active pickup.
+                | 2. Reuse it if available.
+                | 3. Otherwise create pickup.
+                | 4. Attach shipment.
                 |
                 */
 
@@ -504,6 +508,12 @@ final class ShipmentService
                         merchant: $merchant,
                         pickupLocation: $pickupLocation,
                     );
+
+                /*
+                |--------------------------------------------------------------------------
+                | Return
+                |--------------------------------------------------------------------------
+                */
 
                 return $shipment->fresh();
             }

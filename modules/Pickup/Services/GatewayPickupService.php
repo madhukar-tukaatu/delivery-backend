@@ -34,7 +34,6 @@ final class GatewayPickupService
         int $merchantId,
         array $data
     ): PickupRequest {
-
         $merchant = Merchant::query()
             ->find($merchantId);
 
@@ -122,19 +121,19 @@ final class GatewayPickupService
 
                 $pickup = PickupRequest::query()
                     ->where(
-                        'merchant_id',
+                        'pickup_requests.merchant_id',
                         $merchant->id
                     )
                     ->where(
-                        'pickup_location_id',
+                        'pickup_requests.pickup_location_id',
                         $pickupLocation->id
                     )
                     ->whereIn(
-                        'status',
+                        'pickup_requests.status',
                         $this->reusablePickupStatuses()
                     )
                     ->lockForUpdate()
-                    ->latest('id')
+                    ->latest('pickup_requests.id')
                     ->first();
 
                 /*
@@ -144,35 +143,24 @@ final class GatewayPickupService
                 */
 
                 if (! $pickup) {
-
                     $pickup = $this->createPickupRequest(
                         merchant: $merchant,
                         pickupLocation: $pickupLocation,
                         data: $data,
                     );
-
                 } else {
-
                     /*
                     |--------------------------------------------------------------------------
                     | Existing reusable pickup
                     |--------------------------------------------------------------------------
                     */
 
-                    if (
-                        ! empty(
-                            $data['preferred_pickup_at']
-                        )
-                    ) {
+                    if (! empty($data['preferred_pickup_at'])) {
                         $pickup->preferred_pickup_at =
                             $data['preferred_pickup_at'];
                     }
 
-                    if (
-                        ! empty(
-                            $data['remarks']
-                        )
-                    ) {
+                    if (! empty($data['remarks'])) {
                         $pickup->remarks =
                             $data['remarks'];
                     }
@@ -229,32 +217,42 @@ final class GatewayPickupService
      *
      * - belongs to merchant
      * - belongs to pickup location
-     * - awaiting pickup
-     * - not already attached to an active pickup
+     * - shipment status is awaiting_pickup
+     * - not already attached to an active pickup request
      */
     private function findEligibleShipments(
         int $merchantId,
         int $pickupLocationId
     ) {
-
         return Shipment::query()
             ->where(
-                'merchant_id',
+                'shipments.merchant_id',
                 $merchantId
             )
             ->where(
-                'pickup_location_id',
+                'shipments.pickup_location_id',
                 $pickupLocationId
             )
             ->where(
-                'status',
+                'shipments.status',
                 CourierStatus::AWAITING_PICKUP
             )
             ->whereDoesntHave(
                 'pickupRequests',
                 function ($query) {
+                    /*
+                    |--------------------------------------------------------------------------
+                    | IMPORTANT:
+                    | pickup_request_shipments also has a status column.
+                    |
+                    | Therefore `status` is ambiguous here.
+                    |
+                    | We specifically want pickup_requests.status.
+                    |--------------------------------------------------------------------------
+                    */
+
                     $query->whereIn(
-                        'status',
+                        'pickup_requests.status',
                         PickupStatus::active()
                     );
                 }
@@ -287,7 +285,6 @@ final class GatewayPickupService
         MerchantPickupLocation $pickupLocation,
         array $data
     ): PickupRequest {
-
         /*
         |--------------------------------------------------------------------------
         | Resolve pickup identity
@@ -335,7 +332,6 @@ final class GatewayPickupService
         */
 
         $pickupData = [
-
             'merchant_id' =>
                 $merchant->id,
 
@@ -411,13 +407,7 @@ final class GatewayPickupService
         $columns =
             $this->pickupRequestColumns();
 
-        if (
-            array_key_exists(
-                'pickup_lat',
-                $columns
-            )
-        ) {
-
+        if (array_key_exists('pickup_lat', $columns)) {
             $pickupData['pickup_lat'] =
                 $this->getLocationValue(
                     $pickupLocation,
@@ -429,13 +419,7 @@ final class GatewayPickupService
                 );
         }
 
-        if (
-            array_key_exists(
-                'pickup_lng',
-                $columns
-            )
-        ) {
-
+        if (array_key_exists('pickup_lng', $columns)) {
             $pickupData['pickup_lng'] =
                 $this->getLocationValue(
                     $pickupLocation,
@@ -476,9 +460,7 @@ final class GatewayPickupService
         PickupRequest $pickup,
         $shipments
     ): void {
-
         foreach ($shipments as $shipment) {
-
             $pickup->shipments()->firstOrCreate([
                 'shipment_id' =>
                     $shipment->id,
@@ -493,12 +475,8 @@ final class GatewayPickupService
         MerchantPickupLocation $location,
         array $attributes
     ) {
-
         foreach ($attributes as $attribute) {
-
-            if (
-                isset($location->{$attribute})
-            ) {
+            if (isset($location->{$attribute})) {
                 return $location->{$attribute};
             }
         }
@@ -526,14 +504,13 @@ final class GatewayPickupService
         int $merchantId,
         string $requestNumber
     ): PickupRequest {
-
         return PickupRequest::query()
             ->where(
-                'merchant_id',
+                'pickup_requests.merchant_id',
                 $merchantId
             )
             ->where(
-                'request_number',
+                'pickup_requests.request_number',
                 $requestNumber
             )
             ->with([

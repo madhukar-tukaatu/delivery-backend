@@ -199,8 +199,6 @@ final class GatewayPickupService
                 */
 
                 return $pickup->fresh([
-                    'merchant',
-                    'pickupLocation',
                     'shipments.shipment',
                     'pickupBranch',
                     'pickupSubBranch',

@@ -1,15 +1,25 @@
 <?php
 
-declare (strict_types = 1);
+declare(strict_types=1);
 
 use Illuminate\Support\Facades\Route;
-use Modules\Pickup\Http\Controllers\AdminPickupController;
 use Modules\Pickup\Http\Controllers\GatewayPickupController;
 use Modules\Pickup\Http\Controllers\PickupController;
 
 /*
 |--------------------------------------------------------------------------
-| EXTERNAL STORE MANAGER / GATEWAY
+| External Store Manager Gateway
+|--------------------------------------------------------------------------
+|
+| Authentication:
+|
+| X-Tukaatu-Key
+| X-Tukaatu-Secret
+|
+| merchant.api-key middleware must populate:
+|
+| request()->attributes->get('merchant_id')
+|
 |--------------------------------------------------------------------------
 */
 
@@ -18,12 +28,38 @@ Route::prefix('v1/gateway')
     ->middleware([
         'merchant.api-key',
     ])
-    ->group(function (): void {
+    ->group(function () {
+
+        /*
+        |--------------------------------------------------------------------------
+        | Request Pickup
+        |--------------------------------------------------------------------------
+        |
+        | IMPORTANT:
+        |
+        | Store Manager does NOT send shipment tracking numbers.
+        |
+        | The pickup already contains its shipments.
+        |
+        | Payload:
+        |
+        | {
+        |     "pickup_location_id": 51,
+        |     "remarks": "Container ready for pickup."
+        | }
+        |
+        */
 
         Route::post(
             'pickups',
             [GatewayPickupController::class, 'store']
         )->name('pickups.store');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Get Pickup
+        |--------------------------------------------------------------------------
+        */
 
         Route::get(
             'pickups/{requestNumber}',
@@ -31,9 +67,10 @@ Route::prefix('v1/gateway')
         )->name('pickups.show');
     });
 
+
 /*
 |--------------------------------------------------------------------------
-| ADMIN / BRANCH MANAGEMENT
+| Admin
 |--------------------------------------------------------------------------
 */
 
@@ -43,147 +80,11 @@ Route::prefix('v1/admin')
         'auth:sanctum',
         'branch.scope',
     ])
-    ->group(function (): void {
+    ->group(function () {
 
         Route::middleware([
             'route.permission',
-        ])->group(function (): void {
-
-            /*
-            |--------------------------------------------------------------------------
-            | PICKUP LIST
-            |--------------------------------------------------------------------------
-            */
-
-            // Route::get(
-            //     'pickups',
-            //     [AdminPickupController::class, 'index']
-            // )->name('pickups.index');
-
-            // /*
-            // |--------------------------------------------------------------------------
-            // | PICKUP DETAILS
-            // |--------------------------------------------------------------------------
-            // */
-
-            // Route::get(
-            //     'pickups/{pickup:request_number}',
-            //     [AdminPickupController::class, 'show']
-            // )->name('pickups.show');
-
-            // /*
-            // |--------------------------------------------------------------------------
-            // | ASSIGNABLE RIDERS
-            // |--------------------------------------------------------------------------
-            // */
-
-            // Route::get(
-            //     'pickups/{pickup:request_number}/assignable-staff',
-            //     [AdminPickupController::class, 'assignableStaff']
-            // )->name('pickups.assignable-staff');
-
-            Route::prefix('pickups')
-                ->name('pickups.')
-                ->group(function () {
-
-                    // IMPORTANT: static routes FIRST
-
-                    Route::get('riders', [
-                        AdminPickupController::class,
-                        'riders',
-                    ])->name('riders');
-
-                    Route::get('/', [
-                        AdminPickupController::class,
-                        'index',
-                    ])->name('index');
-
-                    // Dynamic route AFTER static routes
-
-                    Route::get('{requestNumber}', [
-                        AdminPickupController::class,
-                        'show',
-                    ])->name('show');
-
-                    Route::post('{requestNumber}/assign', [
-                        AdminPickupController::class,
-                        'assign',
-                    ])->name('assign');
-
-                    Route::post('{requestNumber}/start', [
-                        AdminPickupController::class,
-                        'start',
-                    ])->name('start');
-
-                    Route::post('{requestNumber}/arrive', [
-                        AdminPickupController::class,
-                        'arrive',
-                    ])->name('arrive');
-
-                    Route::post('{requestNumber}/complete', [
-                        AdminPickupController::class,
-                        'complete',
-                    ])->name('complete');
-
-                    Route::post('{requestNumber}/fail', [
-                        AdminPickupController::class,
-                        'fail',
-                    ])->name('fail');
-                });
-
-            /*
-            |--------------------------------------------------------------------------
-            | ASSIGN / REASSIGN
-            |--------------------------------------------------------------------------
-            */
-
-            Route::post(
-                'pickups/{pickup:request_number}/assign',
-                [AdminPickupController::class, 'assign']
-            )->name('pickups.assign');
-
-            /*
-            |--------------------------------------------------------------------------
-            | TRANSFER
-            |--------------------------------------------------------------------------
-            */
-
-            Route::post(
-                'pickups/{pickup:request_number}/transfer',
-                [AdminPickupController::class, 'transfer']
-            )->name('pickups.transfer');
-
-            /*
-            |--------------------------------------------------------------------------
-            | FAIL
-            |--------------------------------------------------------------------------
-            */
-
-            Route::post(
-                'pickups/{pickup:request_number}/fail',
-                [AdminPickupController::class, 'fail']
-            )->name('pickups.fail');
-        });
-    });
-
-/*
-|--------------------------------------------------------------------------
-| MERCHANT PORTAL
-|--------------------------------------------------------------------------
-*/
-
-Route::prefix('v1/merchant')
-    ->name('merchant.')
-    ->middleware([
-        'auth:sanctum',
-        'role:merchant',
-        'branch.scope',
-    ])
-    ->group(function (): void {
-
-        Route::middleware([
-            'route.permission',
-        ])->group(function (): void {
+        ])->group(function () {
 
             Route::get(
                 'pickups',
@@ -196,15 +97,72 @@ Route::prefix('v1/merchant')
             )->name('pickups.show');
 
             Route::post(
+                'pickups/{pickup}/assign',
+                [PickupController::class, 'assign']
+            )->name('pickups.assign');
+
+            Route::post(
+                'pickups/{pickup}/fail',
+                [PickupController::class, 'fail']
+            )->name('pickups.fail');
+
+            Route::post(
+                'pickups/{pickup}/shipments/{shipment}/receive',
+                [PickupController::class, 'receiveShipment']
+            )->name('pickups.shipments.receive');
+        });
+    });
+
+
+/*
+|--------------------------------------------------------------------------
+| Merchant Portal
+|--------------------------------------------------------------------------
+*/
+
+Route::prefix('v1/merchant')
+    ->name('merchant.')
+    ->middleware([
+        'auth:sanctum',
+        'role:merchant',
+        'branch.scope',
+    ])
+    ->group(function () {
+
+        Route::middleware([
+            'route.permission',
+        ])->group(function () {
+
+            Route::get(
+                'pickups',
+                [PickupController::class, 'index']
+            )->name('pickups.index');
+
+            Route::get(
+                'pickups/{pickup}',
+                [PickupController::class, 'show']
+            )->name('pickups.show');
+
+            /*
+            |--------------------------------------------------------------------------
+            | Manual attachment
+            |--------------------------------------------------------------------------
+            |
+            | This remains for internal merchant operations only.
+            |
+            */
+
+            Route::post(
                 'pickups/shipments',
                 [PickupController::class, 'addShipment']
             )->name('pickups.shipments.store');
         });
     });
 
+
 /*
 |--------------------------------------------------------------------------
-| STAFF / RIDER
+| Staff / Rider
 |--------------------------------------------------------------------------
 */
 
@@ -214,11 +172,11 @@ Route::prefix('v1/staff')
         'auth:sanctum',
         'branch.scope',
     ])
-    ->group(function (): void {
+    ->group(function () {
 
         Route::middleware([
             'route.permission',
-        ])->group(function (): void {
+        ])->group(function () {
 
             Route::get(
                 'pickups',

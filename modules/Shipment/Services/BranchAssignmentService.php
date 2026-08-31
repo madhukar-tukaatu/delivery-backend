@@ -555,7 +555,7 @@ final class BranchAssignmentService
                         'approved'
                     )
                     ->where(
-                        'branches.account_invitation_email',
+                        'branches.account_invitation_status',
                         'account_configured'
                     );
             });

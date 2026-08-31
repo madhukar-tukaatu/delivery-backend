@@ -8,14 +8,15 @@ use Modules\Staff\Http\Controllers\StaffController;
 | Admin Staff Routes
 |--------------------------------------------------------------------------
 |
-| Permission convention:
+| These routes generate the following permissions:
 |
 | staff.view
 | staff.create
-| staff.update
+| staff.edit
 | staff.delete
-| staff.toggle
+| staff.status
 |
+|--------------------------------------------------------------------------
 */
 
 Route::prefix('v1/admin')
@@ -27,43 +28,80 @@ Route::prefix('v1/admin')
 
             /*
             |--------------------------------------------------------------------------
-            | Staff
+            | Staff - View
             |--------------------------------------------------------------------------
             */
 
             Route::get('staff', [
                 StaffController::class,
                 'index',
-            ])->name('staff.index');
+            ])
+                ->middleware('permission:staff.view')
+                ->name('staff.index');
+
+            /*
+            |--------------------------------------------------------------------------
+            | Staff - Create
+            |--------------------------------------------------------------------------
+            */
 
             Route::post('staff', [
                 StaffController::class,
                 'store',
-            ])->name('staff.store');
+            ])
+                ->middleware('permission:staff.create')
+                ->name('staff.store');
+
+            /*
+            |--------------------------------------------------------------------------
+            | Staff - View Single
+            |--------------------------------------------------------------------------
+            */
 
             Route::get('staff/{staff}', [
                 StaffController::class,
                 'show',
-            ])->name('staff.show');
+            ])
+                ->middleware('permission:staff.view')
+                ->name('staff.show');
+
+            /*
+            |--------------------------------------------------------------------------
+            | Staff - Edit
+            |--------------------------------------------------------------------------
+            */
 
             Route::put('staff/{staff}', [
                 StaffController::class,
                 'update',
-            ])->name('staff.update');
+            ])
+                ->middleware('permission:staff.edit')
+                ->name('staff.update');
 
-            Route::patch('staff/{staff}', [
-                StaffController::class,
-                'update',
-            ])->name('staff.update.patch');
+            /*
+            |--------------------------------------------------------------------------
+            | Staff - Delete / Deactivate
+            |--------------------------------------------------------------------------
+            */
 
             Route::delete('staff/{staff}', [
                 StaffController::class,
                 'destroy',
-            ])->name('staff.destroy');
+            ])
+                ->middleware('permission:staff.delete')
+                ->name('staff.destroy');
 
-            Route::patch('staff/{staff}/toggle', [
+            /*
+            |--------------------------------------------------------------------------
+            | Staff - Status
+            |--------------------------------------------------------------------------
+            */
+
+            Route::patch('staff/{staff}/status', [
                 StaffController::class,
-                'toggle',
-            ])->name('staff.toggle');
+                'toggleStatus',
+            ])
+                ->middleware('permission:staff.status')
+                ->name('staff.status');
         });
     });

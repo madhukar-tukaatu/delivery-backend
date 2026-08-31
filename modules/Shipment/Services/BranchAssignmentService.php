@@ -14,6 +14,7 @@ final class BranchAssignmentService
      * Resolve merchant pickup location.
      *
      * Priority:
+     *
      * 1. Explicit pickup location
      * 2. Default pickup location
      * 3. First pickup location
@@ -67,30 +68,31 @@ final class BranchAssignmentService
     }
 
     /**
-     * Resolve origin branch/sub-branch.
+     * Resolve origin branch.
+     *
+     * BUSINESS RULE:
+     *
+     * A branch is usable only when:
+     *
+     * 1. status = approved
+     * 2. account_invitation_email = account_configured
      *
      * Priority:
      *
-     * 1. Pickup location linked sub-branch
-     * 2. Pickup location linked main branch
-     * 3. Merchant default sub-branch
-     * 4. Merchant default main branch
-     * 5. Nearest active branch
+     * 1. Pickup location linked main branch
+     * 2. Pickup location linked sub-branch
+     * 3. Nearest approved + configured branch
      *
-     * IMPORTANT:
-     *
-     * A linked branch has priority.
-     *
-     * We only fall back to another branch when the
-     * linked branch does not exist or is inactive.
+     * Merchant default_branch_id is NOT used.
      */
     public function resolveOrigin(
         Merchant $merchant,
         ?object $pickupLocation
     ): array {
+
         /*
         |--------------------------------------------------------------------------
-        | Coordinates used for fallback
+        | Coordinates for nearest fallback
         |--------------------------------------------------------------------------
         */
 
@@ -120,67 +122,45 @@ final class BranchAssignmentService
 
         /*
         |--------------------------------------------------------------------------
-        | 1. PICKUP LOCATION LINKED SUB-BRANCH
+        | 1. PICKUP LOCATION LINKED MAIN BRANCH
         |--------------------------------------------------------------------------
         */
 
         if ($pickupLocation) {
-            $linkedSubBranchId =
-                !empty($pickupLocation->sub_branch_id)
-                    ? (int) $pickupLocation->sub_branch_id
-                    : null;
 
-            if ($linkedSubBranchId !== null) {
-                $subBranch = $this->findActiveBranch(
-                    $linkedSubBranchId
-                );
-
-                if ($subBranch) {
-                    return $this->asBranchPayload(
-                        $subBranch
-                    );
-                }
-
-                /*
-                |--------------------------------------------------------------------------
-                | Linked sub-branch is inactive.
-                |
-                | DO NOT use it.
-                |
-                | Continue to linked main branch / defaults / nearest.
-                |--------------------------------------------------------------------------
-                */
-            }
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | 2. PICKUP LOCATION LINKED MAIN BRANCH
-        |--------------------------------------------------------------------------
-        */
-
-        if ($pickupLocation) {
             $linkedBranchId =
-                !empty($pickupLocation->branch_id)
+                ! empty($pickupLocation->branch_id)
                     ? (int) $pickupLocation->branch_id
                     : null;
 
             if ($linkedBranchId !== null) {
-                $branch = $this->findActiveBranch(
-                    $linkedBranchId
-                );
 
-                if ($branch) {
+                $linkedBranch =
+                    $this->findActiveBranch(
+                        $linkedBranchId
+                    );
+
+                /*
+                |--------------------------------------------------------------------------
+                | Linked branch is approved + configured.
+                |
+                | Use it immediately.
+                |--------------------------------------------------------------------------
+                */
+
+                if ($linkedBranch) {
                     return $this->asBranchPayload(
-                        $branch
+                        $linkedBranch
                     );
                 }
 
                 /*
                 |--------------------------------------------------------------------------
-                | Linked branch is inactive.
+                | Linked branch is not approved/configured.
                 |
-                | Continue to merchant default / nearest.
+                | Do not use it.
+                | Do not use merchant default branch.
+                | Continue to nearest approved/configured branch.
                 |--------------------------------------------------------------------------
                 */
             }
@@ -188,87 +168,83 @@ final class BranchAssignmentService
 
         /*
         |--------------------------------------------------------------------------
-        | 3. MERCHANT DEFAULT SUB-BRANCH
+        | 2. PICKUP LOCATION LINKED SUB-BRANCH
+        |--------------------------------------------------------------------------
+        |
+        | Only considered when there is no main branch_id.
         |--------------------------------------------------------------------------
         */
 
-        $defaultSubBranchId =
-            !empty($merchant->default_sub_branch_id)
-                ? (int) $merchant->default_sub_branch_id
-                : null;
+        if (
+            $pickupLocation
+            && empty($pickupLocation->branch_id)
+            && ! empty($pickupLocation->sub_branch_id)
+        ) {
 
-        if ($defaultSubBranchId !== null) {
-            $subBranch = $this->findActiveBranch(
-                $defaultSubBranchId
-            );
+            $linkedSubBranchId =
+                (int) $pickupLocation->sub_branch_id;
 
-            if ($subBranch) {
+            $linkedSubBranch =
+                $this->findActiveBranch(
+                    $linkedSubBranchId
+                );
+
+            if ($linkedSubBranch) {
                 return $this->asBranchPayload(
-                    $subBranch
+                    $linkedSubBranch
                 );
             }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Linked sub-branch is not approved/configured.
+            |
+            | Fall through to nearest approved/configured branch.
+            |--------------------------------------------------------------------------
+            */
         }
 
         /*
         |--------------------------------------------------------------------------
-        | 4. MERCHANT DEFAULT MAIN BRANCH
-        |--------------------------------------------------------------------------
-        */
-
-        $defaultBranchId =
-            !empty($merchant->default_branch_id)
-                ? (int) $merchant->default_branch_id
-                : null;
-
-        if ($defaultBranchId !== null) {
-            $branch = $this->findActiveBranch(
-                $defaultBranchId
-            );
-
-            if ($branch) {
-                return $this->asBranchPayload(
-                    $branch
-                );
-            }
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | 5. NEAREST ACTIVE BRANCH
+        | 3. NEAREST APPROVED + CONFIGURED BRANCH
         |--------------------------------------------------------------------------
         */
 
         return $this->nearestBranch(
-            $lat,
-            $lng,
-            $city,
-            $area
+            lat: $lat,
+            lng: $lng,
+            city: $city,
+            area: $area
         );
     }
 
     /**
      * Resolve destination branch/sub-branch.
      *
-     * Destination is always selected from active branches.
+     * Destination is always nearest approved + configured branch.
      */
     public function resolveDestination(
         array $delivery
     ): array {
         return $this->nearestBranch(
-            $delivery['latitude']
+            lat:
+                $delivery['latitude']
                 ?? $delivery['delivery_lat']
                 ?? null,
 
-            $delivery['longitude']
+            lng:
+                $delivery['longitude']
                 ?? $delivery['delivery_lng']
                 ?? null,
 
-            $delivery['city']
+            city:
+                $delivery['city']
                 ?? $delivery['delivery_city']
                 ?? $delivery['customer_city']
                 ?? null,
 
-            $delivery['area']
+            area:
+                $delivery['area']
                 ?? $delivery['delivery_area']
                 ?? $delivery['customer_area']
                 ?? null
@@ -282,6 +258,7 @@ final class BranchAssignmentService
         array $origin,
         array $destination
     ): array {
+
         $originNode =
             $origin['sub_branch_id']
             ?? $origin['branch_id']
@@ -396,26 +373,27 @@ final class BranchAssignmentService
     }
 
     /**
-     * Find nearest active branch.
+     * Find nearest approved + configured branch.
      *
-     * Selection order:
+     * Only branches satisfying BOTH:
      *
-     * 1. Coordinate distance
-     * 2. City
-     * 3. Area
-     * 4. First active branch
+     * status = approved
+     * account_invitation_email = account_configured
+     *
+     * are considered.
      */
     private function nearestBranch(
-        $lat,
-        $lng,
-        $city = null,
-        $area = null
+        mixed $lat,
+        mixed $lng,
+        mixed $city = null,
+        mixed $area = null
     ): array {
+
         $query = DB::table('branches');
 
         /*
         |--------------------------------------------------------------------------
-        | ACTIVE BRANCHES ONLY
+        | APPROVED + CONFIGURED ONLY
         |--------------------------------------------------------------------------
         */
 
@@ -429,30 +407,37 @@ final class BranchAssignmentService
 
         /*
         |--------------------------------------------------------------------------
-        | 1. TRUE NEAREST BRANCH BY COORDINATES
+        | 1. Coordinate based nearest branch
         |--------------------------------------------------------------------------
         */
 
         if (
-            $lat !== null &&
-            $lng !== null
+            $lat !== null
+            && $lng !== null
         ) {
-            $nearest = $branches
-                ->sortBy(function ($branch) use ($lat, $lng) {
-                    return $this->distanceKm(
-                        (float) $lat,
-                        (float) $lng,
 
-                        isset($branch->latitude)
-                            ? (float) $branch->latitude
-                            : null,
+            $nearest =
+                $branches
+                    ->sortBy(
+                        function ($branch) use (
+                            $lat,
+                            $lng
+                        ) {
+                            return $this->distanceKm(
+                                (float) $lat,
+                                (float) $lng,
 
-                        isset($branch->longitude)
-                            ? (float) $branch->longitude
-                            : null
-                    );
-                })
-                ->first();
+                                $this->branchLatitude(
+                                    $branch
+                                ),
+
+                                $this->branchLongitude(
+                                    $branch
+                                )
+                            );
+                        }
+                    )
+                    ->first();
 
             if ($nearest) {
                 return $this->asBranchPayload(
@@ -463,19 +448,22 @@ final class BranchAssignmentService
 
         /*
         |--------------------------------------------------------------------------
-        | 2. CITY FALLBACK
+        | 2. City fallback
         |--------------------------------------------------------------------------
         */
 
-        if ($city) {
-            $cityBranch = $branches
-                ->first(function ($branch) use ($city) {
-                    return isset($branch->city)
-                        && stripos(
-                            (string) $branch->city,
-                            (string) $city
-                        ) !== false;
-                });
+        if ($city !== null) {
+
+            $cityBranch =
+                $branches->first(
+                    function ($branch) use ($city) {
+                        return isset($branch->city)
+                            && stripos(
+                                (string) $branch->city,
+                                (string) $city
+                            ) !== false;
+                    }
+                );
 
             if ($cityBranch) {
                 return $this->asBranchPayload(
@@ -486,19 +474,22 @@ final class BranchAssignmentService
 
         /*
         |--------------------------------------------------------------------------
-        | 3. AREA FALLBACK
+        | 3. Area fallback
         |--------------------------------------------------------------------------
         */
 
-        if ($area) {
-            $areaBranch = $branches
-                ->first(function ($branch) use ($area) {
-                    return isset($branch->area)
-                        && stripos(
-                            (string) $branch->area,
-                            (string) $area
-                        ) !== false;
-                });
+        if ($area !== null) {
+
+            $areaBranch =
+                $branches->first(
+                    function ($branch) use ($area) {
+                        return isset($branch->area)
+                            && stripos(
+                                (string) $branch->area,
+                                (string) $area
+                            ) !== false;
+                    }
+                );
 
             if ($areaBranch) {
                 return $this->asBranchPayload(
@@ -509,7 +500,7 @@ final class BranchAssignmentService
 
         /*
         |--------------------------------------------------------------------------
-        | 4. FINAL ACTIVE BRANCH
+        | 4. Any approved + configured branch
         |--------------------------------------------------------------------------
         */
 
@@ -519,89 +510,90 @@ final class BranchAssignmentService
     }
 
     /**
-     * Find a branch only when it is active.
+     * Find an approved + configured branch by ID.
      */
     private function findActiveBranch(
         int $branchId
     ): ?object {
-        $query = DB::table('branches')
-            ->where('id', $branchId);
 
-        $this->applyActiveFilter($query);
+        if ($branchId <= 0) {
+            return null;
+        }
+
+        $query =
+            DB::table('branches')
+                ->where(
+                    'branches.id',
+                    $branchId
+                );
+
+        $this->applyActiveFilter(
+            $query
+        );
 
         return $query->first();
     }
 
     /**
-     * Apply active filter.
+     * Apply branch availability filter.
      *
-     * Supports:
+     * A branch is available for shipment operations only when:
      *
-     * branches.is_active
-     * OR
-     * branches.status
+     * status = approved
+     * AND
+     * account_invitation_email = account_configured
      */
     private function applyActiveFilter(
         Builder $query
     ): void {
-        $schema = DB::getSchemaBuilder();
 
-        $hasIsActive = $schema->hasColumn(
-            'branches',
-            'is_active'
-        );
-
-        $hasStatus = $schema->hasColumn(
-            'branches',
-            'status'
-        );
+        $schema =
+            DB::getSchemaBuilder();
 
         /*
         |--------------------------------------------------------------------------
-        | Preferred: is_active
+        | STATUS
         |--------------------------------------------------------------------------
         */
 
-        if ($hasIsActive) {
-            $query->where(
-                'branches.is_active',
-                true
+        if (
+            ! $schema->hasColumn(
+                'branches',
+                'status'
+            )
+        ) {
+            throw new \RuntimeException(
+                'Unable to determine branch approval status. ' .
+                'The branches table must contain a status column.'
             );
-
-            return;
         }
 
+        $query->where(
+            'branches.status',
+            'approved'
+        );
+
         /*
         |--------------------------------------------------------------------------
-        | Fallback: status
+        | ACCOUNT CONFIGURATION
         |--------------------------------------------------------------------------
         */
 
-        if ($hasStatus) {
-            $query->where(
-                'branches.status',
-                'active'
+        if (
+            ! $schema->hasColumn(
+                'branches',
+                'account_invitation_email'
+            )
+        ) {
+            throw new \RuntimeException(
+                'Unable to determine branch account configuration. ' .
+                'The branches table must contain an account_invitation_email column.'
             );
-
-            return;
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | IMPORTANT
-        |--------------------------------------------------------------------------
-        |
-        | If neither column exists, the application cannot distinguish
-        | active from inactive branches.
-        |
-        | In that case we DO NOT pretend that every branch is active.
-        |
-        |--------------------------------------------------------------------------
-        */
-
-        throw new \RuntimeException(
-            'Unable to determine branch activity. ' .
-            'The branches table must contain either is_active or status.'
+        $query->where(
+            'branches.account_invitation_email',
+            'account_configured'
         );
     }
 
@@ -611,30 +603,32 @@ final class BranchAssignmentService
     private function asBranchPayload(
         ?object $branch
     ): array {
-        if (!$branch) {
+
+        if (! $branch) {
             return $this->emptyBranchPayload();
         }
 
-        $type = strtolower(
-            (string) (
-                $branch->type
-                ?? ''
-            )
-        );
+        $type =
+            strtolower(
+                (string) (
+                    $branch->type ?? ''
+                )
+            );
 
         $isSubBranch =
             $type === 'sub_branch'
-            || !empty($branch->parent_id);
+            || ! empty($branch->parent_id);
 
         /*
         |--------------------------------------------------------------------------
-        | SUB-BRANCH
+        | SUB BRANCH
         |--------------------------------------------------------------------------
         */
 
         if ($isSubBranch) {
+
             $parentId =
-                !empty($branch->parent_id)
+                ! empty($branch->parent_id)
                     ? (int) $branch->parent_id
                     : null;
 
@@ -644,13 +638,6 @@ final class BranchAssignmentService
 
                 'sub_branch_id' =>
                     (int) $branch->id,
-
-                /*
-                | IMPORTANT:
-                | Get parent WITHOUT requiring parent to be active
-                | here. The selected sub-branch has already passed
-                | the active check.
-                */
 
                 'branch' =>
                     $this->branchWithoutActiveFilter(
@@ -684,20 +671,72 @@ final class BranchAssignmentService
     }
 
     /**
-     * Get parent branch without applying the active filter.
+     * Get parent branch.
      *
-     * This is only used to build the relationship payload.
+     * Used only for displaying the parent relationship.
      */
     private function branchWithoutActiveFilter(
         ?int $id
     ): ?object {
-        if (!$id) {
+
+        if (! $id) {
             return null;
         }
 
         return DB::table('branches')
-            ->where('id', $id)
+            ->where(
+                'id',
+                $id
+            )
             ->first();
+    }
+
+    /**
+     * Get branch latitude.
+     */
+    private function branchLatitude(
+        object $branch
+    ): ?float {
+
+        if (
+            isset($branch->latitude)
+            && $branch->latitude !== null
+        ) {
+            return (float) $branch->latitude;
+        }
+
+        if (
+            isset($branch->lat)
+            && $branch->lat !== null
+        ) {
+            return (float) $branch->lat;
+        }
+
+        return null;
+    }
+
+    /**
+     * Get branch longitude.
+     */
+    private function branchLongitude(
+        object $branch
+    ): ?float {
+
+        if (
+            isset($branch->longitude)
+            && $branch->longitude !== null
+        ) {
+            return (float) $branch->longitude;
+        }
+
+        if (
+            isset($branch->lng)
+            && $branch->lng !== null
+        ) {
+            return (float) $branch->lng;
+        }
+
+        return null;
     }
 
     /**
@@ -706,10 +745,17 @@ final class BranchAssignmentService
     private function emptyBranchPayload(): array
     {
         return [
-            'branch_id' => null,
-            'sub_branch_id' => null,
-            'branch' => null,
-            'sub_branch' => null,
+            'branch_id' =>
+                null,
+
+            'sub_branch_id' =>
+                null,
+
+            'branch' =>
+                null,
+
+            'sub_branch' =>
+                null,
         ];
     }
 }

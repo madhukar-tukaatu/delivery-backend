@@ -26,15 +26,8 @@ final class GatewayShipmentController extends Controller
      *
      * POST /api/v1/gateway/shipments
      */
-    public function store(
-        Request $request
-    ): JsonResponse {
-        /*
-        |--------------------------------------------------------------------------
-        | Merchant authentication
-        |--------------------------------------------------------------------------
-        */
-
+    public function store(Request $request): JsonResponse
+    {
         $merchantId = (int) $request
             ->attributes
             ->get('merchant_id');
@@ -44,12 +37,6 @@ final class GatewayShipmentController extends Controller
             401,
             'Invalid merchant authentication.'
         );
-
-        /*
-        |--------------------------------------------------------------------------
-        | Validate gateway payload
-        |--------------------------------------------------------------------------
-        */
 
         $data = $request->validate([
             'merchant_order_id' => [
@@ -230,12 +217,6 @@ final class GatewayShipmentController extends Controller
             ],
         ]);
 
-        /*
-        |--------------------------------------------------------------------------
-        | Normalize gateway data
-        |--------------------------------------------------------------------------
-        */
-
         $data['pickup_location_id'] =
             (int) $data['pickup_location_id'];
 
@@ -246,19 +227,10 @@ final class GatewayShipmentController extends Controller
             (float) $data['delivery_lng'];
 
         $data['self_drop'] =
-            (bool) (
-                $data['self_drop']
-                ?? false
-            );
+            (bool) ($data['self_drop'] ?? false);
 
         $data['order_source'] =
             'store_manager';
-
-        /*
-        |--------------------------------------------------------------------------
-        | Create shipment
-        |--------------------------------------------------------------------------
-        */
 
         try {
             $shipment =
@@ -315,14 +287,8 @@ final class GatewayShipmentController extends Controller
         );
 
         $shipment = Shipment::query()
-            ->where(
-                'merchant_id',
-                $merchantId
-            )
-            ->where(
-                'tracking_number',
-                $trackingNumber
-            )
+            ->where('merchant_id', $merchantId)
+            ->where('tracking_number', $trackingNumber)
             ->with([
                 'trackingEvents',
                 'originBranch',
@@ -360,14 +326,8 @@ final class GatewayShipmentController extends Controller
         );
 
         $shipment = Shipment::query()
-            ->where(
-                'merchant_id',
-                $merchantId
-            )
-            ->where(
-                'tracking_number',
-                $trackingNumber
-            )
+            ->where('merchant_id', $merchantId)
+            ->where('tracking_number', $trackingNumber)
             ->firstOrFail();
 
         $cancellableStatuses = [
@@ -376,7 +336,7 @@ final class GatewayShipmentController extends Controller
             CourierStatus::PICKUP_ASSIGNED,
         ];
 
-        if (!in_array(
+        if (! in_array(
             $shipment->status,
             $cancellableStatuses,
             true

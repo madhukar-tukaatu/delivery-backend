@@ -14,8 +14,11 @@ Route::prefix('v1/admin')
         |--------------------------------------------------------------------------
         | Current User Menus
         |--------------------------------------------------------------------------
-        | Do NOT protect this with route.permission.
-        | The sidebar needs this route to load menus after login.
+        |
+        | This route MUST NOT use route.permission.
+        | Otherwise the user cannot load the sidebar to discover what
+        | they are allowed to access.
+        |
         */
 
         Route::get('me/menus', [MenuController::class, 'my'])
@@ -23,7 +26,7 @@ Route::prefix('v1/admin')
 
         /*
         |--------------------------------------------------------------------------
-        | Access-Controlled Admin Routes
+        | Access Management
         |--------------------------------------------------------------------------
         */
 
@@ -33,12 +36,6 @@ Route::prefix('v1/admin')
             |--------------------------------------------------------------------------
             | Users
             |--------------------------------------------------------------------------
-            | Auto generated permissions:
-            | users.view
-            | users.create
-            | users.edit
-            | users.delete
-            | users.status
             */
 
             Route::apiResource('users', UserController::class)
@@ -50,23 +47,16 @@ Route::prefix('v1/admin')
                     'destroy' => 'users.destroy',
                 ]);
 
-            Route::post('users/{user}/toggle', [UserController::class, 'toggle'])
-                ->name('users.status');
+            Route::post(
+                'users/{user}/toggle',
+                [UserController::class, 'toggle']
+            )->name('users.status');
 
             /*
             |--------------------------------------------------------------------------
-            | Roles & Permissions
+            | Roles
             |--------------------------------------------------------------------------
-            | Auto generated permissions:
-            | roles.view
-            | roles.create
-            | roles.edit
-            | roles.delete
-            | roles.permissions
             */
-
-            Route::get('permissions', [RoleController::class, 'permissions'])
-                ->name('roles.permissions');
 
             Route::apiResource('roles', RoleController::class)
                 ->names([
@@ -79,13 +69,22 @@ Route::prefix('v1/admin')
 
             /*
             |--------------------------------------------------------------------------
+            | Permission List
+            |--------------------------------------------------------------------------
+            |
+            | Used by RoleForm -> PermissionSelector
+            |
+            */
+
+            Route::get(
+                'permissions',
+                [RoleController::class, 'permissions']
+            )->name('roles.permissions');
+
+            /*
+            |--------------------------------------------------------------------------
             | Menus
             |--------------------------------------------------------------------------
-            | Auto generated permissions:
-            | menus.view
-            | menus.create
-            | menus.edit
-            | menus.delete
             */
 
             Route::apiResource('menus', MenuController::class)

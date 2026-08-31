@@ -1,6 +1,6 @@
 <?php
 
-declare(strict_types=1);
+declare (strict_types = 1);
 
 use Illuminate\Support\Facades\Route;
 use Modules\Pickup\Http\Controllers\AdminPickupController;
@@ -31,7 +31,6 @@ Route::prefix('v1/gateway')
         )->name('pickups.show');
     });
 
-
 /*
 |--------------------------------------------------------------------------
 | ADMIN / BRANCH MANAGEMENT
@@ -56,35 +55,81 @@ Route::prefix('v1/admin')
             |--------------------------------------------------------------------------
             */
 
-            Route::get(
-                'pickups',
-                [AdminPickupController::class, 'index']
-            )->name('pickups.index');
+            // Route::get(
+            //     'pickups',
+            //     [AdminPickupController::class, 'index']
+            // )->name('pickups.index');
 
+            // /*
+            // |--------------------------------------------------------------------------
+            // | PICKUP DETAILS
+            // |--------------------------------------------------------------------------
+            // */
 
-            /*
-            |--------------------------------------------------------------------------
-            | PICKUP DETAILS
-            |--------------------------------------------------------------------------
-            */
+            // Route::get(
+            //     'pickups/{pickup:request_number}',
+            //     [AdminPickupController::class, 'show']
+            // )->name('pickups.show');
 
-            Route::get(
-                'pickups/{pickup:request_number}',
-                [AdminPickupController::class, 'show']
-            )->name('pickups.show');
+            // /*
+            // |--------------------------------------------------------------------------
+            // | ASSIGNABLE RIDERS
+            // |--------------------------------------------------------------------------
+            // */
 
+            // Route::get(
+            //     'pickups/{pickup:request_number}/assignable-staff',
+            //     [AdminPickupController::class, 'assignableStaff']
+            // )->name('pickups.assignable-staff');
 
-            /*
-            |--------------------------------------------------------------------------
-            | ASSIGNABLE RIDERS
-            |--------------------------------------------------------------------------
-            */
+            Route::prefix('pickups')
+                ->name('pickups.')
+                ->group(function () {
 
-            Route::get(
-                'pickups/{pickup:request_number}/assignable-staff',
-                [AdminPickupController::class, 'assignableStaff']
-            )->name('pickups.assignable-staff');
+                    // IMPORTANT: static routes FIRST
 
+                    Route::get('riders', [
+                        AdminPickupController::class,
+                        'riders',
+                    ])->name('riders');
+
+                    Route::get('/', [
+                        AdminPickupController::class,
+                        'index',
+                    ])->name('index');
+
+                    // Dynamic route AFTER static routes
+
+                    Route::get('{requestNumber}', [
+                        AdminPickupController::class,
+                        'show',
+                    ])->name('show');
+
+                    Route::post('{requestNumber}/assign', [
+                        AdminPickupController::class,
+                        'assign',
+                    ])->name('assign');
+
+                    Route::post('{requestNumber}/start', [
+                        AdminPickupController::class,
+                        'start',
+                    ])->name('start');
+
+                    Route::post('{requestNumber}/arrive', [
+                        AdminPickupController::class,
+                        'arrive',
+                    ])->name('arrive');
+
+                    Route::post('{requestNumber}/complete', [
+                        AdminPickupController::class,
+                        'complete',
+                    ])->name('complete');
+
+                    Route::post('{requestNumber}/fail', [
+                        AdminPickupController::class,
+                        'fail',
+                    ])->name('fail');
+                });
 
             /*
             |--------------------------------------------------------------------------
@@ -97,7 +142,6 @@ Route::prefix('v1/admin')
                 [AdminPickupController::class, 'assign']
             )->name('pickups.assign');
 
-
             /*
             |--------------------------------------------------------------------------
             | TRANSFER
@@ -108,7 +152,6 @@ Route::prefix('v1/admin')
                 'pickups/{pickup:request_number}/transfer',
                 [AdminPickupController::class, 'transfer']
             )->name('pickups.transfer');
-
 
             /*
             |--------------------------------------------------------------------------
@@ -122,7 +165,6 @@ Route::prefix('v1/admin')
             )->name('pickups.fail');
         });
     });
-
 
 /*
 |--------------------------------------------------------------------------
@@ -159,7 +201,6 @@ Route::prefix('v1/merchant')
             )->name('pickups.shipments.store');
         });
     });
-
 
 /*
 |--------------------------------------------------------------------------

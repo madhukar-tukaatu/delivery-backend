@@ -24,18 +24,17 @@ final class GatewayShipmentController extends Controller
     /**
      * Create shipment from external Store Manager.
      *
-     * This endpoint ONLY creates a shipment.
-     *
-     * It does NOT create a pickup request.
-     *
      * POST /api/v1/gateway/shipments
-     *
-     * Result:
-     *
-     * shipment.status = awaiting_pickup
      */
-    public function store(Request $request): JsonResponse
-    {
+    public function store(
+        Request $request
+    ): JsonResponse {
+        /*
+        |--------------------------------------------------------------------------
+        | Merchant authentication
+        |--------------------------------------------------------------------------
+        */
+
         $merchantId = (int) $request
             ->attributes
             ->get('merchant_id');
@@ -45,6 +44,12 @@ final class GatewayShipmentController extends Controller
             401,
             'Invalid merchant authentication.'
         );
+
+        /*
+        |--------------------------------------------------------------------------
+        | Validate gateway payload
+        |--------------------------------------------------------------------------
+        */
 
         $data = $request->validate([
             'merchant_order_id' => [
@@ -225,11 +230,35 @@ final class GatewayShipmentController extends Controller
             ],
         ]);
 
+        /*
+        |--------------------------------------------------------------------------
+        | Normalize gateway data
+        |--------------------------------------------------------------------------
+        */
+
+        $data['pickup_location_id'] =
+            (int) $data['pickup_location_id'];
+
+        $data['delivery_lat'] =
+            (float) $data['delivery_lat'];
+
+        $data['delivery_lng'] =
+            (float) $data['delivery_lng'];
+
         $data['self_drop'] =
-            $data['self_drop'] ?? false;
+            (bool) (
+                $data['self_drop']
+                ?? false
+            );
 
         $data['order_source'] =
             'store_manager';
+
+        /*
+        |--------------------------------------------------------------------------
+        | Create shipment
+        |--------------------------------------------------------------------------
+        */
 
         try {
             $shipment =
@@ -243,6 +272,7 @@ final class GatewayShipmentController extends Controller
                 'Shipment created successfully.',
                 201
             );
+
         } catch (ValidationException $e) {
 
             return response()->json([
@@ -267,12 +297,13 @@ final class GatewayShipmentController extends Controller
 
     /**
      * Retrieve shipment.
+     *
+     * GET /api/v1/gateway/shipments/{trackingNumber}
      */
     public function show(
         Request $request,
         string $trackingNumber
     ): JsonResponse {
-
         $merchantId = (int) $request
             ->attributes
             ->get('merchant_id');
@@ -311,12 +342,13 @@ final class GatewayShipmentController extends Controller
 
     /**
      * Cancel shipment.
+     *
+     * POST /api/v1/gateway/shipments/{trackingNumber}/cancel
      */
     public function cancel(
         Request $request,
         string $trackingNumber
     ): JsonResponse {
-
         $merchantId = (int) $request
             ->attributes
             ->get('merchant_id');
@@ -338,22 +370,13 @@ final class GatewayShipmentController extends Controller
             )
             ->firstOrFail();
 
-        /*
-        |--------------------------------------------------------------------------
-        | Cancellation rules
-        |--------------------------------------------------------------------------
-        |
-        | Merchant may cancel before actual collection.
-        |
-        */
-
         $cancellableStatuses = [
             CourierStatus::BOOKED,
             CourierStatus::AWAITING_PICKUP,
             CourierStatus::PICKUP_ASSIGNED,
         ];
 
-        if (! in_array(
+        if (!in_array(
             $shipment->status,
             $cancellableStatuses,
             true
@@ -365,7 +388,6 @@ final class GatewayShipmentController extends Controller
         }
 
         try {
-
             $updated =
                 $this->shipmentService->cancelFromGateway(
                     shipment: $shipment,

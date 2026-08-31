@@ -5,7 +5,6 @@ declare(strict_types=1);
 use Illuminate\Support\Facades\Route;
 
 use Modules\Shipment\Http\Controllers\Api\AdminNotificationController;
-use Modules\Shipment\Http\Controllers\Api\AdminPickupController;
 use Modules\Shipment\Http\Controllers\Api\AdminShipmentTaskController;
 use Modules\Shipment\Http\Controllers\Api\AdminStaffController;
 use Modules\Shipment\Http\Controllers\Api\MerchantShipmentController;
@@ -186,38 +185,6 @@ Route::prefix('v1/admin')
                 'staff/{staff}/toggle',
                 [AdminStaffController::class, 'toggle']
             )->name('staff.toggle');
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | PICKUPS
-            |--------------------------------------------------------------------------
-            */
-
-            Route::get(
-                'pickups',
-                [AdminPickupController::class, 'index']
-            )->name('pickups.index');
-
-            Route::get(
-                'pickups/{pickup}',
-                [AdminPickupController::class, 'show']
-            )->name('pickups.show');
-
-            Route::get(
-                'pickups/{pickup}/assignable-staff',
-                [AdminPickupController::class, 'assignableStaff']
-            )->name('pickups.assignable-staff');
-
-            Route::post(
-                'pickups/{pickup}/assign',
-                [AdminPickupController::class, 'assign']
-            )->name('pickups.assign');
-
-            Route::post(
-                'pickups/{pickup}/fail',
-                [AdminPickupController::class, 'fail']
-            )->name('pickups.fail');
 
 
             /*

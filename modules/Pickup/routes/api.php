@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Illuminate\Support\Facades\Route;
+use Modules\Pickup\Http\Controllers\AdminPickupController;
 use Modules\Pickup\Http\Controllers\GatewayPickupController;
 use Modules\Pickup\Http\Controllers\PickupController;
 
@@ -15,7 +16,7 @@ use Modules\Pickup\Http\Controllers\PickupController;
 
 /*
 |--------------------------------------------------------------------------
-| External Store Manager / Gateway
+| EXTERNAL STORE MANAGER / GATEWAY
 |--------------------------------------------------------------------------
 |
 | Authentication:
@@ -39,7 +40,7 @@ Route::prefix('v1/gateway')
 
         /*
         |--------------------------------------------------------------------------
-        | Request pickup
+        | REQUEST PICKUP
         |--------------------------------------------------------------------------
         |
         | Store Manager sends:
@@ -50,14 +51,15 @@ Route::prefix('v1/gateway')
         |
         | It does NOT send shipment IDs.
         |
-        | Tukaatu automatically finds:
+        | GatewayPickupService automatically:
         |
         | merchant
         | pickup location
         | awaiting_pickup shipments
+        | PickupRequest
+        | pickup_request_shipments
         |
-        | and attaches eligible shipments to the pickup.
-        |
+        |--------------------------------------------------------------------------
         */
 
         Route::post(
@@ -68,7 +70,7 @@ Route::prefix('v1/gateway')
 
         /*
         |--------------------------------------------------------------------------
-        | Get pickup
+        | GET PICKUP
         |--------------------------------------------------------------------------
         */
 
@@ -81,7 +83,7 @@ Route::prefix('v1/gateway')
 
 /*
 |--------------------------------------------------------------------------
-| Admin / Branch Management
+| ADMIN / BRANCH MANAGEMENT
 |--------------------------------------------------------------------------
 |
 | Used by:
@@ -90,6 +92,14 @@ Route::prefix('v1/gateway')
 | - Main Admin
 | - Branch Manager
 | - Sub Branch Manager
+|
+| IMPORTANT:
+|
+| Pickup administration belongs to the Pickup module.
+|
+| Controller:
+|
+| Modules\Pickup\Http\Controllers\AdminPickupController
 |
 |--------------------------------------------------------------------------
 */
@@ -108,44 +118,46 @@ Route::prefix('v1/admin')
 
             /*
             |--------------------------------------------------------------------------
-            | Pickup list
+            | PICKUPS
             |--------------------------------------------------------------------------
-            |
-            | Branch managers only receive pickups belonging to their
-            | branch/sub-branch through PickupController@index.
-            |
             */
 
             Route::get(
                 'pickups',
-                [PickupController::class, 'index']
+                [AdminPickupController::class, 'index']
             )->name('pickups.index');
 
 
             /*
             |--------------------------------------------------------------------------
-            | Pickup details
+            | PICKUP DETAILS
             |--------------------------------------------------------------------------
             */
 
             Route::get(
                 'pickups/{pickup}',
-                [PickupController::class, 'show']
+                [AdminPickupController::class, 'show']
             )->name('pickups.show');
 
 
             /*
             |--------------------------------------------------------------------------
-            | Assign rider
+            | ASSIGNABLE STAFF
+            |--------------------------------------------------------------------------
+            */
+
+            Route::get(
+                'pickups/{pickup}/assignable-staff',
+                [AdminPickupController::class, 'assignableStaff']
+            )->name('pickups.assignable-staff');
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | ASSIGN PICKUP
             |--------------------------------------------------------------------------
             |
-            | Branch Manager selects a rider/staff member.
-            |
-            | POST:
-            |
-            | /admin/pickups/{pickup}/assign
-            |
-            | Body:
+            | POST /api/v1/admin/pickups/{pickup}/assign
             |
             | {
             |     "staff_id": 123
@@ -155,66 +167,48 @@ Route::prefix('v1/admin')
 
             Route::post(
                 'pickups/{pickup}/assign',
-                [PickupController::class, 'assign']
+                [AdminPickupController::class, 'assign']
             )->name('pickups.assign');
 
 
             /*
             |--------------------------------------------------------------------------
-            | Transfer pickup
+            | FAIL PICKUP
             |--------------------------------------------------------------------------
             |
-            | IMPORTANT:
-            |
-            | Transfer is to another branch/sub-branch.
-            |
-            | It is NOT assigned directly to another rider.
-            |
-            | Body:
+            | POST /api/v1/admin/pickups/{pickup}/fail
             |
             | {
-            |     "target_branch_id": 10,
-            |     "target_sub_branch_id": 25,
-            |     "reason": "No riders available"
+            |     "reason": "No merchant available"
             | }
             |
             */
 
             Route::post(
-                'pickups/{pickup}/transfer',
-                [PickupController::class, 'transfer']
-            )->name('pickups.transfer');
-
-
-            /*
-            |--------------------------------------------------------------------------
-            | Cancel / fail pickup
-            |--------------------------------------------------------------------------
-            */
-
-            Route::post(
                 'pickups/{pickup}/fail',
-                [PickupController::class, 'fail']
+                [AdminPickupController::class, 'fail']
             )->name('pickups.fail');
 
 
             /*
             |--------------------------------------------------------------------------
-            | Receive shipment at origin branch
+            | STAFF
             |--------------------------------------------------------------------------
             */
 
-            Route::post(
-                'pickups/{pickup}/shipments/{shipment}/receive',
-                [PickupController::class, 'receiveShipment']
-            )->name('pickups.shipments.receive');
+            /*
+            | Keep your existing AdminStaffController routes here.
+            |
+            | These should remain owned by the Shipment/Admin area only
+            | if that is where your current staff controller lives.
+            */
         });
     });
 
 
 /*
 |--------------------------------------------------------------------------
-| Internal Merchant Portal
+| INTERNAL MERCHANT PORTAL
 |--------------------------------------------------------------------------
 */
 
@@ -233,7 +227,7 @@ Route::prefix('v1/merchant')
 
             /*
             |--------------------------------------------------------------------------
-            | Pickup list
+            | PICKUP LIST
             |--------------------------------------------------------------------------
             */
 
@@ -245,7 +239,7 @@ Route::prefix('v1/merchant')
 
             /*
             |--------------------------------------------------------------------------
-            | Pickup details
+            | PICKUP DETAILS
             |--------------------------------------------------------------------------
             */
 
@@ -257,7 +251,7 @@ Route::prefix('v1/merchant')
 
             /*
             |--------------------------------------------------------------------------
-            | Manual attachment
+            | MANUAL SHIPMENT ATTACHMENT
             |--------------------------------------------------------------------------
             |
             | Internal fallback only.
@@ -274,7 +268,7 @@ Route::prefix('v1/merchant')
 
 /*
 |--------------------------------------------------------------------------
-| Staff / Rider
+| STAFF / RIDER
 |--------------------------------------------------------------------------
 |
 | Riders can only operate on pickups assigned to them.
@@ -296,7 +290,7 @@ Route::prefix('v1/staff')
 
             /*
             |--------------------------------------------------------------------------
-            | My pickups
+            | MY PICKUPS
             |--------------------------------------------------------------------------
             */
 
@@ -308,7 +302,7 @@ Route::prefix('v1/staff')
 
             /*
             |--------------------------------------------------------------------------
-            | Pickup details
+            | PICKUP DETAILS
             |--------------------------------------------------------------------------
             */
 
@@ -320,7 +314,7 @@ Route::prefix('v1/staff')
 
             /*
             |--------------------------------------------------------------------------
-            | Start pickup
+            | START PICKUP
             |--------------------------------------------------------------------------
             */
 
@@ -332,7 +326,7 @@ Route::prefix('v1/staff')
 
             /*
             |--------------------------------------------------------------------------
-            | Arrive at merchant
+            | ARRIVE AT MERCHANT
             |--------------------------------------------------------------------------
             */
 
@@ -344,7 +338,7 @@ Route::prefix('v1/staff')
 
             /*
             |--------------------------------------------------------------------------
-            | Collect shipment
+            | COLLECT SHIPMENT
             |--------------------------------------------------------------------------
             */
 
@@ -356,7 +350,7 @@ Route::prefix('v1/staff')
 
             /*
             |--------------------------------------------------------------------------
-            | Complete pickup
+            | COMPLETE PICKUP
             |--------------------------------------------------------------------------
             */
 
@@ -368,7 +362,7 @@ Route::prefix('v1/staff')
 
             /*
             |--------------------------------------------------------------------------
-            | Receive shipment at origin
+            | RECEIVE SHIPMENT AT ORIGIN
             |--------------------------------------------------------------------------
             */
 
@@ -380,7 +374,7 @@ Route::prefix('v1/staff')
 
             /*
             |--------------------------------------------------------------------------
-            | Fail pickup
+            | FAIL PICKUP
             |--------------------------------------------------------------------------
             */
 

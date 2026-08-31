@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -8,104 +10,148 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('pickup_requests', function (Blueprint $table) {
-            /*
-             * Remove the previous merchant + request_number
-             * uniqueness rule.
-             */
-            $table->dropUnique(
-                'pickup_requests_merchant_request_number_unique'
-            );
+        if (! Schema::hasTable('pickup_requests')) {
+            return;
+        }
 
-            /*
-             * request_number belongs to Tukaatu.
-             *
-             * It must therefore be globally unique.
-             */
-            $table->unique(
-                'request_number',
-                'pickup_requests_request_number_unique'
-            );
+        /*
+        |--------------------------------------------------------------------------
+        | Store reference
+        |--------------------------------------------------------------------------
+        |
+        | This is the merchant/store's own pickup reference.
+        |
+        | Example:
+        |
+        | PR-001
+        | STORE-20260831-001
+        |
+        */
 
-            /*
-             * Store's own pickup/container reference.
-             *
-             * Example:
-             *
-             * Store 1 -> PR-001
-             * Store 2 -> PR-001
-             *
-             * These are allowed because they have different
-             * pickup locations.
-             */
-            if (! Schema::hasColumn('pickup_requests', 'store_reference')) {
-                $table->string('store_reference', 100)
-                    ->after('pickup_location_id');
-            }
-
-            /*
-             * The same store/location cannot submit the same
-             * PR reference twice.
-             */
-            $table->unique(
-                [
-                    'merchant_id',
-                    'pickup_location_id',
-                    'store_reference',
-                ],
-                'pickup_requests_store_reference_unique'
+        if (! Schema::hasColumn(
+            'pickup_requests',
+            'store_reference'
+        )) {
+            Schema::table(
+                'pickup_requests',
+                function (Blueprint $table): void {
+                    $table
+                        ->string('store_reference', 100)
+                        ->nullable()
+                        ->after('merchant_id');
+                }
             );
+        }
 
-            /*
-             * Useful for branch-manager dashboards.
-             */
-            $table->index(
-                [
-                    'pickup_branch_id',
-                    'status',
-                ],
-                'pickup_requests_branch_status_index'
-            );
+        /*
+        |--------------------------------------------------------------------------
+        | Merchant + store reference unique index
+        |--------------------------------------------------------------------------
+        |
+        | A merchant can have the same store reference only once.
+        |
+        | Example:
+        |
+        | merchant 1 + PR-001   -> allowed
+        | merchant 2 + PR-001   -> allowed
+        | merchant 1 + PR-001   -> duplicate
+        |
+        */
 
-            $table->index(
-                [
-                    'merchant_id',
-                    'pickup_location_id',
-                    'status',
-                ],
-                'pickup_requests_merchant_location_status_index'
+        if (
+            ! $this->indexExists(
+                'pickup_requests',
+                'pickup_requests_merchant_store_reference_unique'
+            )
+        ) {
+            Schema::table(
+                'pickup_requests',
+                function (Blueprint $table): void {
+                    $table->unique(
+                        [
+                            'merchant_id',
+                            'store_reference',
+                        ],
+                        'pickup_requests_merchant_store_reference_unique'
+                    );
+                }
             );
-        });
+        }
     }
 
     public function down(): void
     {
-        Schema::table('pickup_requests', function (Blueprint $table) {
-            $table->dropUnique(
-                'pickup_requests_request_number_unique'
-            );
+        if (! Schema::hasTable('pickup_requests')) {
+            return;
+        }
 
-            $table->dropUnique(
-                'pickup_requests_store_reference_unique'
-            );
+        /*
+        |--------------------------------------------------------------------------
+        | Remove merchant + store reference unique index
+        |--------------------------------------------------------------------------
+        */
 
-            $table->dropIndex(
-                'pickup_requests_branch_status_index'
+        if (
+            $this->indexExists(
+                'pickup_requests',
+                'pickup_requests_merchant_store_reference_unique'
+            )
+        ) {
+            Schema::table(
+                'pickup_requests',
+                function (Blueprint $table): void {
+                    $table->dropUnique(
+                        'pickup_requests_merchant_store_reference_unique'
+                    );
+                }
             );
+        }
 
-            $table->dropIndex(
-                'pickup_requests_merchant_location_status_index'
+        /*
+        |--------------------------------------------------------------------------
+        | Remove store_reference column
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            Schema::hasColumn(
+                'pickup_requests',
+                'store_reference'
+            )
+        ) {
+            Schema::table(
+                'pickup_requests',
+                function (Blueprint $table): void {
+                    $table->dropColumn('store_reference');
+                }
             );
+        }
+    }
 
-            $table->dropColumn('store_reference');
+    private function indexExists(
+        string $table,
+        string $index
+    ): bool {
+        $connection = Schema::getConnection();
 
-            /*
-             * Restore the previous uniqueness rule.
-             */
-            $table->unique(
-                ['merchant_id', 'request_number'],
-                'pickup_requests_merchant_request_number_unique'
-            );
-        });
+        $database = $connection
+            ->getDatabaseName();
+
+        $result = $connection->selectOne(
+            '
+                SELECT COUNT(*) AS count
+                FROM information_schema.statistics
+                WHERE table_schema = ?
+                AND table_name = ?
+                AND index_name = ?
+            ',
+            [
+                $database,
+                $table,
+                $index,
+            ]
+        );
+
+        return (int) $result->count > 0;
     }
 };

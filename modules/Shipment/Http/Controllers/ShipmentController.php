@@ -2,332 +2,293 @@
 
 declare(strict_types=1);
 
-namespace Modules\Shipment\Http\Controllers;
+namespace Modules\Shipment\Services;
 
-use App\Http\Controllers\Controller;
-use App\Support\ApiResponse;
 use App\Support\CourierStatus;
-use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
+use Modules\Merchant\Models\Merchant;
 use Modules\Shipment\Models\Shipment;
-use Modules\Shipment\Services\ShipmentService;
 
-class ShipmentController extends Controller
+final class ShipmentService
 {
-    /*
-    |--------------------------------------------------------------------------
-    | INDEX
-    |--------------------------------------------------------------------------
-    */
-
-    public function index(Request $request)
-    {
-        $user = $request->user();
-
-        $query = Shipment::query()
-            ->with([
-                'merchant',
-                'originBranch',
-                'originSubBranch',
-                'destinationBranch',
-                'destinationSubBranch',
-                'currentBranch',
-                'currentSubBranch',
-            ])
-            ->latest();
-
-        /*
-        |--------------------------------------------------------------------------
-        | ACCESS SCOPE
-        |--------------------------------------------------------------------------
-        */
-
-        if (! $this->isGlobalAdmin($user)) {
-
-            $branchId =
-                $this->resolveUserBranchId(
-                    $user
-                );
-
-            /*
-             * User without branch:
-             * no shipment visibility.
-             */
-            if (! $branchId) {
-                return ApiResponse::success([
-                    'data' => [],
-                    'current_page' => 1,
-                    'per_page' => (int) $request->get(
-                        'per_page',
-                        20
-                    ),
-                    'total' => 0,
-                ]);
-            }
-
-            $this->applyBranchScope(
-                $query,
-                $branchId
-            );
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | SUPER ADMIN BRANCH FILTER
-        |--------------------------------------------------------------------------
-        |
-        | Only global admins may filter by branch.
-        |
-        */
-
-        if (
-            $this->isGlobalAdmin($user)
-            && $request->filled('branch_id')
-        ) {
-
-            $branchId =
-                (int) $request->input(
-                    'branch_id'
-                );
-
-            $this->applyBranchScope(
-                $query,
-                $branchId
-            );
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | STATUS
-        |--------------------------------------------------------------------------
-        */
-
-        if ($request->filled('status')) {
-
-            $query->where(
-                'status',
-                $request->input('status')
-            );
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | MERCHANT
-        |--------------------------------------------------------------------------
-        */
-
-        if ($request->filled('merchant_id')) {
-
-            $query->where(
-                'merchant_id',
-                $request->input('merchant_id')
-            );
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | SEARCH
-        |--------------------------------------------------------------------------
-        */
-
-        $search = trim(
-            (string) (
-                $request->input(
-                    'search',
-                    $request->input('q', '')
-                )
-            )
-        );
-
-        if ($search !== '') {
-
-            $query->where(function ($q) use ($search) {
-
-                $q->where(
-                    'tracking_number',
-                    'like',
-                    "%{$search}%"
-                )
-                ->orWhere(
-                    'merchant_order_id',
-                    'like',
-                    "%{$search}%"
-                )
-                ->orWhere(
-                    'receiver_name',
-                    'like',
-                    "%{$search}%"
-                )
-                ->orWhere(
-                    'receiver_phone',
-                    'like',
-                    "%{$search}%"
-                );
-            });
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | SERVICE TYPE
-        |--------------------------------------------------------------------------
-        */
-
-        if ($request->filled('service_type')) {
-
-            $query->where(
-                'service_type',
-                $request->input(
-                    'service_type'
-                )
-            );
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | PAYMENT TYPE
-        |--------------------------------------------------------------------------
-        */
-
-        if ($request->filled('payment_type')) {
-
-            $query->where(
-                'payment_type',
-                $request->input(
-                    'payment_type'
-                )
-            );
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | PAGINATION
-        |--------------------------------------------------------------------------
-        */
-
-        $perPage = max(
-            1,
-            min(
-                (int) $request->get(
-                    'per_page',
-                    20
-                ),
-                100
-            )
-        );
-
-        $shipments =
-            $query
-                ->paginate($perPage)
-                ->appends(
-                    $request->query()
-                );
-
-        return ApiResponse::success(
-            $shipments
-        );
+    public function __construct(
+        private readonly MerchantPickupLocationResolver $pickupResolver,
+        private readonly BranchAssignmentService $branchAssignment,
+        private readonly ShipmentNumberService $shipmentNumberService,
+    ) {
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | SHOW
-    |--------------------------------------------------------------------------
-    */
+    /**
+     * Create shipment from external Store Manager.
+     *
+     * IMPORTANT:
+     *
+     * Shipment creation and pickup creation are separate operations.
+     */
+    public function createFromGateway(
+        int $merchantId,
+        array $data
+    ): Shipment {
 
-    public function show(
-        Request $request,
-        Shipment $shipment
-    ) {
-        $this->authorizeShipment(
-            $request,
-            $shipment
-        );
+        $merchant =
+            Merchant::query()
+                ->find($merchantId);
 
-        return ApiResponse::success(
-            $shipment->load([
-                'merchant',
-                'items',
-                'trackingEvents',
-                'originBranch',
-                'originSubBranch',
-                'destinationBranch',
-                'destinationSubBranch',
-                'currentBranch',
-                'currentSubBranch',
-                'routeSteps.fromBranch',
-                'routeSteps.toBranch',
-            ])
-        );
-    }
+        if (! $merchant) {
+            throw ValidationException::withMessages([
+                'merchant' => [
+                    'Authenticated merchant was not found.',
+                ],
+            ]);
+        }
 
-    /*
-    |--------------------------------------------------------------------------
-    | STORE
-    |--------------------------------------------------------------------------
-    */
+        if ($merchant->status !== 'active') {
+            throw ValidationException::withMessages([
+                'merchant' => [
+                    'Merchant account is not active.',
+                ],
+            ]);
+        }
 
-    public function store(
-        Request $request,
-        ShipmentService $service
-    ) {
-        $data =
-            $this->validatedShipment(
-                $request
-            );
+        $packet =
+            $data['packet'] ?? null;
 
-        $shipment =
-            $service->create(
+        if (! is_array($packet)) {
+            throw ValidationException::withMessages([
+                'packet' => [
+                    'Packet details are required.',
+                ],
+            ]);
+        }
+
+        $products =
+            $packet['products'] ?? [];
+
+        if (! is_array($products)) {
+            $products = [];
+        }
+
+        return DB::transaction(
+            function () use (
+                $merchant,
                 $data,
-                $request->user()->id,
-                $data['merchant_id'] ?? null,
-                'manual'
-            );
+                $packet,
+                $products
+            ): Shipment {
 
-        return ApiResponse::success(
-            $shipment,
-            'Shipment created.',
-            201
-        );
-    }
+                /*
+                |--------------------------------------------------------------------------
+                | Idempotency
+                |--------------------------------------------------------------------------
+                */
 
-    /*
-    |--------------------------------------------------------------------------
-    | UPDATE
-    |--------------------------------------------------------------------------
-    */
+                $existing =
+                    Shipment::query()
+                        ->where(
+                            'merchant_id',
+                            $merchant->id
+                        )
+                        ->where(
+                            'merchant_order_id',
+                            $data['merchant_order_id']
+                        )
+                        ->first();
 
-    public function update(
-        Request $request,
-        Shipment $shipment
-    ) {
-        $this->authorizeShipment(
-            $request,
-            $shipment
-        );
+                if ($existing) {
+                    return $existing;
+                }
 
-        $data =
-            $this->validatedShipment(
-                $request
-            );
+                /*
+                |--------------------------------------------------------------------------
+                | Pickup location
+                |--------------------------------------------------------------------------
+                */
 
-        $shipment->update(
-            $data
-        );
+                $pickupLocation =
+                    $this->pickupResolver->resolve(
+                        $merchant,
+                        $data
+                    );
 
-        if (
-            $this->shouldReroute(
-                $data
-            )
-        ) {
+                if (! $pickupLocation) {
+                    throw ValidationException::withMessages([
+                        'pickup_location_id' => [
+                            'Pickup location could not be resolved.',
+                        ],
+                    ]);
+                }
 
-            app(
-                \Modules\Routing\Services\ShipmentRoutingService::class
-            )->applyToShipment(
-                $shipment,
-                [
+                if (
+                    isset($pickupLocation->merchant_id)
+                    &&
+                    (int) $pickupLocation->merchant_id
+                    !== (int) $merchant->id
+                ) {
+                    throw ValidationException::withMessages([
+                        'pickup_location_id' => [
+                            'Pickup location does not belong to this merchant.',
+                        ],
+                    ]);
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | Pickup coordinates
+                |--------------------------------------------------------------------------
+                */
+
+                $pickupCoordinates =
+                    $this->branchAssignment
+                        ->pickupCoordinates(
+                            $pickupLocation,
+                            $merchant
+                        );
+
+                /*
+                |--------------------------------------------------------------------------
+                | Origin
+                |--------------------------------------------------------------------------
+                */
+
+                $origin =
+                    $this->branchAssignment
+                        ->resolveOrigin(
+                            $merchant,
+                            $pickupLocation
+                        );
+
+                if (! $origin['branch_id']) {
+                    throw ValidationException::withMessages([
+                        'pickup_location_id' => [
+                            'Unable to determine origin branch.',
+                        ],
+                    ]);
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | Destination
+                |--------------------------------------------------------------------------
+                */
+
+                $destination =
+                    $this->branchAssignment
+                        ->resolveDestination([
+                            'latitude' =>
+                                $data['delivery_lat'],
+
+                            'longitude' =>
+                                $data['delivery_lng'],
+
+                            'city' =>
+                                $data['delivery_city'] ?? null,
+
+                            'area' =>
+                                $data['delivery_area'] ?? null,
+                        ]);
+
+                if (! $destination['branch_id']) {
+                    throw ValidationException::withMessages([
+                        'delivery_lat' => [
+                            'Unable to determine destination branch.',
+                        ],
+                    ]);
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | Route
+                |--------------------------------------------------------------------------
+                */
+
+                $route =
+                    $this->branchAssignment
+                        ->buildRoute(
+                            $origin,
+                            $destination
+                        );
+
+                /*
+                |--------------------------------------------------------------------------
+                | Tracking
+                |--------------------------------------------------------------------------
+                */
+
+                $trackingNumber =
+                    $this->shipmentNumberService
+                        ->generate();
+
+                /*
+                |--------------------------------------------------------------------------
+                | Products
+                |--------------------------------------------------------------------------
+                */
+
+                $packetProducts =
+                    $this->buildPacketProducts(
+                        $products,
+                        $trackingNumber
+                    );
+
+                $selfDrop =
+                    filter_var(
+                        $data['self_drop'] ?? false,
+                        FILTER_VALIDATE_BOOLEAN
+                    );
+
+                /*
+                |--------------------------------------------------------------------------
+                | Shipment
+                |--------------------------------------------------------------------------
+                */
+
+                $shipmentData = [
+
+                    'tracking_number' =>
+                        $trackingNumber,
+
+                    'merchant_id' =>
+                        $merchant->id,
+
+                    'merchant_order_id' =>
+                        $data['merchant_order_id'],
+
+                    'order_source' =>
+                        'store_manager',
+
+                    'pickup_location_id' =>
+                        $pickupLocation->id,
+
                     'pickup_lat' =>
-                        $data['pickup_lat'],
+                        $pickupCoordinates['lat'],
 
                     'pickup_lng' =>
-                        $data['pickup_lng'],
+                        $pickupCoordinates['lng'],
+
+                    'origin_branch_id' =>
+                        $origin['branch_id'],
+
+                    'origin_sub_branch_id' =>
+                        $origin['sub_branch_id'] ?? null,
+
+                    'receiver_name' =>
+                        $data['receiver_name'],
+
+                    'receiver_phone' =>
+                        $data['receiver_phone'],
+
+                    'receiver_email' =>
+                        $data['receiver_email'] ?? null,
+
+                    'delivery_address' =>
+                        $data['delivery_address'] ?? null,
+
+                    'delivery_city' =>
+                        $data['delivery_city'] ?? null,
+
+                    'delivery_area' =>
+                        $data['delivery_area'] ?? null,
 
                     'delivery_lat' =>
                         $data['delivery_lat'],
@@ -335,466 +296,449 @@ class ShipmentController extends Controller
                     'delivery_lng' =>
                         $data['delivery_lng'],
 
+                    'destination_branch_id' =>
+                        $destination['branch_id'],
+
+                    'destination_sub_branch_id' =>
+                        $destination['sub_branch_id'] ?? null,
+
+                    'route_id' =>
+                        $route['route_id'] ?? null,
+
+                    'service_type' =>
+                        $data['service_type'],
+
+                    'parcel_type' =>
+                        $packet['parcel_type'],
+
+                    'description' =>
+                        $packet['description'] ?? null,
+
+                    'quantity' =>
+                        $packet['quantity'],
+
                     'weight' =>
-                        $data['weight']
-                        ?? $shipment->weight
-                        ?? 1,
+                        $packet['weight'],
 
-                    'pod_amount' =>
-                        $data['pod_amount']
-                        ?? $shipment->pod_amount
-                        ?? 0,
-                ]
-            );
-        }
+                    'declared_value' =>
+                        $packet['declared_value'],
 
-        return ApiResponse::success(
-            $shipment->fresh([
-                'merchant',
-                'items',
-                'trackingEvents',
-                'originBranch',
-                'originSubBranch',
-                'destinationBranch',
-                'destinationSubBranch',
-                'currentBranch',
-                'currentSubBranch',
-                'routeSteps.fromBranch',
-                'routeSteps.toBranch',
-            ]),
-            'Shipment updated.'
-        );
-    }
+                    'fragile' =>
+                        $packet['fragile'],
 
-    /*
-    |--------------------------------------------------------------------------
-    | STATUS
-    |--------------------------------------------------------------------------
-    */
+                    'packet_products' =>
+                        $packetProducts,
 
-    public function status(
-        Request $request,
-        Shipment $shipment,
-        ShipmentService $service
-    ) {
-        $this->authorizeShipment(
-            $request,
-            $shipment
-        );
+                    'payment_type' =>
+                        $data['payment_type'],
 
-        $data =
-            $request->validate([
-                'status' => [
-                    'required',
-                    'string',
-                ],
+                    'delivery_charge_paid_by' =>
+                        $data['delivery_charge_paid_by'],
 
-                'remarks' => [
-                    'nullable',
-                    'string',
-                ],
-            ]);
+                    'self_drop' =>
+                        $selfDrop,
 
-        $shipment =
-            $service->updateStatus(
-                $shipment,
-                $data['status'],
-                $request->user()->id,
-                $data['remarks'] ?? null
-            );
+                    'special_instructions' =>
+                        $data['special_instructions'] ?? null,
 
-        return ApiResponse::success(
-            $shipment,
-            'Shipment status updated.'
-        );
-    }
+                    'remarks' =>
+                        $data['remarks'] ?? null,
 
-    /*
-    |--------------------------------------------------------------------------
-    | CANCEL
-    |--------------------------------------------------------------------------
-    */
+                    'status' =>
+                        CourierStatus::AWAITING_PICKUP,
+                ];
 
-    public function cancel(
-        Request $request,
-        Shipment $shipment,
-        ShipmentService $service
-    ) {
-        $this->authorizeShipment(
-            $request,
-            $shipment
-        );
+                /*
+                |--------------------------------------------------------------------------
+                | Route transfer
+                |--------------------------------------------------------------------------
+                */
 
-        $shipment =
-            $service->updateStatus(
-                $shipment,
-                CourierStatus::CANCELLED,
-                $request->user()->id,
-                $request->get(
-                    'remarks',
-                    'Shipment cancelled.'
-                )
-            );
+                $columns =
+                    $this->shipmentColumns();
 
-        return ApiResponse::success(
-            $shipment,
-            'Shipment cancelled.'
-        );
-    }
+                if (
+                    array_key_exists(
+                        'requires_transfer',
+                        $columns
+                    )
+                ) {
+                    $shipmentData['requires_transfer'] =
+                        (bool) (
+                            $route['requires_transfer']
+                            ?? false
+                        );
+                }
 
-    /*
-    |--------------------------------------------------------------------------
-    | BRANCH SCOPE
-    |--------------------------------------------------------------------------
-    */
+                if (
+                    array_key_exists(
+                        'route_distance_km',
+                        $columns
+                    )
+                ) {
+                    $shipmentData['route_distance_km'] =
+                        $route['distance_km']
+                        ?? 0;
+                }
 
-    private function applyBranchScope(
-        $query,
-        int $branchId
-    ): void {
+                $shipmentData =
+                    $this->filterShipmentColumns(
+                        $shipmentData
+                    );
 
-        $query->where(
-            function ($q) use ($branchId) {
+                $shipment =
+                    Shipment::query()
+                        ->create($shipmentData);
 
-                $q->where(
-                    'origin_branch_id',
-                    $branchId
-                )
+                /*
+                |--------------------------------------------------------------------------
+                | Tracking event
+                |--------------------------------------------------------------------------
+                */
 
-                ->orWhere(
-                    'origin_sub_branch_id',
-                    $branchId
-                )
-
-                ->orWhere(
-                    'destination_branch_id',
-                    $branchId
-                )
-
-                ->orWhere(
-                    'destination_sub_branch_id',
-                    $branchId
-                )
-
-                ->orWhere(
-                    'current_branch_id',
-                    $branchId
-                )
-
-                ->orWhere(
-                    'current_sub_branch_id',
-                    $branchId
+                $this->createTrackingEvent(
+                    shipment: $shipment,
+                    oldStatus: null,
+                    newStatus:
+                        CourierStatus::AWAITING_PICKUP,
+                    description:
+                        'Shipment created successfully. Awaiting pickup request.',
+                    createdBy: null
                 );
+
+                return $shipment->fresh();
             }
         );
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | AUTHORIZE SINGLE SHIPMENT
-    |--------------------------------------------------------------------------
-    */
-
-    private function authorizeShipment(
-        Request $request,
+    /**
+     * Cancel shipment through Store Manager gateway.
+     */
+    public function cancelFromGateway(
         Shipment $shipment
+    ): Shipment {
+
+        return DB::transaction(
+            function () use ($shipment): Shipment {
+
+                $shipment =
+                    Shipment::query()
+                        ->lockForUpdate()
+                        ->findOrFail(
+                            $shipment->id
+                        );
+
+                $cancellableStatuses = [
+                    CourierStatus::BOOKED,
+                    CourierStatus::AWAITING_PICKUP,
+                    CourierStatus::PICKUP_ASSIGNED,
+                ];
+
+                if (! in_array(
+                    $shipment->status,
+                    $cancellableStatuses,
+                    true
+                )) {
+                    throw ValidationException::withMessages([
+                        'shipment' => [
+                            'Shipment cannot be cancelled after pickup or dispatch.',
+                        ],
+                    ]);
+                }
+
+                $oldStatus =
+                    $shipment->status;
+
+                $shipment->status =
+                    CourierStatus::CANCELLED;
+
+                $shipment->merchant_status =
+                    CourierStatus::merchantStatus(
+                        CourierStatus::CANCELLED
+                    );
+
+                if (
+                    $this->hasShipmentColumn(
+                        'cancelled_at'
+                    )
+                ) {
+                    $shipment->cancelled_at =
+                        now();
+                }
+
+                $shipment->save();
+
+                $this->createTrackingEvent(
+                    shipment: $shipment,
+                    oldStatus: $oldStatus,
+                    newStatus:
+                        CourierStatus::CANCELLED,
+                    description:
+                        'Shipment cancelled by Store Manager.',
+                    createdBy: null
+                );
+
+                return $shipment->fresh();
+            }
+        );
+    }
+
+    /**
+     * Generic status update.
+     */
+    public function updateStatus(
+        Shipment $shipment,
+        string $status,
+        ?int $userId = null,
+        ?string $note = null
+    ): Shipment {
+
+        return DB::transaction(
+            function () use (
+                $shipment,
+                $status,
+                $userId,
+                $note
+            ): Shipment {
+
+                $shipment =
+                    Shipment::query()
+                        ->lockForUpdate()
+                        ->findOrFail(
+                            $shipment->id
+                        );
+
+                $oldStatus =
+                    $shipment->status;
+
+                $shipment->status =
+                    $status;
+
+                $shipment->merchant_status =
+                    CourierStatus::merchantStatus(
+                        $status
+                    );
+
+                if (
+                    $status === CourierStatus::DELIVERED
+                    &&
+                    $this->hasShipmentColumn(
+                        'delivered_at'
+                    )
+                ) {
+                    $shipment->delivered_at =
+                        now();
+                }
+
+                if (
+                    $status === CourierStatus::CANCELLED
+                    &&
+                    $this->hasShipmentColumn(
+                        'cancelled_at'
+                    )
+                ) {
+                    $shipment->cancelled_at =
+                        now();
+                }
+
+                $shipment->save();
+
+                $this->createTrackingEvent(
+                    shipment: $shipment,
+                    oldStatus: $oldStatus,
+                    newStatus: $status,
+                    description:
+                        $note
+                        ??
+                        'Shipment status updated.',
+                    createdBy: $userId
+                );
+
+                return $shipment->fresh();
+            }
+        );
+    }
+
+    /**
+     * Build packet products.
+     */
+    private function buildPacketProducts(
+        array $products,
+        string $packetTrackingNumber
+    ): array {
+
+        if ($products === []) {
+            return [];
+        }
+
+        $packetProducts = [];
+
+        foreach (
+            array_values($products)
+            as $index => $product
+        ) {
+
+            $productNumber =
+                $index + 1;
+
+            $productTrackingNumber =
+                sprintf(
+                    '%s-%02d',
+                    $packetTrackingNumber,
+                    $productNumber
+                );
+
+            $packetProducts[] = [
+
+                'product_tracking_number' =>
+                    $productTrackingNumber,
+
+                'product_id' =>
+                    isset($product['product_id'])
+                        ? (string) $product['product_id']
+                        : null,
+
+                'name' =>
+                    isset($product['name'])
+                        ? (string) $product['name']
+                        : null,
+
+                'quantity' =>
+                    (int) (
+                        $product['quantity'] ?? 1
+                    ),
+
+                'unit_price' =>
+                    isset($product['unit_price'])
+                        ? (float) $product['unit_price']
+                        : null,
+
+                'unit_weight' =>
+                    isset($product['unit_weight'])
+                        ? (float) $product['unit_weight']
+                        : null,
+
+                'parcel_type' =>
+                    $product['parcel_type']
+                    ??
+                    $product['package_type']
+                    ??
+                    $product['parcelType']
+                    ??
+                    null,
+            ];
+        }
+
+        return $packetProducts;
+    }
+
+    /**
+     * Create tracking event.
+     */
+    private function createTrackingEvent(
+        Shipment $shipment,
+        ?string $oldStatus,
+        string $newStatus,
+        string $description,
+        ?int $createdBy = null
     ): void {
 
-        $user = $request->user();
+        $table = 'tracking_events';
 
         if (
-            $this->isGlobalAdmin(
-                $user
-            )
+            ! DB::getSchemaBuilder()
+                ->hasTable($table)
         ) {
             return;
         }
 
-        $branchId =
-            $this->resolveUserBranchId(
-                $user
+        $data = [
+
+            'shipment_id' =>
+                $shipment->id,
+
+            'tracking_number' =>
+                $shipment->tracking_number,
+
+            'old_status' =>
+                $oldStatus,
+
+            'status' =>
+                $newStatus,
+
+            'merchant_status' =>
+                CourierStatus::merchantStatus(
+                    $newStatus
+                ),
+
+            'branch_id' =>
+                $shipment->current_branch_id
+                ??
+                $shipment->origin_branch_id,
+
+            'sub_branch_id' =>
+                $shipment->current_sub_branch_id
+                ??
+                $shipment->origin_sub_branch_id,
+
+            'location_text' =>
+                null,
+
+            'description' =>
+                $description,
+
+            'visibility' =>
+                'public',
+
+            'created_by' =>
+                $createdBy,
+
+            'created_at' =>
+                now(),
+
+            'updated_at' =>
+                now(),
+        ];
+
+        $columns =
+            DB::getSchemaBuilder()
+                ->getColumnListing($table);
+
+        $data =
+            array_intersect_key(
+                $data,
+                array_flip($columns)
             );
 
-        abort_unless(
-            $branchId,
-            403
-        );
+        DB::table($table)
+            ->insert($data);
+    }
 
-        $belongsToBranch =
-            in_array(
-                $branchId,
-                [
-                    (int) $shipment->origin_branch_id,
-                    (int) $shipment->origin_sub_branch_id,
-                    (int) $shipment->destination_branch_id,
-                    (int) $shipment->destination_sub_branch_id,
-                    (int) $shipment->current_branch_id,
-                    (int) $shipment->current_sub_branch_id,
-                ],
-                true
-            );
-
-        abort_unless(
-            $belongsToBranch,
-            403
+    private function shipmentColumns(): array
+    {
+        return array_flip(
+            DB::getSchemaBuilder()
+                ->getColumnListing('shipments')
         );
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | USER BRANCH
-    |--------------------------------------------------------------------------
-    */
-
-    private function resolveUserBranchId(
-        $user
-    ): ?int {
-
-        if ($user?->branch_id) {
-            return (int) $user->branch_id;
-        }
-
-        if ($user?->branch?->id) {
-            return (int) $user->branch->id;
-        }
-
-        return null;
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | GLOBAL ADMIN
-    |--------------------------------------------------------------------------
-    */
-
-    private function isGlobalAdmin(
-        $user
-    ): bool {
-
-        return (bool) (
-            $user?->is_super_admin
-            || $user?->role === 'super_admin'
-            || $user?->isSuperAdmin()
-            || $user?->hasRole('main_admin')
-        );
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | VALIDATION
-    |--------------------------------------------------------------------------
-    */
-
-    private function validatedShipment(
-        Request $request
+    private function filterShipmentColumns(
+        array $data
     ): array {
 
-        return $request->validate([
-            'merchant_id' => [
-                'nullable',
-                'exists:merchants,id',
-            ],
-
-            'merchant_order_id' => [
-                'nullable',
-                'string',
-            ],
-
-            'manual_branch_override' => [
-                'nullable',
-                'boolean',
-            ],
-
-            'origin_branch_id' => [
-                'nullable',
-                'exists:branches,id',
-            ],
-
-            'origin_sub_branch_id' => [
-                'nullable',
-                'exists:branches,id',
-            ],
-
-            'destination_branch_id' => [
-                'nullable',
-                'exists:branches,id',
-            ],
-
-            'destination_sub_branch_id' => [
-                'nullable',
-                'exists:branches,id',
-            ],
-
-            'pickup_lat' => [
-                'nullable',
-                'numeric',
-                'between:-90,90',
-            ],
-
-            'pickup_lng' => [
-                'nullable',
-                'numeric',
-                'between:-180,180',
-            ],
-
-            'delivery_lat' => [
-                'nullable',
-                'numeric',
-                'between:-90,90',
-            ],
-
-            'delivery_lng' => [
-                'nullable',
-                'numeric',
-                'between:-180,180',
-            ],
-
-            'sender_name' => [
-                'nullable',
-                'string',
-            ],
-
-            'sender_phone' => [
-                'nullable',
-                'string',
-            ],
-
-            'sender_address' => [
-                'nullable',
-                'string',
-            ],
-
-            'sender_city' => [
-                'nullable',
-                'string',
-            ],
-
-            'sender_area' => [
-                'nullable',
-                'string',
-            ],
-
-            'receiver_name' => [
-                'required',
-                'string',
-            ],
-
-            'receiver_phone' => [
-                'required',
-                'string',
-            ],
-
-            'receiver_email' => [
-                'nullable',
-                'email',
-            ],
-
-            'receiver_address' => [
-                'required',
-                'string',
-            ],
-
-            'receiver_city' => [
-                'nullable',
-                'string',
-            ],
-
-            'receiver_area' => [
-                'nullable',
-                'string',
-            ],
-
-            'parcel_type' => [
-                'nullable',
-                'string',
-            ],
-
-            'description' => [
-                'nullable',
-                'string',
-            ],
-
-            'quantity' => [
-                'nullable',
-                'integer',
-                'min:1',
-            ],
-
-            'weight' => [
-                'nullable',
-                'numeric',
-                'min:0.1',
-            ],
-
-            'declared_value' => [
-                'nullable',
-                'numeric',
-                'min:0',
-            ],
-
-            'fragile' => [
-                'nullable',
-                'boolean',
-            ],
-
-            'payment_type' => [
-                'nullable',
-                'in:prepaid,pod,to_pay',
-            ],
-
-            'pod_amount' => [
-                'nullable',
-                'numeric',
-                'min:0',
-            ],
-
-            'delivery_charge' => [
-                'nullable',
-                'numeric',
-                'min:0',
-            ],
-
-            'pod_charge' => [
-                'nullable',
-                'numeric',
-                'min:0',
-            ],
-
-            'delivery_charge_paid_by' => [
-                'nullable',
-                'in:merchant,customer',
-            ],
-
-            'remarks' => [
-                'nullable',
-                'string',
-            ],
-        ]);
+        return array_intersect_key(
+            $data,
+            $this->shipmentColumns()
+        );
     }
 
-    private function shouldReroute(
-        array $data
+    private function hasShipmentColumn(
+        string $column
     ): bool {
 
-        if (
-            ! empty(
-                $data['manual_branch_override']
-            )
-        ) {
-            return false;
-        }
-
-        return ! empty(
-            $data['pickup_lat']
-        )
-        && ! empty(
-            $data['pickup_lng']
-        )
-        && ! empty(
-            $data['delivery_lat']
-        )
-        && ! empty(
-            $data['delivery_lng']
+        return array_key_exists(
+            $column,
+            $this->shipmentColumns()
         );
     }
 }

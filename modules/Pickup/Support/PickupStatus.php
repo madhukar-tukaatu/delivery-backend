@@ -6,12 +6,6 @@ namespace Modules\Pickup\Support;
 
 final class PickupStatus
 {
-    /*
-    |--------------------------------------------------------------------------
-    | Main lifecycle
-    |--------------------------------------------------------------------------
-    */
-
     public const REQUESTED = 'requested';
 
     public const ASSIGNED = 'assigned';
@@ -24,18 +18,9 @@ final class PickupStatus
 
     public const FAILED = 'failed';
 
-    public const CANCELLED = 'cancelled';
-
-    /*
-    |--------------------------------------------------------------------------
-    | Active pickup
-    |--------------------------------------------------------------------------
-    |
-    | A pickup remains the active container until it is completed,
-    | failed or cancelled.
-    |
-    */
-
+    /**
+     * Pickup requests which are still operationally active.
+     */
     public static function active(): array
     {
         return [
@@ -46,16 +31,22 @@ final class PickupStatus
         ];
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Pickups accepting new shipments
-    |--------------------------------------------------------------------------
-    |
-    | According to the agreed workflow, shipments can continue to
-    | enter the same pickup container until the pickup is closed.
-    |
-    */
-
+    /**
+     * Pickup requests which may still receive additional shipments.
+     *
+     * IMPORTANT:
+     *
+     * A rider can already be assigned and travelling while the
+     * merchant adds another shipment.
+     *
+     * Therefore ASSIGNED and STARTED are intentionally included.
+     *
+     * ARRIVED is also included because the rider may be at the
+     * merchant while the merchant is still preparing/adding parcels.
+     *
+     * If your business rule says "no new parcels once rider arrives",
+     * remove ARRIVED.
+     */
     public static function acceptingShipments(): array
     {
         return [
@@ -66,17 +57,11 @@ final class PickupStatus
         ];
     }
 
-    public static function open(): array
-    {
-        return self::active();
-    }
-
-    public static function closed(): array
+    public static function terminal(): array
     {
         return [
             self::COMPLETED,
             self::FAILED,
-            self::CANCELLED,
         ];
     }
 }

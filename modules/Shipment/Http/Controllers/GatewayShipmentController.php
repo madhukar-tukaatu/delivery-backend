@@ -22,27 +22,17 @@ final class GatewayShipmentController extends Controller
     }
 
     /**
-     * Create shipment from an external Store Manager.
+     * Create shipment from external Store Manager.
      *
-     * IMPORTANT:
+     * This endpoint ONLY creates a shipment.
      *
-     * Creating a shipment does NOT create a pickup request.
+     * It does NOT create a pickup request.
      *
-     * Shipment lifecycle:
+     * POST /api/v1/gateway/shipments
      *
-     * Store Manager
-     *      ↓
-     * POST /gateway/shipments
-     *      ↓
-     * Shipment created
-     *      ↓
-     * awaiting_pickup
-     *      ↓
-     * Store Manager prepares parcel
-     *      ↓
-     * POST /gateway/pickups
-     *      ↓
-     * Pickup request created
+     * Result:
+     *
+     * shipment.status = awaiting_pickup
      */
     public function store(Request $request): JsonResponse
     {
@@ -57,35 +47,17 @@ final class GatewayShipmentController extends Controller
         );
 
         $data = $request->validate([
-            /*
-            |--------------------------------------------------------------------------
-            | Merchant order
-            |--------------------------------------------------------------------------
-            */
-
             'merchant_order_id' => [
                 'required',
                 'string',
                 'max:100',
             ],
 
-            /*
-            |--------------------------------------------------------------------------
-            | Pickup location
-            |--------------------------------------------------------------------------
-            */
-
             'pickup_location_id' => [
                 'required',
                 'integer',
                 'min:1',
             ],
-
-            /*
-            |--------------------------------------------------------------------------
-            | Receiver
-            |--------------------------------------------------------------------------
-            */
 
             'receiver_name' => [
                 'required',
@@ -104,12 +76,6 @@ final class GatewayShipmentController extends Controller
                 'email',
                 'max:150',
             ],
-
-            /*
-            |--------------------------------------------------------------------------
-            | Delivery
-            |--------------------------------------------------------------------------
-            */
 
             'delivery_address' => [
                 'required',
@@ -141,23 +107,11 @@ final class GatewayShipmentController extends Controller
                 'between:-180,180',
             ],
 
-            /*
-            |--------------------------------------------------------------------------
-            | Service
-            |--------------------------------------------------------------------------
-            */
-
             'service_type' => [
                 'required',
                 'string',
                 'max:50',
             ],
-
-            /*
-            |--------------------------------------------------------------------------
-            | Packet
-            |--------------------------------------------------------------------------
-            */
 
             'packet' => [
                 'required',
@@ -198,12 +152,6 @@ final class GatewayShipmentController extends Controller
                 'required',
                 'boolean',
             ],
-
-            /*
-            |--------------------------------------------------------------------------
-            | Products
-            |--------------------------------------------------------------------------
-            */
 
             'packet.products' => [
                 'nullable',
@@ -247,12 +195,6 @@ final class GatewayShipmentController extends Controller
                 'max:50',
             ],
 
-            /*
-            |--------------------------------------------------------------------------
-            | Payment
-            |--------------------------------------------------------------------------
-            */
-
             'payment_type' => [
                 'required',
                 'string',
@@ -265,22 +207,10 @@ final class GatewayShipmentController extends Controller
                 'max:50',
             ],
 
-            /*
-            |--------------------------------------------------------------------------
-            | Pickup mode
-            |--------------------------------------------------------------------------
-            */
-
             'self_drop' => [
                 'nullable',
                 'boolean',
             ],
-
-            /*
-            |--------------------------------------------------------------------------
-            | Additional
-            |--------------------------------------------------------------------------
-            */
 
             'special_instructions' => [
                 'nullable',
@@ -295,26 +225,13 @@ final class GatewayShipmentController extends Controller
             ],
         ]);
 
-        /*
-        |--------------------------------------------------------------------------
-        | Normalize
-        |--------------------------------------------------------------------------
-        */
-
         $data['self_drop'] =
             $data['self_drop'] ?? false;
 
         $data['order_source'] =
             'store_manager';
 
-        /*
-        |--------------------------------------------------------------------------
-        | Create shipment
-        |--------------------------------------------------------------------------
-        */
-
         try {
-
             $shipment =
                 $this->shipmentService->createFromGateway(
                     merchantId: $merchantId,
@@ -326,7 +243,6 @@ final class GatewayShipmentController extends Controller
                 'Shipment created successfully.',
                 201
             );
-
         } catch (ValidationException $e) {
 
             return response()->json([
@@ -350,7 +266,7 @@ final class GatewayShipmentController extends Controller
     }
 
     /**
-     * Retrieve shipment belonging to authenticated merchant.
+     * Retrieve shipment.
      */
     public function show(
         Request $request,
@@ -394,7 +310,7 @@ final class GatewayShipmentController extends Controller
     }
 
     /**
-     * Cancel shipment belonging to authenticated merchant.
+     * Cancel shipment.
      */
     public function cancel(
         Request $request,
@@ -427,8 +343,7 @@ final class GatewayShipmentController extends Controller
         | Cancellation rules
         |--------------------------------------------------------------------------
         |
-        | Once the parcel has actually been collected, the Store Manager
-        | cannot cancel it through the gateway.
+        | Merchant may cancel before actual collection.
         |
         */
 
@@ -449,17 +364,25 @@ final class GatewayShipmentController extends Controller
             );
         }
 
-        $updated =
-            $this->shipmentService->updateStatus(
-                shipment: $shipment,
-                status: CourierStatus::CANCELLED,
-                userId: null,
-                note: 'Cancelled by Store Manager API.'
+        try {
+
+            $updated =
+                $this->shipmentService->cancelFromGateway(
+                    shipment: $shipment,
+                );
+
+            return ApiResponse::success(
+                $updated,
+                'Shipment cancelled successfully.'
             );
 
-        return ApiResponse::success(
-            $updated,
-            'Shipment cancelled successfully.'
-        );
+        } catch (ValidationException $e) {
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Shipment cancellation failed.',
+                'errors' => $e->errors(),
+            ], 422);
+        }
     }
 }

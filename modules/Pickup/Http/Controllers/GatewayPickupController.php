@@ -2,55 +2,40 @@
 
 declare(strict_types=1);
 
-namespace Modules\Pickup\Http\Controllers;
+namespace Modules\Shipment\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
+use App\Support\CourierStatus;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
-use Modules\Pickup\Http\Requests\GatewayCreatePickupRequest;
-use Modules\Pickup\Services\GatewayPickupService;
+use Modules\Shipment\Models\Shipment;
+use Modules\Shipment\Services\ShipmentService;
 use Throwable;
 
-final class GatewayPickupController extends Controller
+final class GatewayShipmentController extends Controller
 {
     public function __construct(
-        private readonly GatewayPickupService $pickupService,
+        private readonly ShipmentService $shipmentService,
     ) {
     }
 
     /**
-     * Request pickup from an external Store Manager.
+     * Create shipment from external Store Manager.
      *
-     * IMPORTANT:
+     * This endpoint ONLY creates a shipment.
      *
-     * Creating a shipment does NOT create a pickup request.
-     *
-     * Shipment:
+     * It does NOT create a pickup request.
      *
      * POST /api/v1/gateway/shipments
      *
-     * creates:
+     * Result:
      *
-     * awaiting_pickup
-     *
-     * Then the merchant explicitly requests collection:
-     *
-     * POST /api/v1/gateway/pickups
-     *
-     * At that point Tukaatu:
-     *
-     * 1. Validates the merchant.
-     * 2. Validates the pickup location.
-     * 3. Finds eligible awaiting_pickup shipments.
-     * 4. Creates or reuses an appropriate pickup batch.
-     * 5. Attaches the shipments to that pickup.
+     * shipment.status = awaiting_pickup
      */
-    public function store(
-        GatewayCreatePickupRequest $request
-    ): JsonResponse {
-
+    public function store(Request $request): JsonResponse
+    {
         $merchantId = (int) $request
             ->attributes
             ->get('merchant_id');
@@ -61,30 +46,209 @@ final class GatewayPickupController extends Controller
             'Invalid merchant authentication.'
         );
 
-        try {
+        $data = $request->validate([
+            'merchant_order_id' => [
+                'required',
+                'string',
+                'max:100',
+            ],
 
-            $pickup = $this->pickupService->create(
-                merchantId: $merchantId,
-                data: $request->validated(),
-            );
+            'pickup_location_id' => [
+                'required',
+                'integer',
+                'min:1',
+            ],
+
+            'receiver_name' => [
+                'required',
+                'string',
+                'max:150',
+            ],
+
+            'receiver_phone' => [
+                'required',
+                'string',
+                'max:30',
+            ],
+
+            'receiver_email' => [
+                'nullable',
+                'email',
+                'max:150',
+            ],
+
+            'delivery_address' => [
+                'required',
+                'string',
+                'max:500',
+            ],
+
+            'delivery_city' => [
+                'nullable',
+                'string',
+                'max:100',
+            ],
+
+            'delivery_area' => [
+                'nullable',
+                'string',
+                'max:100',
+            ],
+
+            'delivery_lat' => [
+                'required',
+                'numeric',
+                'between:-90,90',
+            ],
+
+            'delivery_lng' => [
+                'required',
+                'numeric',
+                'between:-180,180',
+            ],
+
+            'service_type' => [
+                'required',
+                'string',
+                'max:50',
+            ],
+
+            'packet' => [
+                'required',
+                'array',
+            ],
+
+            'packet.description' => [
+                'nullable',
+                'string',
+                'max:1000',
+            ],
+
+            'packet.quantity' => [
+                'required',
+                'integer',
+                'min:1',
+            ],
+
+            'packet.weight' => [
+                'required',
+                'numeric',
+                'min:0.01',
+            ],
+
+            'packet.declared_value' => [
+                'required',
+                'numeric',
+                'min:0',
+            ],
+
+            'packet.parcel_type' => [
+                'required',
+                'string',
+                'max:50',
+            ],
+
+            'packet.fragile' => [
+                'required',
+                'boolean',
+            ],
+
+            'packet.products' => [
+                'nullable',
+                'array',
+                'max:100',
+            ],
+
+            'packet.products.*.product_id' => [
+                'nullable',
+                'string',
+                'max:100',
+            ],
+
+            'packet.products.*.name' => [
+                'required',
+                'string',
+                'max:255',
+            ],
+
+            'packet.products.*.quantity' => [
+                'required',
+                'integer',
+                'min:1',
+            ],
+
+            'packet.products.*.unit_price' => [
+                'nullable',
+                'numeric',
+                'min:0',
+            ],
+
+            'packet.products.*.unit_weight' => [
+                'nullable',
+                'numeric',
+                'min:0',
+            ],
+
+            'packet.products.*.parcel_type' => [
+                'nullable',
+                'string',
+                'max:50',
+            ],
+
+            'payment_type' => [
+                'required',
+                'string',
+                'max:50',
+            ],
+
+            'delivery_charge_paid_by' => [
+                'required',
+                'string',
+                'max:50',
+            ],
+
+            'self_drop' => [
+                'nullable',
+                'boolean',
+            ],
+
+            'special_instructions' => [
+                'nullable',
+                'string',
+                'max:1000',
+            ],
+
+            'remarks' => [
+                'nullable',
+                'string',
+                'max:1000',
+            ],
+        ]);
+
+        $data['self_drop'] =
+            $data['self_drop'] ?? false;
+
+        $data['order_source'] =
+            'store_manager';
+
+        try {
+            $shipment =
+                $this->shipmentService->createFromGateway(
+                    merchantId: $merchantId,
+                    data: $data,
+                );
 
             return ApiResponse::success(
-                $pickup,
-                'Pickup request submitted successfully.',
+                $shipment,
+                'Shipment created successfully.',
                 201
             );
-
         } catch (ValidationException $e) {
 
             return response()->json([
                 'success' => false,
-
-                'message' =>
-                    'Pickup request validation failed.',
-
-                'errors' =>
-                    $e->errors(),
-
+                'message' => 'Shipment validation failed.',
+                'errors' => $e->errors(),
             ], 422);
 
         } catch (Throwable $e) {
@@ -93,25 +257,20 @@ final class GatewayPickupController extends Controller
 
             return response()->json([
                 'success' => false,
-
-                'message' =>
-                    'Unable to request pickup.',
-
+                'message' => 'Unable to create shipment.',
                 'errors' => [
-                    'exception' =>
-                        $e->getMessage(),
+                    'exception' => $e->getMessage(),
                 ],
-
             ], 422);
         }
     }
 
     /**
-     * Get pickup request belonging to authenticated merchant.
+     * Retrieve shipment.
      */
     public function show(
         Request $request,
-        string $requestNumber
+        string $trackingNumber
     ): JsonResponse {
 
         $merchantId = (int) $request
@@ -124,14 +283,106 @@ final class GatewayPickupController extends Controller
             'Invalid merchant authentication.'
         );
 
-        $pickup = $this->pickupService->findForMerchant(
-            merchantId: $merchantId,
-            requestNumber: $requestNumber,
-        );
+        $shipment = Shipment::query()
+            ->where(
+                'merchant_id',
+                $merchantId
+            )
+            ->where(
+                'tracking_number',
+                $trackingNumber
+            )
+            ->with([
+                'trackingEvents',
+                'originBranch',
+                'originSubBranch',
+                'destinationBranch',
+                'destinationSubBranch',
+                'routeSteps.fromBranch',
+                'routeSteps.toBranch',
+            ])
+            ->firstOrFail();
 
         return ApiResponse::success(
-            $pickup,
-            'Pickup request retrieved successfully.'
+            $shipment,
+            'Shipment retrieved successfully.'
         );
+    }
+
+    /**
+     * Cancel shipment.
+     */
+    public function cancel(
+        Request $request,
+        string $trackingNumber
+    ): JsonResponse {
+
+        $merchantId = (int) $request
+            ->attributes
+            ->get('merchant_id');
+
+        abort_unless(
+            $merchantId > 0,
+            401,
+            'Invalid merchant authentication.'
+        );
+
+        $shipment = Shipment::query()
+            ->where(
+                'merchant_id',
+                $merchantId
+            )
+            ->where(
+                'tracking_number',
+                $trackingNumber
+            )
+            ->firstOrFail();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Cancellation rules
+        |--------------------------------------------------------------------------
+        |
+        | Merchant may cancel before actual collection.
+        |
+        */
+
+        $cancellableStatuses = [
+            CourierStatus::BOOKED,
+            CourierStatus::AWAITING_PICKUP,
+            CourierStatus::PICKUP_ASSIGNED,
+        ];
+
+        if (! in_array(
+            $shipment->status,
+            $cancellableStatuses,
+            true
+        )) {
+            return ApiResponse::error(
+                'Shipment cannot be cancelled after pickup or dispatch.',
+                422
+            );
+        }
+
+        try {
+
+            $updated =
+                $this->shipmentService->cancelFromGateway(
+                    shipment: $shipment,
+                );
+
+            return ApiResponse::success(
+                $updated,
+                'Shipment cancelled successfully.'
+            );
+
+        } catch (ValidationException $e) {
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Shipment cancellation failed.',
+                'errors' => $e->errors(),
+            ], 422);
+        }
     }
 }

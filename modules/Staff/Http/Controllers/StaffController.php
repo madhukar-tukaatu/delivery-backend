@@ -1,34 +1,148 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Modules\Staff\Http\Controllers;
 
 use App\Http\Controllers\Controller;
-use App\Models\User;
-use App\Support\ApiResponse;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Hash;
+use Modules\Staff\Models\Staff;
+use Modules\Staff\Services\StaffService;
 
-class StaffController extends Controller
+final class StaffController extends Controller
 {
-    public function index(Request $request)
-    {
-        $query = User::with('branch')->whereIn('role', ['super_admin', 'main_admin', 'branch_manager', 'sub_branch_manager', 'booking_staff', 'pickup_staff', 'dispatch_staff', 'rider', 'accounts_staff'])->latest();
-        if ($request->filled('role')) $query->where('role', $request->role);
-        return ApiResponse::success($query->paginate((int) $request->get('per_page', 20)));
+    public function __construct(
+        private readonly StaffService $staffService,
+    ) {
     }
 
-    public function store(Request $request)
-    {
-        $data = $request->validate([
-            'branch_id' => ['nullable', 'exists:branches,id'],
-            'name' => ['required', 'string'],
-            'email' => ['required', 'email', 'unique:users,email'],
-            'phone' => ['nullable', 'string'],
-            'role' => ['required', 'string'],
-            'password' => ['required', 'string', 'min:6'],
+    public function index(
+        Request $request
+    ): JsonResponse {
+        $staff = $this->staffService
+            ->paginateForUser(
+                $request->user(),
+                $request->integer(
+                    'per_page',
+                    20
+                ),
+                $request->input('q')
+            );
+
+        return response()->json([
+            'success' => true,
+            'data' => $staff,
         ]);
-        $data['password'] = Hash::make($data['password']);
-        $user = User::create($data);
-        return ApiResponse::success($user, 'Staff created.', 201);
+    }
+
+
+    public function show(
+        Request $request,
+        Staff $staff
+    ): JsonResponse {
+        $this->staffService
+            ->authorizeAccess(
+                $request->user(),
+                $staff
+            );
+
+        return response()->json([
+            'success' => true,
+            'data' => $staff->load([
+                'user',
+                'role',
+                'branch',
+            ]),
+        ]);
+    }
+
+
+    public function store(
+        Request $request
+    ): JsonResponse {
+        $staff =
+            $this->staffService
+                ->createForUser(
+                    $request->user(),
+                    $request->all()
+                );
+
+        return response()->json([
+            'success' => true,
+            'message' =>
+                'Staff created successfully.',
+            'data' => $staff,
+        ], 201);
+    }
+
+
+    public function update(
+        Request $request,
+        Staff $staff
+    ): JsonResponse {
+        $this->staffService
+            ->authorizeAccess(
+                $request->user(),
+                $staff
+            );
+
+        $updated =
+            $this->staffService
+                ->update(
+                    $staff,
+                    $request->all()
+                );
+
+        return response()->json([
+            'success' => true,
+            'message' =>
+                'Staff updated successfully.',
+            'data' => $updated,
+        ]);
+    }
+
+
+    public function destroy(
+        Request $request,
+        Staff $staff
+    ): JsonResponse {
+        $this->staffService
+            ->authorizeAccess(
+                $request->user(),
+                $staff
+            );
+
+        $this->staffService
+            ->deactivate($staff);
+
+        return response()->json([
+            'success' => true,
+            'message' =>
+                'Staff deactivated successfully.',
+        ]);
+    }
+
+
+    public function toggle(
+        Request $request,
+        Staff $staff
+    ): JsonResponse {
+        $this->staffService
+            ->authorizeAccess(
+                $request->user(),
+                $staff
+            );
+
+        $updated =
+            $this->staffService
+                ->toggle($staff);
+
+        return response()->json([
+            'success' => true,
+            'message' =>
+                'Staff status updated.',
+            'data' => $updated,
+        ]);
     }
 }

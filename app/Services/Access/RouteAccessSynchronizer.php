@@ -1,5 +1,4 @@
 <?php
-
 namespace App\Services\Access;
 
 use Illuminate\Routing\Route;
@@ -22,29 +21,27 @@ final class RouteAccessSynchronizer
             ->forgetCachedPermissions();
 
         $createdPermissions = [];
-        $syncedMenus = 0;
+        $syncedMenus        = 0;
 
         foreach (
-            RouteFacade::getRoutes()
-            as $route
+            RouteFacade::getRoutes(); as $route
         ) {
-            if (!$route instanceof Route) {
+            if (! $route instanceof Route) {
                 continue;
             }
 
             $permissions =
-                $this->extractPermissions(
-                    $route
-                );
+            $this->extractPermissions(
+                $route
+            );
 
             foreach (
-                $permissions
-                as $permissionName
+                $permissions; as $permissionName
             ) {
                 $permission =
-                    $this->syncPermission(
-                        $permissionName
-                    );
+                $this->syncPermission(
+                    $permissionName
+                );
 
                 $createdPermissions[
                     $permission->name
@@ -52,9 +49,9 @@ final class RouteAccessSynchronizer
             }
 
             $menu =
-                $route->getAction(
-                    '_admin_menu'
-                );
+            $route->getAction(
+                '_admin_menu'
+            );
 
             if (
                 is_array($menu) &&
@@ -65,18 +62,17 @@ final class RouteAccessSynchronizer
                  * the index/page route.
                  */
                 $menuPermission =
-                    collect($permissions)
-                        ->first(
-                            static fn (
-                                string $permission
-                            ): bool =>
-                                str_ends_with(
-                                    $permission,
-                                    '.view'
-                                )
+                collect($permissions)
+                    ->first(
+                        static fn(
+                            string $permission
+                        ): bool =>
+                        str_ends_with(
+                            $permission,
+                            '.view'
                         )
-                    ?? collect($permissions)
-                        ->first();
+                    ) ?? collect($permissions)
+                    ->first();
 
                 if ($menuPermission) {
                     $menu['permission'] =
@@ -100,14 +96,81 @@ final class RouteAccessSynchronizer
 
         return [
             'permissions' =>
-                count(
-                    $createdPermissions
-                ),
+            count(
+                $createdPermissions
+            ),
 
-            'menus' =>
-                $syncedMenus,
+            'menus'       =>
+            $syncedMenus,
         ];
     }
+
+    // private function extractPermissions(
+    //     Route $route
+    // ): array {
+    //     $permissions = [];
+
+    //     foreach (
+    //         $route->gatherMiddleware()
+    //         as $middleware
+    //     ) {
+    //         if (!is_string($middleware)) {
+    //             continue;
+    //         }
+
+    //         if (
+    //             !str_starts_with(
+    //                 $middleware,
+    //                 'permission:'
+    //             )
+    //         ) {
+    //             continue;
+    //         }
+
+    //         $definition =
+    //             Str::after(
+    //                 $middleware,
+    //                 'permission:'
+    //             );
+
+    //         /*
+    //          * Remove optional guard:
+    //          *
+    //          * permission:permission.name,web
+    //          */
+    //         $definition =
+    //             explode(
+    //                 ',',
+    //                 $definition,
+    //                 2
+    //             )[0];
+
+    //         /*
+    //          * Spatie supports:
+    //          *
+    //          * permission:first|second
+    //          */
+    //         foreach (
+    //             explode('|', $definition)
+    //             as $permission
+    //         ) {
+    //             $permission = trim(
+    //                 $permission
+    //             );
+
+    //             if ($permission !== '') {
+    //                 $permissions[] =
+    //                     $permission;
+    //             }
+    //         }
+    //     }
+
+    //     return array_values(
+    //         array_unique(
+    //             $permissions
+    //         )
+    //     );
+    // }
 
     private function extractPermissions(
         Route $route
@@ -115,57 +178,67 @@ final class RouteAccessSynchronizer
         $permissions = [];
 
         foreach (
-            $route->gatherMiddleware()
-            as $middleware
+            $route->gatherMiddleware(); as $middleware
         ) {
-            if (!is_string($middleware)) {
+            if (! is_string($middleware)) {
                 continue;
             }
 
-            if (
-                !str_starts_with(
-                    $middleware,
-                    'permission:'
-                )
-            ) {
+            /*
+        |--------------------------------------------------------------------------
+        | permission:staff.view
+        | permission:staff.edit
+        | permission:staff.view,web
+        | permission:staff.view|staff.edit
+        |--------------------------------------------------------------------------
+        */
+
+            if (! str_starts_with(
+                $middleware,
+                'permission:'
+            )) {
                 continue;
             }
 
-            $definition =
-                Str::after(
-                    $middleware,
-                    'permission:'
-                );
+            $definition = Str::after(
+                $middleware,
+                'permission:'
+            );
 
             /*
-             * Remove optional guard:
-             *
-             * permission:permission.name,web
-             */
-            $definition =
-                explode(
-                    ',',
-                    $definition,
-                    2
-                )[0];
+        |--------------------------------------------------------------------------
+        | Remove optional guard
+        |--------------------------------------------------------------------------
+        |
+        | permission:staff.view,web
+        |
+        */
+            $definition = explode(
+                ',',
+                $definition,
+                2
+            )[0];
 
             /*
-             * Spatie supports:
-             *
-             * permission:first|second
-             */
+        |--------------------------------------------------------------------------
+        | Multiple permissions
+        |--------------------------------------------------------------------------
+        |
+        | permission:staff.view|staff.edit
+        |
+        */
             foreach (
-                explode('|', $definition)
-                as $permission
+                explode('|', $definition); as $permission
             ) {
                 $permission = trim(
                     $permission
                 );
 
-                if ($permission !== '') {
-                    $permissions[] =
-                        $permission;
+                if ($permission === '') {
+                    continue;
                 }
+
+                $permissions[] = $permission;
             }
         }
 
@@ -180,24 +253,24 @@ final class RouteAccessSynchronizer
         string $permissionName
     ): Permission {
         $permission =
-            Permission::query()
-                ->firstOrCreate([
-                    'name' =>
-                        $permissionName,
+        Permission::query()
+            ->firstOrCreate([
+                'name'       =>
+                $permissionName,
 
-                    'guard_name' =>
-                        $this->guardName,
-                ]);
+                'guard_name' =>
+                $this->guardName,
+            ]);
 
         $displayName =
-            $this->displayName(
-                $permissionName
-            );
+        $this->displayName(
+            $permissionName
+        );
 
         $groupName =
-            $this->groupName(
-                $permissionName
-            );
+        $this->groupName(
+            $permissionName
+        );
 
         $updates = [];
 
@@ -284,12 +357,11 @@ final class RouteAccessSynchronizer
         array $menu
     ): void {
         $table =
-            (new MenuItem())->getTable();
+        (new MenuItem())->getTable();
 
         $route = trim(
             (string) (
-                $menu['route']
-                ?? ''
+                $menu['route'] ?? ''
             )
         );
 
@@ -299,82 +371,74 @@ final class RouteAccessSynchronizer
 
         $section = trim(
             (string) (
-                $menu['section']
-                ?? 'admin'
+                $menu['section'] ?? 'admin'
             )
         );
 
         $data = $this->filterColumns(
             $table,
             [
-                'section' =>
-                    $section,
+                'section'    =>
+                $section,
 
-                'title' =>
-                    $menu['title']
-                    ?? $menu['label'],
+                'title'      =>
+                $menu['title'] ?? $menu['label'],
 
-                'label' =>
-                    $menu['label']
-                    ?? $menu['title'],
+                'label'      =>
+                $menu['label'] ?? $menu['title'],
 
-                'name' =>
-                    $menu['label']
-                    ?? $menu['title'],
+                'name'       =>
+                $menu['label'] ?? $menu['title'],
 
-                'route' =>
-                    $route,
+                'route'      =>
+                $route,
 
-                'href' =>
-                    $route,
+                'href'       =>
+                $route,
 
-                'url' =>
-                    $route,
+                'url'        =>
+                $route,
 
-                'path' =>
-                    $route,
+                'path'       =>
+                $route,
 
-                'icon' =>
-                    $menu['icon']
-                    ?? 'menu',
+                'icon'       =>
+                $menu['icon'] ?? 'menu',
 
                 'permission' =>
-                    $menu['permission']
-                    ?? null,
+                $menu['permission'] ?? null,
 
                 'sort_order' =>
-                    $menu['sort_order']
-                    ?? 999,
+                $menu['sort_order'] ?? 999,
 
-                'order' =>
-                    $menu['sort_order']
-                    ?? 999,
+                'order'      =>
+                $menu['sort_order'] ?? 999,
 
-                'is_active' =>
-                    true,
+                'is_active'  =>
+                true,
 
                 'updated_at' =>
-                    now(),
+                now(),
             ]
         );
 
         $routeColumn =
-            collect([
-                'route',
-                'href',
-                'url',
-                'path',
-            ])->first(
-                static fn (
-                    string $column
-                ): bool =>
-                    Schema::hasColumn(
-                        $table,
-                        $column
-                    )
-            );
+        collect([
+            'route',
+            'href',
+            'url',
+            'path',
+        ])->first(
+            static fn(
+                string $column
+            ): bool =>
+            Schema::hasColumn(
+                $table,
+                $column
+            )
+        );
 
-        if (!$routeColumn) {
+        if (! $routeColumn) {
             return;
         }
 
@@ -397,7 +461,7 @@ final class RouteAccessSynchronizer
         }
 
         $existing =
-            $query->first();
+        $query->first();
 
         if ($existing) {
             DB::table($table)
@@ -427,23 +491,23 @@ final class RouteAccessSynchronizer
     private function syncSuperAdmin(): void
     {
         $superAdmin =
-            Role::query()
-                ->firstOrCreate([
-                    'name' =>
-                        'super_admin',
+        Role::query()
+            ->firstOrCreate([
+                'name'       =>
+                'super_admin',
 
-                    'guard_name' =>
-                        $this->guardName,
-                ]);
+                'guard_name' =>
+                $this->guardName,
+            ]);
 
         $permissions =
-            Permission::query()
-                ->where(
-                    'guard_name',
-                    $this->guardName
-                )
-                ->pluck('name')
-                ->all();
+        Permission::query()
+            ->where(
+                'guard_name',
+                $this->guardName
+            )
+            ->pluck('name')
+            ->all();
 
         $superAdmin->syncPermissions(
             $permissions
@@ -488,14 +552,14 @@ final class RouteAccessSynchronizer
     ): array {
         return collect($data)
             ->filter(
-                static fn (
+                static fn(
                     mixed $value,
                     string $column
                 ): bool =>
-                    Schema::hasColumn(
-                        $table,
-                        $column
-                    )
+                Schema::hasColumn(
+                    $table,
+                    $column
+                )
             )
             ->all();
     }

@@ -10,6 +10,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 use Modules\Pickup\Http\Requests\GatewayCreatePickupRequest;
+use Modules\Pickup\Http\Resources\GatewayPickupResource;
 use Modules\Pickup\Services\GatewayPickupService;
 use Throwable;
 
@@ -47,7 +48,7 @@ final class GatewayPickupController extends Controller
             );
 
             return ApiResponse::success(
-                $pickup,
+                new GatewayPickupResource($pickup),
                 'Pickup request submitted successfully.',
                 201
             );
@@ -95,7 +96,7 @@ final class GatewayPickupController extends Controller
         );
 
         return ApiResponse::success(
-            $pickup,
+            new GatewayPickupResource($pickup),
             'Pickup request retrieved successfully.'
         );
     }

@@ -69,7 +69,7 @@ Route::prefix('v1/admin')
             */
 
             Route::get(
-                'pickups/{pickup}',
+                'pickups/{pickup:request_number}',
                 [AdminPickupController::class, 'show']
             )->name('pickups.show');
 
@@ -81,7 +81,7 @@ Route::prefix('v1/admin')
             */
 
             Route::get(
-                'pickups/{pickup}/assignable-staff',
+                'pickups/{pickup:request_number}/assignable-staff',
                 [AdminPickupController::class, 'assignableStaff']
             )->name('pickups.assignable-staff');
 
@@ -93,7 +93,7 @@ Route::prefix('v1/admin')
             */
 
             Route::post(
-                'pickups/{pickup}/assign',
+                'pickups/{pickup:request_number}/assign',
                 [AdminPickupController::class, 'assign']
             )->name('pickups.assign');
 
@@ -105,7 +105,7 @@ Route::prefix('v1/admin')
             */
 
             Route::post(
-                'pickups/{pickup}/transfer',
+                'pickups/{pickup:request_number}/transfer',
                 [AdminPickupController::class, 'transfer']
             )->name('pickups.transfer');
 
@@ -117,7 +117,7 @@ Route::prefix('v1/admin')
             */
 
             Route::post(
-                'pickups/{pickup}/fail',
+                'pickups/{pickup:request_number}/fail',
                 [AdminPickupController::class, 'fail']
             )->name('pickups.fail');
         });

@@ -3,38 +3,50 @@
 declare(strict_types=1);
 
 use Illuminate\Support\Facades\Route;
+
 use Modules\Shipment\Http\Controllers\Api\AdminNotificationController;
-use Modules\Shipment\Http\Controllers\Api\AdminShipmentTaskController;
 use Modules\Shipment\Http\Controllers\Api\AdminPickupController;
+use Modules\Shipment\Http\Controllers\Api\AdminShipmentTaskController;
 use Modules\Shipment\Http\Controllers\Api\AdminStaffController;
 use Modules\Shipment\Http\Controllers\Api\MerchantShipmentController;
+
 use Modules\Shipment\Http\Controllers\GatewayShipmentController;
 use Modules\Shipment\Http\Controllers\ShipmentController;
 
-use Modules\Shipment\Http\Controllers\Api\StaffPickupController;
-use Modules\Shipment\Http\Controllers\Api\StaffDeliveryController;
+use Modules\Shipment\Http\Controllers\StaffDeliveryLifecycleController;
+use Modules\Shipment\Http\Controllers\StaffPickupLifecycleController;
 
 /*
 |--------------------------------------------------------------------------
 | Shipment API Routes
 |--------------------------------------------------------------------------
+|
+| Shipment module routes.
+|
+| Main areas:
+|
+| /v1/admin/*
+| /v1/staff/*
+| /v1/merchant/*
+| /v1/gateway/*
+|
+|--------------------------------------------------------------------------
 */
 
 
 /*
 |--------------------------------------------------------------------------
-| Admin / Branch Management
+| STAFF
 |--------------------------------------------------------------------------
 |
 | Used by:
 |
-| - Super Admin
-| - Main Admin
-| - Branch Manager
-| - Sub Branch Manager
+| - Pickup staff
+| - Riders
+| - Delivery staff
 |
+|--------------------------------------------------------------------------
 */
-
 
 Route::prefix('v1/staff')
     ->name('staff.')
@@ -49,73 +61,82 @@ Route::prefix('v1/staff')
 
             /*
             |--------------------------------------------------------------------------
-            | Pickups
+            | PICKUPS
             |--------------------------------------------------------------------------
+            |
+            | Controller:
+            | StaffPickupLifecycleController
+            |
             */
 
             Route::get(
                 'pickups',
-                [StaffPickupController::class, 'index']
+                [StaffPickupLifecycleController::class, 'index']
             )->name('pickups.index');
 
             Route::post(
                 'pickups/{pickup}/accept',
-                [StaffPickupController::class, 'accept']
+                [StaffPickupLifecycleController::class, 'accept']
             )->name('pickups.accept');
 
             Route::post(
-                'pickups/{pickup}/start',
-                [StaffPickupController::class, 'start']
-            )->name('pickups.start');
-
-            Route::post(
-                'pickups/{pickup}/arrive',
-                [StaffPickupController::class, 'arrive']
-            )->name('pickups.arrive');
-
-            Route::post(
-                'pickups/{pickup}/shipments/{shipment}/collect',
-                [StaffPickupController::class, 'collect']
-            )->name('pickups.collect');
-
-            Route::post(
-                'pickups/{pickup}/complete',
-                [StaffPickupController::class, 'complete']
-            )->name('pickups.complete');
+                'pickups/{pickup}/picked-up',
+                [StaffPickupLifecycleController::class, 'pickedUp']
+            )->name('pickups.picked-up');
 
 
             /*
             |--------------------------------------------------------------------------
-            | Deliveries
+            | DELIVERIES
             |--------------------------------------------------------------------------
+            |
+            | Controller:
+            | StaffDeliveryLifecycleController
+            |
             */
 
             Route::get(
                 'deliveries',
-                [StaffDeliveryController::class, 'index']
+                [StaffDeliveryLifecycleController::class, 'index']
             )->name('deliveries.index');
 
             Route::post(
                 'deliveries/{delivery}/accept',
-                [StaffDeliveryController::class, 'accept']
+                [StaffDeliveryLifecycleController::class, 'accept']
             )->name('deliveries.accept');
 
             Route::post(
                 'deliveries/{delivery}/out-for-delivery',
-                [StaffDeliveryController::class, 'outForDelivery']
+                [StaffDeliveryLifecycleController::class, 'outForDelivery']
             )->name('deliveries.out-for-delivery');
 
             Route::post(
                 'deliveries/{delivery}/delivered',
-                [StaffDeliveryController::class, 'delivered']
+                [StaffDeliveryLifecycleController::class, 'delivered']
             )->name('deliveries.delivered');
 
             Route::post(
                 'deliveries/{delivery}/failed',
-                [StaffDeliveryController::class, 'failed']
+                [StaffDeliveryLifecycleController::class, 'failed']
             )->name('deliveries.failed');
         });
     });
+
+
+/*
+|--------------------------------------------------------------------------
+| ADMIN / BRANCH MANAGEMENT
+|--------------------------------------------------------------------------
+|
+| Used by:
+|
+| - Super Admin
+| - Main Admin
+| - Branch Manager
+| - Sub Branch Manager
+|
+|--------------------------------------------------------------------------
+*/
 
 Route::prefix('v1/admin')
     ->name('admin.')
@@ -129,9 +150,10 @@ Route::prefix('v1/admin')
             'route.permission',
         ])->group(function (): void {
 
+
             /*
             |--------------------------------------------------------------------------
-            | Staff
+            | STAFF
             |--------------------------------------------------------------------------
             */
 
@@ -168,7 +190,7 @@ Route::prefix('v1/admin')
 
             /*
             |--------------------------------------------------------------------------
-            | Pickups
+            | PICKUPS
             |--------------------------------------------------------------------------
             */
 
@@ -200,7 +222,7 @@ Route::prefix('v1/admin')
 
             /*
             |--------------------------------------------------------------------------
-            | Shipments
+            | SHIPMENTS
             |--------------------------------------------------------------------------
             */
 
@@ -237,7 +259,7 @@ Route::prefix('v1/admin')
 
             /*
             |--------------------------------------------------------------------------
-            | Shipment Tasks
+            | SHIPMENT TASKS
             |--------------------------------------------------------------------------
             */
 
@@ -259,7 +281,7 @@ Route::prefix('v1/admin')
 
             /*
             |--------------------------------------------------------------------------
-            | Notifications
+            | NOTIFICATIONS
             |--------------------------------------------------------------------------
             */
 
@@ -275,13 +297,15 @@ Route::prefix('v1/admin')
 
             Route::post(
                 'notifications/read-all',
-                [AdminNotificationController::class, 'markAllRead']
-            )->name('notifications.read-all');
+                [AdminNotificationController::class, 'markAllRead'
+            ])->name('notifications.read-all');
         });
     });
+
+
 /*
 |--------------------------------------------------------------------------
-| Internal Merchant Portal
+| INTERNAL MERCHANT PORTAL
 |--------------------------------------------------------------------------
 */
 
@@ -308,7 +332,7 @@ Route::prefix('v1/merchant')
 
 /*
 |--------------------------------------------------------------------------
-| External Store Manager / Gateway
+| EXTERNAL STORE MANAGER / GATEWAY
 |--------------------------------------------------------------------------
 |
 | Authentication:
@@ -316,7 +340,7 @@ Route::prefix('v1/merchant')
 | X-Tukaatu-Key
 | X-Tukaatu-Secret
 |
-| merchant.api-key middleware must populate:
+| merchant.api-key middleware populates:
 |
 | request()->attributes->get('merchant_id')
 |
@@ -332,16 +356,17 @@ Route::prefix('v1/gateway')
     ])
     ->group(function (): void {
 
+
         /*
         |--------------------------------------------------------------------------
-        | Create shipment
+        | CREATE SHIPMENT
         |--------------------------------------------------------------------------
         |
         | Creates:
         |
         | awaiting_pickup
         |
-        | It does NOT create a pickup request.
+        | Does NOT create pickup request.
         |
         */
 
@@ -353,7 +378,7 @@ Route::prefix('v1/gateway')
 
         /*
         |--------------------------------------------------------------------------
-        | Get shipment
+        | GET SHIPMENT
         |--------------------------------------------------------------------------
         */
 
@@ -365,7 +390,7 @@ Route::prefix('v1/gateway')
 
         /*
         |--------------------------------------------------------------------------
-        | Cancel shipment
+        | CANCEL SHIPMENT
         |--------------------------------------------------------------------------
         */
 
@@ -374,5 +399,3 @@ Route::prefix('v1/gateway')
             [GatewayShipmentController::class, 'cancel']
         )->name('shipments.cancel');
     });
-
-

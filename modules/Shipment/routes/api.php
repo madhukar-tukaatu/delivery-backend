@@ -13,17 +13,20 @@ use Modules\Shipment\Http\Controllers\ShipmentController;
 |--------------------------------------------------------------------------
 | Shipment API Routes
 |--------------------------------------------------------------------------
-|
-|--------------------------------------------------------------------------
 */
 
 
 /*
 |--------------------------------------------------------------------------
-| Admin Shipment Routes
+| Admin / Branch Management
 |--------------------------------------------------------------------------
 |
-| Used by Tukaatu administrative users.
+| Used by:
+|
+| - Super Admin
+| - Main Admin
+| - Branch Manager
+| - Sub Branch Manager
 |
 */
 
@@ -31,7 +34,7 @@ Route::prefix('v1/admin')
     ->name('admin.')
     ->middleware([
         'auth:sanctum',
-        // 'branch.scope',
+        'branch.scope',
     ])
     ->group(function (): void {
 
@@ -124,11 +127,8 @@ Route::prefix('v1/admin')
 
 /*
 |--------------------------------------------------------------------------
-| Tukaatu Internal Merchant Routes
+| Internal Merchant Portal
 |--------------------------------------------------------------------------
-|
-| Merchants registered directly with Tukaatu.
-|
 */
 
 Route::prefix('v1/merchant')
@@ -159,18 +159,14 @@ Route::prefix('v1/merchant')
 |
 | Authentication:
 |
-|   X-Tukaatu-Key
-|   X-Tukaatu-Secret
+| X-Tukaatu-Key
+| X-Tukaatu-Secret
 |
 | merchant.api-key middleware must populate:
 |
-|   request()->attributes->get('merchant_id')
+| request()->attributes->get('merchant_id')
 |
-| IMPORTANT:
-|
-| Pickup routes are NOT registered here.
-|
-| Pickup belongs to the Pickup module.
+| Shipment creation and pickup creation are intentionally separate.
 |
 |--------------------------------------------------------------------------
 */
@@ -187,11 +183,11 @@ Route::prefix('v1/gateway')
         | Create shipment
         |--------------------------------------------------------------------------
         |
-        | Store Manager creates the shipment.
-        |
-        | Result:
+        | Creates:
         |
         | awaiting_pickup
+        |
+        | It does NOT create a pickup request.
         |
         */
 

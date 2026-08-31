@@ -22,6 +22,14 @@ final class PickupRequest extends Model
 
         'merchant_id',
 
+        /*
+         * Store-side reference.
+         *
+         * Example:
+         * PR-001
+         */
+        'store_reference',
+
         'branch_id',
         'sub_branch_id',
 
@@ -33,6 +41,8 @@ final class PickupRequest extends Model
 
         'pickup_name',
         'pickup_phone',
+        'pickup_email',
+
         'pickup_address',
         'pickup_city',
         'pickup_area',
@@ -219,7 +229,6 @@ final class PickupRequest extends Model
         int $branchId
     ): Builder {
         return $query->where(function (Builder $q) use ($branchId) {
-
             $q->where(
                 'branch_id',
                 $branchId

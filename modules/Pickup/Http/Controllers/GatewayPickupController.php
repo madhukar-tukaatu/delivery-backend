@@ -24,8 +24,6 @@ final class GatewayPickupController extends Controller
     /**
      * Create a pickup request for the authenticated merchant.
      *
-     * Shipment creation and pickup creation are intentionally separate.
-     *
      * POST /api/v1/gateway/pickups
      */
     public function store(

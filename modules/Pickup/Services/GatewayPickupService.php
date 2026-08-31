@@ -19,15 +19,22 @@ final class GatewayPickupService
     /**
      * Create or reuse a pickup request.
      *
-     * A pickup may continue accepting shipments while it is:
+     * Store sends:
      *
-     * - requested
-     * - assigned
-     * - started
-     * - arrived
+     * - pickup_location_id
+     * - store_reference
      *
-     * Once completed or failed, the pickup is closed and
-     * a future request will create a new pickup.
+     * Tukaatu generates:
+     *
+     * - request_number
+     *
+     * Example:
+     *
+     * Store 1:
+     *   PR-001
+     *
+     * Tukaatu:
+     *   PICK-20260831-000081
      */
     public function create(
         int $merchantId,
@@ -77,6 +84,7 @@ final class GatewayPickupService
                         'merchant_pickup_locations.status',
                         'active'
                     )
+                    ->lockForUpdate()
                     ->first();
 
                 if (! $pickupLocation) {
@@ -89,6 +97,59 @@ final class GatewayPickupService
 
                 /*
                 |--------------------------------------------------------------------------
+                | Store reference
+                |--------------------------------------------------------------------------
+                */
+
+                $storeReference = trim(
+                    (string) $data['store_reference']
+                );
+
+                if ($storeReference === '') {
+                    throw ValidationException::withMessages([
+                        'store_reference' => [
+                            'Store reference is required.',
+                        ],
+                    ]);
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | Check whether this exact store/location PR already exists.
+                |--------------------------------------------------------------------------
+                |
+                | Example:
+                |
+                | Location 15 -> PR-001
+                | Location 15 -> PR-001
+                |
+                | This should NOT accidentally create a second pickup.
+                |
+                */
+
+                $existingPickup = PickupRequest::query()
+                    ->where(
+                        'merchant_id',
+                        $merchant->id
+                    )
+                    ->where(
+                        'pickup_location_id',
+                        $pickupLocation->id
+                    )
+                    ->where(
+                        'store_reference',
+                        $storeReference
+                    )
+                    ->whereIn(
+                        'status',
+                        PickupStatus::acceptingShipments()
+                    )
+                    ->lockForUpdate()
+                    ->latest('id')
+                    ->first();
+
+                /*
+                |--------------------------------------------------------------------------
                 | Find shipments awaiting pickup
                 |--------------------------------------------------------------------------
                 */
@@ -98,7 +159,10 @@ final class GatewayPickupService
                     pickupLocationId: $pickupLocation->id,
                 );
 
-                if ($shipments->isEmpty()) {
+                if (
+                    $shipments->isEmpty()
+                    && ! $existingPickup
+                ) {
                     throw ValidationException::withMessages([
                         'pickup' => [
                             'There are no shipments awaiting pickup for this pickup location.',
@@ -108,48 +172,20 @@ final class GatewayPickupService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Find reusable pickup
-                |--------------------------------------------------------------------------
-                |
-                | A pickup can continue receiving shipments while it is:
-                |
-                | requested
-                | assigned
-                | started
-                | arrived
-                |
-                */
-
-                $pickup = PickupRequest::query()
-                    ->where(
-                        'pickup_requests.merchant_id',
-                        $merchant->id
-                    )
-                    ->where(
-                        'pickup_requests.pickup_location_id',
-                        $pickupLocation->id
-                    )
-                    ->whereIn(
-                        'pickup_requests.status',
-                        PickupStatus::acceptingShipments()
-                    )
-                    ->lockForUpdate()
-                    ->latest('pickup_requests.id')
-                    ->first();
-
-                /*
-                |--------------------------------------------------------------------------
-                | Create or update pickup
+                | Create or reuse pickup
                 |--------------------------------------------------------------------------
                 */
 
-                if (! $pickup) {
+                if (! $existingPickup) {
                     $pickup = $this->createPickupRequest(
                         merchant: $merchant,
                         pickupLocation: $pickupLocation,
+                        storeReference: $storeReference,
                         data: $data,
                     );
                 } else {
+                    $pickup = $existingPickup;
+
                     $this->updatePickupRequest(
                         pickup: $pickup,
                         data: $data,
@@ -158,7 +194,7 @@ final class GatewayPickupService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Attach eligible shipments
+                | Attach shipments
                 |--------------------------------------------------------------------------
                 */
 
@@ -183,11 +219,14 @@ final class GatewayPickupService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Return only the relationships required by GatewayPickupResource
+                | Return complete pickup
                 |--------------------------------------------------------------------------
                 */
 
                 return $pickup->fresh([
+                    'pickupLocation',
+                    'pickupBranch',
+                    'pickupSubBranch',
                     'shipments.shipment',
                 ]);
             }
@@ -196,13 +235,6 @@ final class GatewayPickupService
 
     /**
      * Find shipments which can be attached to this pickup.
-     *
-     * Eligible shipment:
-     *
-     * - belongs to merchant
-     * - belongs to pickup location
-     * - is awaiting pickup
-     * - is not already attached to an active pickup
      */
     private function findEligibleShipments(
         int $merchantId,
@@ -240,6 +272,7 @@ final class GatewayPickupService
     private function createPickupRequest(
         Merchant $merchant,
         MerchantPickupLocation $pickupLocation,
+        string $storeReference,
         array $data
     ): PickupRequest {
         $pickupName =
@@ -288,36 +321,47 @@ final class GatewayPickupService
 
         /*
         |--------------------------------------------------------------------------
-        | IMPORTANT BRANCH MAPPING
+        | Branch mapping
         |--------------------------------------------------------------------------
         |
-        | The pickup location already knows which branch is responsible
-        | for that physical merchant pickup location.
+        | Merchant pickup location determines responsible branch.
         |
-        | merchant_pickup_locations.branch_id
-        |              ↓
-        | pickup_requests.pickup_branch_id
+        | pickup_location.branch_id
+        |          ↓
+        | pickup_request.pickup_branch_id
         |
-        | merchant_pickup_locations.sub_branch_id
-        |              ↓
-        | pickup_requests.pickup_sub_branch_id
+        | pickup_location.sub_branch_id
+        |          ↓
+        | pickup_request.pickup_sub_branch_id
         |
         */
 
         $pickupData = [
 
+            /*
+             * Merchant / store identity.
+             */
             'merchant_id' =>
                 $merchant->id,
 
             'pickup_location_id' =>
                 $pickupLocation->id,
 
+            'store_reference' =>
+                $storeReference,
+
+            /*
+             * Branch ownership.
+             */
             'pickup_branch_id' =>
                 $pickupLocation->branch_id,
 
             'pickup_sub_branch_id' =>
                 $pickupLocation->sub_branch_id,
 
+            /*
+             * Pickup contact information.
+             */
             'pickup_name' =>
                 $pickupName,
 
@@ -336,12 +380,18 @@ final class GatewayPickupService
             'pickup_area' =>
                 $pickupArea,
 
+            /*
+             * Status.
+             */
             'status' =>
                 PickupStatus::REQUESTED,
 
             'requested_at' =>
                 now(),
 
+            /*
+             * Store request information.
+             */
             'preferred_pickup_at' =>
                 $data['preferred_pickup_at']
                 ??
@@ -352,6 +402,10 @@ final class GatewayPickupService
                 ??
                 null,
 
+            /*
+             * Will be recalculated after shipments
+             * are attached.
+             */
             'parcel_quantity' =>
                 0,
         ];
@@ -400,7 +454,7 @@ final class GatewayPickupService
 
         /*
         |--------------------------------------------------------------------------
-        | Only insert columns that actually exist
+        | Only use existing columns
         |--------------------------------------------------------------------------
         */
 
@@ -409,8 +463,42 @@ final class GatewayPickupService
             $columns
         );
 
-        return PickupRequest::query()
+        /*
+        |--------------------------------------------------------------------------
+        | Create pickup
+        |--------------------------------------------------------------------------
+        |
+        | request_number is intentionally generated AFTER insert
+        | because we can safely use the database ID.
+        |
+        */
+
+        $pickup = PickupRequest::query()
             ->create($pickupData);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Generate Tukaatu pickup number
+        |--------------------------------------------------------------------------
+        |
+        | Example:
+        |
+        | PICK-20260831-000081
+        |
+        | This is globally unique because it contains the
+        | pickup_requests.id.
+        |
+        */
+
+        $pickup->request_number = sprintf(
+            'PICK-%s-%06d',
+            now()->format('Ymd'),
+            $pickup->id
+        );
+
+        $pickup->save();
+
+        return $pickup;
     }
 
     /**
@@ -434,8 +522,9 @@ final class GatewayPickupService
         }
 
         if (
-            ! empty(
-                $data['remarks']
+            array_key_exists(
+                'remarks',
+                $data
             )
         ) {
             $pickup->remarks =
@@ -450,7 +539,7 @@ final class GatewayPickupService
     }
 
     /**
-     * Attach a shipment to a pickup.
+     * Attach shipment to pickup.
      */
     private function attachShipmentToPickup(
         PickupRequest $pickup,
@@ -476,7 +565,7 @@ final class GatewayPickupService
 
         /*
         |--------------------------------------------------------------------------
-        | Create pickup/shipment pivot
+        | Create pivot
         |--------------------------------------------------------------------------
         */
 
@@ -490,11 +579,6 @@ final class GatewayPickupService
         |--------------------------------------------------------------------------
         | Shipment lifecycle
         |--------------------------------------------------------------------------
-        |
-        | If rider has already been assigned to the pickup,
-        | a newly added shipment must immediately become
-        | pickup_assigned.
-        |
         */
 
         if (
@@ -550,7 +634,6 @@ final class GatewayPickupService
         }
 
         $data = [
-
             'shipment_id' =>
                 $shipment->id,
 
@@ -610,7 +693,7 @@ final class GatewayPickupService
     }
 
     /**
-     * Read a location attribute using multiple possible column names.
+     * Read location attribute using multiple possible names.
      */
     private function getLocationValue(
         MerchantPickupLocation $location,
@@ -630,7 +713,7 @@ final class GatewayPickupService
     }
 
     /**
-     * Get pickup_requests table columns.
+     * Get pickup_requests columns.
      */
     private function pickupRequestColumns(): array
     {
@@ -643,7 +726,7 @@ final class GatewayPickupService
     }
 
     /**
-     * Find a merchant pickup by public request number.
+     * Find pickup by Tukaatu-generated request number.
      */
     public function findForMerchant(
         int $merchantId,
@@ -659,6 +742,10 @@ final class GatewayPickupService
                 $requestNumber
             )
             ->with([
+                'merchant',
+                'pickupLocation',
+                'pickupBranch',
+                'pickupSubBranch',
                 'shipments.shipment',
             ])
             ->firstOrFail();

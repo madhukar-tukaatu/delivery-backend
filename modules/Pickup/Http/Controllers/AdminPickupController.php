@@ -1,6 +1,6 @@
 <?php
 
-declare (strict_types = 1);
+declare(strict_types=1);
 
 namespace Modules\Pickup\Http\Controllers;
 
@@ -56,19 +56,13 @@ final class AdminPickupController extends Controller
             ->with([
                 'merchant:id,name',
                 'pickupLocation',
-                'assignedRider:id,name,email,phone,branch_id',
+                'assignedStaff:id,name,email,phone,branch_id',
             ]);
 
         /*
         |--------------------------------------------------------------------------
         | Branch scope
         |--------------------------------------------------------------------------
-        |
-        | IMPORTANT:
-        | Do NOT use users.sub_branch_id here.
-        |
-        | Pickup visibility is determined from the pickup's own branch fields.
-        |
         */
 
         $this->applyBranchScope(
@@ -87,6 +81,24 @@ final class AdminPickupController extends Controller
 
                 $q->where(
                     'request_number',
+                    'like',
+                    '%' . $search . '%'
+                );
+
+                $q->orWhere(
+                    'store_reference',
+                    'like',
+                    '%' . $search . '%'
+                );
+
+                $q->orWhere(
+                    'pickup_name',
+                    'like',
+                    '%' . $search . '%'
+                );
+
+                $q->orWhere(
+                    'pickup_phone',
                     'like',
                     '%' . $search . '%'
                 );
@@ -126,7 +138,10 @@ final class AdminPickupController extends Controller
         */
 
         if ($status !== '') {
-            $query->where('status', $status);
+            $query->where(
+                'status',
+                $status
+            );
         }
 
         /*
@@ -151,12 +166,6 @@ final class AdminPickupController extends Controller
             'page',
             $page
         );
-
-        /*
-        |--------------------------------------------------------------------------
-        | Response
-        |--------------------------------------------------------------------------
-        */
 
         return ApiResponse::success(
             $paginator,
@@ -185,8 +194,11 @@ final class AdminPickupController extends Controller
         $pickup->load([
             'merchant',
             'pickupLocation',
-            'assignedRider',
+            'assignedStaff',
             'assignedBy',
+            'pickedUpBy',
+            'pickupBranch',
+            'pickupSubBranch',
             'shipments',
         ]);
 
@@ -214,24 +226,9 @@ final class AdminPickupController extends Controller
             $pickup
         );
 
-        /*
-        |--------------------------------------------------------------------------
-        | Determine pickup branch
-        |--------------------------------------------------------------------------
-        */
-
         $pickupBranchId = $this->pickupBranchId(
             $pickup
         );
-
-        /*
-        |--------------------------------------------------------------------------
-        | Find staff / riders
-        |--------------------------------------------------------------------------
-        |
-        | We deliberately do NOT select sub_branch_id from users.
-        |
-        */
 
         $query = User::query()
             ->select([
@@ -241,17 +238,23 @@ final class AdminPickupController extends Controller
                 'phone',
                 'branch_id',
             ])
-            ->where('is_active', true)
-            ->whereHas('roles', function (Builder $roleQuery): void {
-                $roleQuery->whereIn(
-                    'name',
-                    [
-                        'rider',
-                        'pickup_rider',
-                        'staff',
-                    ]
-                );
-            });
+            ->where(
+                'is_active',
+                true
+            )
+            ->whereHas(
+                'roles',
+                function (Builder $roleQuery): void {
+                    $roleQuery->whereIn(
+                        'name',
+                        [
+                            'rider',
+                            'pickup_rider',
+                            'staff',
+                        ]
+                    );
+                }
+            );
 
         /*
         |--------------------------------------------------------------------------
@@ -313,12 +316,15 @@ final class AdminPickupController extends Controller
             ->whereKey(
                 $validated['staff_id']
             )
-            ->where('is_active', true)
+            ->where(
+                'is_active',
+                true
+            )
             ->firstOrFail();
 
         /*
         |--------------------------------------------------------------------------
-        | Verify staff role
+        | Verify role
         |--------------------------------------------------------------------------
         */
 
@@ -365,7 +371,6 @@ final class AdminPickupController extends Controller
                 $staff,
                 $request
             ): PickupRequest {
-
                 return $this->pickupRequestService->assign(
                     $pickup,
                     $staff,
@@ -377,8 +382,9 @@ final class AdminPickupController extends Controller
         $updatedPickup->load([
             'merchant',
             'pickupLocation',
-            'assignedRider',
+            'assignedStaff',
             'assignedBy',
+            'pickedUpBy',
             'shipments',
         ]);
 
@@ -413,7 +419,7 @@ final class AdminPickupController extends Controller
                 'exists:users,id',
             ],
 
-            'remarks'  => [
+            'remarks' => [
                 'nullable',
                 'string',
                 'max:2000',
@@ -431,7 +437,10 @@ final class AdminPickupController extends Controller
             ->whereKey(
                 $validated['staff_id']
             )
-            ->where('is_active', true)
+            ->where(
+                'is_active',
+                true
+            )
             ->firstOrFail();
 
         if (! $staff->hasAnyRole([
@@ -466,7 +475,6 @@ final class AdminPickupController extends Controller
                 $request,
                 $validated
             ): PickupRequest {
-
                 return $this->pickupRequestService->transfer(
                     $pickup,
                     $staff,
@@ -479,8 +487,9 @@ final class AdminPickupController extends Controller
         $updatedPickup->load([
             'merchant',
             'pickupLocation',
-            'assignedRider',
+            'assignedStaff',
             'assignedBy',
+            'pickedUpBy',
             'shipments',
         ]);
 
@@ -522,7 +531,6 @@ final class AdminPickupController extends Controller
                 $request,
                 $validated
             ): PickupRequest {
-
                 return $this->pickupRequestService->fail(
                     $pickup,
                     $request->user(),
@@ -534,8 +542,9 @@ final class AdminPickupController extends Controller
         $updatedPickup->load([
             'merchant',
             'pickupLocation',
-            'assignedRider',
+            'assignedStaff',
             'assignedBy',
+            'pickedUpBy',
             'shipments',
         ]);
 
@@ -570,7 +579,6 @@ final class AdminPickupController extends Controller
                 $shipment,
                 $request
             ): PickupRequest {
-
                 return $this->pickupRequestService->receiveShipment(
                     $pickup,
                     $shipment,
@@ -582,8 +590,9 @@ final class AdminPickupController extends Controller
         $updatedPickup->load([
             'merchant',
             'pickupLocation',
-            'assignedRider',
+            'assignedStaff',
             'assignedBy',
+            'pickedUpBy',
             'shipments',
         ]);
 
@@ -597,9 +606,6 @@ final class AdminPickupController extends Controller
     |--------------------------------------------------------------------------
     | BRANCH SCOPE
     |--------------------------------------------------------------------------
-    |
-    | Determine whether the authenticated admin can see the pickup.
-    |
     */
 
     private function applyBranchScope(
@@ -622,20 +628,11 @@ final class AdminPickupController extends Controller
             return;
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Branch users
-        |--------------------------------------------------------------------------
-        */
-
         $branchId = $this->userBranchId(
             $user
         );
 
         if ($branchId === null) {
-            /*
-             * No branch means no pickup visibility.
-             */
             $query->whereRaw('1 = 0');
 
             return;
@@ -643,10 +640,10 @@ final class AdminPickupController extends Controller
 
         /*
         |--------------------------------------------------------------------------
-        | Pickup branch
+        | Pickup visibility
         |--------------------------------------------------------------------------
         |
-        | Support the actual pickup branch column used by the application.
+        | Pickup is controlled by pickup_branch_id.
         |
         */
 
@@ -684,12 +681,6 @@ final class AdminPickupController extends Controller
         if ($this->isGlobalAdmin($user)) {
             return;
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | Branch user
-        |--------------------------------------------------------------------------
-        */
 
         $userBranchId = $this->userBranchId(
             $user
@@ -730,14 +721,6 @@ final class AdminPickupController extends Controller
     |--------------------------------------------------------------------------
     | USER BRANCH
     |--------------------------------------------------------------------------
-    |
-    | IMPORTANT:
-    | Only branch_id is queried.
-    |
-    | NEVER use:
-    |
-    | users.sub_branch_id
-    |
     */
 
     private function userBranchId(

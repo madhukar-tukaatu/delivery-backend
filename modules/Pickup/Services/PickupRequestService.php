@@ -6,7 +6,6 @@ namespace Modules\Pickup\Services;
 
 use App\Models\User;
 use App\Support\CourierStatus;
-use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Modules\Pickup\Models\PickupRequest;
@@ -18,14 +17,14 @@ final class PickupRequestService
 {
     /*
     |--------------------------------------------------------------------------
-    | GET
+    | Get
     |--------------------------------------------------------------------------
     */
 
     public function get(
         PickupRequest $pickup
     ): PickupRequest {
-        return $pickup->fresh([
+        return $pickup->load([
             'merchant',
             'branch',
             'subBranch',
@@ -41,7 +40,7 @@ final class PickupRequestService
 
     /*
     |--------------------------------------------------------------------------
-    | ATTACH SHIPMENT MANUALLY
+    | Attach shipment manually
     |--------------------------------------------------------------------------
     */
 
@@ -56,14 +55,27 @@ final class PickupRequestService
                 $userId,
                 $remarks
             ): PickupRequestShipment {
-                $shipment = Shipment::query()
+                $pickup = PickupRequest::query()
+                    ->where(
+                        'merchant_id',
+                        $shipment->merchant_id
+                    )
+                    ->where(
+                        'pickup_location_id',
+                        $shipment->pickup_location_id
+                    )
+                    ->whereIn(
+                        'status',
+                        PickupStatus::acceptingShipments()
+                    )
                     ->lockForUpdate()
-                    ->find($shipment->id);
+                    ->latest('id')
+                    ->first();
 
-                if (! $shipment) {
+                if (! $pickup) {
                     throw ValidationException::withMessages([
-                        'shipment' => [
-                            'Shipment was not found.',
+                        'pickup' => [
+                            'No open pickup request exists for this shipment.',
                         ],
                     ]);
                 }
@@ -96,31 +108,6 @@ final class PickupRequestService
                     ]);
                 }
 
-                $pickup = PickupRequest::query()
-                    ->where(
-                        'merchant_id',
-                        $shipment->merchant_id
-                    )
-                    ->where(
-                        'pickup_location_id',
-                        $shipment->pickup_location_id
-                    )
-                    ->whereIn(
-                        'status',
-                        PickupStatus::acceptingShipments()
-                    )
-                    ->lockForUpdate()
-                    ->latest('id')
-                    ->first();
-
-                if (! $pickup) {
-                    throw ValidationException::withMessages([
-                        'pickup' => [
-                            'No open pickup request exists for this shipment.',
-                        ],
-                    ]);
-                }
-
                 return $this->attachToPickup(
                     pickup: $pickup,
                     shipment: $shipment,
@@ -132,7 +119,7 @@ final class PickupRequestService
 
     /*
     |--------------------------------------------------------------------------
-    | ASSIGN RIDER
+    | Assign rider
     |--------------------------------------------------------------------------
     */
 
@@ -182,8 +169,7 @@ final class PickupRequestService
 
                 if (
                     $this->pickupHasColumn('accepted_at')
-                    &&
-                    $pickup->accepted_at === null
+                    && $pickup->accepted_at === null
                 ) {
                     $pickup->accepted_at = now();
                 }
@@ -191,9 +177,11 @@ final class PickupRequestService
                 $pickup->save();
 
                 /*
-                 * Any shipment already attached to the pickup
-                 * must now be pickup_assigned.
-                 */
+                |--------------------------------------------------------------------------
+                | Update shipments
+                |--------------------------------------------------------------------------
+                */
+
                 $items = $pickup
                     ->activeShipments()
                     ->with('shipment')
@@ -202,14 +190,6 @@ final class PickupRequestService
 
                 foreach ($items as $item) {
                     $shipment = $item->shipment;
-
-                    if (! $shipment) {
-                        continue;
-                    }
-
-                    $shipment = Shipment::query()
-                        ->lockForUpdate()
-                        ->find($shipment->id);
 
                     if (! $shipment) {
                         continue;
@@ -230,7 +210,7 @@ final class PickupRequestService
                             shipment: $shipment,
                             status: CourierStatus::PICKUP_ASSIGNED,
                             userId: $assignedBy->id,
-                            note: $oldStaffId !== null
+                            note: $oldStaffId
                                 ? 'Pickup rider reassigned.'
                                 : 'Pickup rider assigned.'
                         );
@@ -239,10 +219,10 @@ final class PickupRequestService
 
                 $this->createPickupEvent(
                     pickup: $pickup,
-                    type: $oldStaffId !== null
+                    type: $oldStaffId
                         ? 'rider_reassigned'
                         : 'rider_assigned',
-                    description: $oldStaffId !== null
+                    description: $oldStaffId
                         ? 'Pickup rider reassigned.'
                         : 'Pickup rider assigned.'
                 );
@@ -254,7 +234,7 @@ final class PickupRequestService
 
     /*
     |--------------------------------------------------------------------------
-    | TRANSFER
+    | Transfer
     |--------------------------------------------------------------------------
     */
 
@@ -302,8 +282,7 @@ final class PickupRequestService
 
                 if (
                     $oldStaffId !== null
-                    &&
-                    (int) $oldStaffId === (int) $newStaff->id
+                    && (int) $oldStaffId === (int) $newStaff->id
                 ) {
                     throw ValidationException::withMessages([
                         'staff_id' => [
@@ -315,6 +294,10 @@ final class PickupRequestService
                 $pickup->assigned_to = $newStaff->id;
                 $pickup->assigned_by = $transferredBy->id;
                 $pickup->assigned_at = now();
+
+                /*
+                 * Do not reset STARTED.
+                 */
                 $pickup->save();
 
                 $this->createPickupEvent(
@@ -357,7 +340,7 @@ final class PickupRequestService
 
     /*
     |--------------------------------------------------------------------------
-    | START
+    | Start
     |--------------------------------------------------------------------------
     */
 
@@ -394,42 +377,12 @@ final class PickupRequestService
 
                 if (
                     $this->pickupHasColumn('accepted_at')
-                    &&
-                    $pickup->accepted_at === null
+                    && $pickup->accepted_at === null
                 ) {
                     $pickup->accepted_at = now();
                 }
 
                 $pickup->save();
-
-                /*
-                 * Make sure attached shipments are pickup_assigned.
-                 */
-                $items = $pickup
-                    ->activeShipments()
-                    ->with('shipment')
-                    ->lockForUpdate()
-                    ->get();
-
-                foreach ($items as $item) {
-                    $shipment = $item->shipment;
-
-                    if (! $shipment) {
-                        continue;
-                    }
-
-                    if (
-                        $shipment->status ===
-                        CourierStatus::AWAITING_PICKUP
-                    ) {
-                        $this->changeShipmentStatus(
-                            shipment: $shipment,
-                            status: CourierStatus::PICKUP_ASSIGNED,
-                            userId: $user->id,
-                            note: 'Pickup started by assigned rider.'
-                        );
-                    }
-                }
 
                 $this->createPickupEvent(
                     pickup: $pickup,
@@ -444,7 +397,7 @@ final class PickupRequestService
 
     /*
     |--------------------------------------------------------------------------
-    | ARRIVE
+    | Arrive
     |--------------------------------------------------------------------------
     */
 
@@ -478,13 +431,7 @@ final class PickupRequestService
                 }
 
                 $pickup->status = PickupStatus::ARRIVED;
-
-                if (
-                    $this->pickupHasColumn('arrived_at')
-                ) {
-                    $pickup->arrived_at = now();
-                }
-
+                $pickup->arrived_at = now();
                 $pickup->save();
 
                 $this->createPickupEvent(
@@ -500,7 +447,7 @@ final class PickupRequestService
 
     /*
     |--------------------------------------------------------------------------
-    | COLLECT SHIPMENT
+    | Collect shipment
     |--------------------------------------------------------------------------
     */
 
@@ -536,23 +483,6 @@ final class PickupRequestService
                         ],
                     ]);
                 }
-
-                $shipment = Shipment::query()
-                    ->lockForUpdate()
-                    ->find($shipment->id);
-
-                if (! $shipment) {
-                    throw ValidationException::withMessages([
-                        'shipment' => [
-                            'Shipment was not found.',
-                        ],
-                    ]);
-                }
-
-                $this->ensureShipmentBelongsToPickup(
-                    pickup: $pickup,
-                    shipment: $shipment
-                );
 
                 $item = PickupRequestShipment::query()
                     ->where(
@@ -607,7 +537,7 @@ final class PickupRequestService
                     shipment: $shipment,
                     status: CourierStatus::PICKED_UP,
                     userId: $user->id,
-                    note: 'Shipment collected by pickup rider.'
+                    note: 'Shipment collected by rider.'
                 );
 
                 if ($remarks !== null) {
@@ -615,29 +545,11 @@ final class PickupRequestService
                     $item->save();
                 }
 
-                if (
-                    $this->pickupHasColumn('picked_up_at')
-                ) {
-                    $pickup->picked_up_at =
-                        $pickup->picked_up_at ?? now();
-                }
+                $pickup->picked_up_at =
+                    $pickup->picked_up_at ?? now();
 
-                if (
-                    $this->pickupHasColumn('picked_up_by')
-                ) {
-                    $pickup->picked_up_by = $user->id;
-                }
-
+                $pickup->picked_up_by = $user->id;
                 $pickup->save();
-
-                $this->createPickupEvent(
-                    pickup: $pickup,
-                    type: 'shipment_collected',
-                    description:
-                        'Shipment ' .
-                        ($shipment->tracking_number ?? '#' . $shipment->id) .
-                        ' collected by rider.'
-                );
 
                 return $item->fresh([
                     'pickupRequest',
@@ -649,7 +561,7 @@ final class PickupRequestService
 
     /*
     |--------------------------------------------------------------------------
-    | RECEIVE SHIPMENT AT ORIGIN
+    | Receive shipment at origin
     |--------------------------------------------------------------------------
     */
 
@@ -667,23 +579,6 @@ final class PickupRequestService
                 $pickup = PickupRequest::query()
                     ->lockForUpdate()
                     ->findOrFail($pickup->id);
-
-                $shipment = Shipment::query()
-                    ->lockForUpdate()
-                    ->find($shipment->id);
-
-                if (! $shipment) {
-                    throw ValidationException::withMessages([
-                        'shipment' => [
-                            'Shipment was not found.',
-                        ],
-                    ]);
-                }
-
-                $this->ensureShipmentBelongsToPickup(
-                    pickup: $pickup,
-                    shipment: $shipment
-                );
 
                 $item = PickupRequestShipment::query()
                     ->where(
@@ -718,9 +613,11 @@ final class PickupRequestService
                 }
 
                 /*
-                 * Shipment has physically moved from merchant
-                 * pickup location to origin branch.
-                 */
+                |--------------------------------------------------------------------------
+                | Move shipment to origin branch
+                |--------------------------------------------------------------------------
+                */
+
                 if (
                     $this->shipmentHasColumn(
                         'current_branch_id'
@@ -740,18 +637,20 @@ final class PickupRequestService
                 }
 
                 /*
-                 * RECEIVED_AT_ORIGIN is optional in your current
-                 * CourierStatus implementation.
-                 */
-                $receivedStatus =
-                    $this->courierStatusValue(
-                        'RECEIVED_AT_ORIGIN'
-                    );
+                |--------------------------------------------------------------------------
+                | Update status if supported
+                |--------------------------------------------------------------------------
+                */
 
-                if ($receivedStatus !== null) {
+                if (
+                    defined(
+                        CourierStatus::class .
+                        '::RECEIVED_AT_ORIGIN'
+                    )
+                ) {
                     $this->changeShipmentStatus(
                         shipment: $shipment,
-                        status: $receivedStatus,
+                        status: CourierStatus::RECEIVED_AT_ORIGIN,
                         userId: $staff->id,
                         note: 'Shipment received at origin branch.'
                     );
@@ -776,15 +675,6 @@ final class PickupRequestService
                     $pickup->save();
                 }
 
-                $this->createPickupEvent(
-                    pickup: $pickup,
-                    type: 'shipment_received',
-                    description:
-                        'Shipment ' .
-                        ($shipment->tracking_number ?? '#' . $shipment->id) .
-                        ' received at origin branch.'
-                );
-
                 return $item->fresh([
                     'pickupRequest',
                     'shipment',
@@ -795,7 +685,7 @@ final class PickupRequestService
 
     /*
     |--------------------------------------------------------------------------
-    | COMPLETE
+    | Complete
     |--------------------------------------------------------------------------
     */
 
@@ -828,40 +718,31 @@ final class PickupRequestService
                     ]);
                 }
 
-                $items = $pickup
+                $pending = $pickup
                     ->activeShipments()
                     ->with('shipment')
                     ->lockForUpdate()
-                    ->get();
+                    ->get()
+                    ->filter(
+                        static function (
+                            PickupRequestShipment $item
+                        ): bool {
+                            $shipment = $item->shipment;
 
-                if ($items->isEmpty()) {
-                    throw ValidationException::withMessages([
-                        'shipments' => [
-                            'A pickup cannot be completed without shipments.',
-                        ],
-                    ]);
-                }
+                            if (! $shipment) {
+                                return false;
+                            }
 
-                $pending = $items->filter(
-                    static function (
-                        PickupRequestShipment $item
-                    ): bool {
-                        $shipment = $item->shipment;
-
-                        if (! $shipment) {
-                            return true;
+                            return ! in_array(
+                                $shipment->status,
+                                [
+                                    CourierStatus::PICKED_UP,
+                                    CourierStatus::CANCELLED,
+                                ],
+                                true
+                            );
                         }
-
-                        return ! in_array(
-                            $shipment->status,
-                            [
-                                CourierStatus::PICKED_UP,
-                                CourierStatus::CANCELLED,
-                            ],
-                            true
-                        );
-                    }
-                );
+                    );
 
                 if ($pending->isNotEmpty()) {
                     throw ValidationException::withMessages([
@@ -888,7 +769,7 @@ final class PickupRequestService
 
     /*
     |--------------------------------------------------------------------------
-    | FAIL
+    | Fail
     |--------------------------------------------------------------------------
     */
 
@@ -927,19 +808,8 @@ final class PickupRequestService
                 );
 
                 $pickup->status = PickupStatus::FAILED;
-
-                if (
-                    $this->pickupHasColumn('failed_at')
-                ) {
-                    $pickup->failed_at = now();
-                }
-
-                if (
-                    $this->pickupHasColumn('failed_reason')
-                ) {
-                    $pickup->failed_reason = $reason;
-                }
-
+                $pickup->failed_at = now();
+                $pickup->failed_reason = $reason;
                 $pickup->save();
 
                 $items = $pickup
@@ -950,14 +820,6 @@ final class PickupRequestService
 
                 foreach ($items as $item) {
                     $shipment = $item->shipment;
-
-                    if (! $shipment) {
-                        continue;
-                    }
-
-                    $shipment = Shipment::query()
-                        ->lockForUpdate()
-                        ->find($shipment->id);
 
                     if (! $shipment) {
                         continue;
@@ -995,7 +857,7 @@ final class PickupRequestService
 
     /*
     |--------------------------------------------------------------------------
-    | ATTACH INTERNALLY
+    | Attach internally
     |--------------------------------------------------------------------------
     */
 
@@ -1021,76 +883,34 @@ final class PickupRequestService
             return $existing;
         }
 
-        $this->ensureShipmentBelongsToPickup(
-            pickup: $pickup,
-            shipment: $shipment
-        );
-
-        /*
-         * Shipment must not already belong to another active pickup.
-         */
-        $alreadyActive = $shipment
-            ->pickupRequests()
-            ->whereIn(
-                'pickup_requests.status',
-                PickupStatus::active()
-            )
-            ->where(
-                'pickup_requests.id',
-                '!=',
-                $pickup->id
-            )
-            ->exists();
-
-        if ($alreadyActive) {
-            throw ValidationException::withMessages([
-                'shipment' => [
-                    'Shipment already belongs to another active pickup.',
-                ],
-            ]);
+        if (
+            $pickup->status !==
+            PickupStatus::REQUESTED
+        ) {
+            if (
+                $shipment->status ===
+                CourierStatus::AWAITING_PICKUP
+            ) {
+                $this->changeShipmentStatus(
+                    shipment: $shipment,
+                    status: CourierStatus::PICKUP_ASSIGNED,
+                    userId: null,
+                    note: 'Shipment added to an already assigned pickup.'
+                );
+            }
         }
 
-        $item = PickupRequestShipment::query()
+        return PickupRequestShipment::query()
             ->create([
                 'pickup_request_id' => $pickup->id,
                 'shipment_id' => $shipment->id,
                 'remarks' => $remarks,
             ]);
-
-        /*
-         * If rider has already been assigned,
-         * shipment must immediately become pickup_assigned.
-         */
-        if (
-            in_array(
-                $pickup->status,
-                [
-                    PickupStatus::ASSIGNED,
-                    PickupStatus::STARTED,
-                    PickupStatus::ARRIVED,
-                ],
-                true
-            )
-            &&
-            $shipment->status ===
-            CourierStatus::AWAITING_PICKUP
-        ) {
-            $this->changeShipmentStatus(
-                shipment: $shipment,
-                status: CourierStatus::PICKUP_ASSIGNED,
-                userId: $pickup->assigned_to !== null
-                    ? (int) $pickup->assigned_to
-                    : null,
-                note: 'Shipment added to the active pickup.'
-            );
-        }
-
-        return $item;
     }
 
     /*
     |--------------------------------------------------------------------------
-    | SHIPMENT STATUS
+    | Shipment status
     |--------------------------------------------------------------------------
     */
 
@@ -1102,41 +922,21 @@ final class PickupRequestService
     ): void {
         $oldStatus = $shipment->status;
 
-        if (
-            $oldStatus === $status
-        ) {
-            $this->createShipmentTrackingEvent(
-                shipment: $shipment,
-                oldStatus: $oldStatus,
-                newStatus: $status,
-                description: $note,
-                createdBy: $userId
-            );
-
-            return;
-        }
-
         $shipment->status = $status;
 
-        if (
-            $this->shipmentHasColumn('merchant_status')
-        ) {
-            $shipment->merchant_status =
-                CourierStatus::merchantStatus($status);
-        }
+        $shipment->merchant_status =
+            CourierStatus::merchantStatus($status);
 
         if (
             $status === CourierStatus::PICKED_UP
-            &&
-            $this->shipmentHasColumn('pickup_status')
+            && $this->shipmentHasColumn('pickup_status')
         ) {
             $shipment->pickup_status = 'picked_up';
         }
 
         if (
             $status === CourierStatus::CANCELLED
-            &&
-            $this->shipmentHasColumn('cancelled_at')
+            && $this->shipmentHasColumn('cancelled_at')
         ) {
             $shipment->cancelled_at = now();
         }
@@ -1154,7 +954,7 @@ final class PickupRequestService
 
     /*
     |--------------------------------------------------------------------------
-    | PICKUP EVENT
+    | Pickup event
     |--------------------------------------------------------------------------
     */
 
@@ -1186,15 +986,13 @@ final class PickupRequestService
             array_flip($columns)
         );
 
-        if ($data !== []) {
-            DB::table('pickup_events')
-                ->insert($data);
-        }
+        DB::table('pickup_events')
+            ->insert($data);
     }
 
     /*
     |--------------------------------------------------------------------------
-    | SHIPMENT TRACKING EVENT
+    | Shipment tracking event
     |--------------------------------------------------------------------------
     */
 
@@ -1217,11 +1015,20 @@ final class PickupRequestService
 
         $data = [
             'shipment_id' => $shipment->id,
-            'tracking_number' => $shipment->tracking_number,
-            'old_status' => $oldStatus,
-            'status' => $newStatus,
+
+            'tracking_number' =>
+                $shipment->tracking_number,
+
+            'old_status' =>
+                $oldStatus,
+
+            'status' =>
+                $newStatus,
+
             'merchant_status' =>
-                CourierStatus::merchantStatus($newStatus),
+                CourierStatus::merchantStatus(
+                    $newStatus
+                ),
 
             'branch_id' =>
                 $shipment->current_branch_id
@@ -1233,12 +1040,23 @@ final class PickupRequestService
                 ??
                 $shipment->origin_sub_branch_id,
 
-            'location_text' => null,
-            'description' => $description,
-            'visibility' => 'public',
-            'created_by' => $createdBy,
-            'created_at' => now(),
-            'updated_at' => now(),
+            'location_text' =>
+                null,
+
+            'description' =>
+                $description,
+
+            'visibility' =>
+                'public',
+
+            'created_by' =>
+                $createdBy,
+
+            'created_at' =>
+                now(),
+
+            'updated_at' =>
+                now(),
         ];
 
         $data = array_intersect_key(
@@ -1246,15 +1064,18 @@ final class PickupRequestService
             array_flip($columns)
         );
 
-        if ($data !== []) {
-            DB::table('tracking_events')
-                ->insert($data);
-        }
+        DB::table('tracking_events')
+            ->insert($data);
     }
 
     /*
     |--------------------------------------------------------------------------
-    | VALIDATE STAFF
+    | Rider validation
+    |--------------------------------------------------------------------------
+    |
+    | IMPORTANT:
+    | users table only uses branch_id.
+    | There is NO users.sub_branch_id.
     |--------------------------------------------------------------------------
     */
 
@@ -1263,24 +1084,14 @@ final class PickupRequestService
         User $staff
     ): void {
         /*
-         * Use the actual active flag when available.
-         */
-        if (
-            isset($staff->is_active)
-            &&
-            ! (bool) $staff->is_active
-        ) {
-            throw ValidationException::withMessages([
-                'staff_id' => [
-                    'Selected rider is not active.',
-                ],
-            ]);
-        }
+        |--------------------------------------------------------------------------
+        | Active check
+        |--------------------------------------------------------------------------
+        */
 
         if (
             isset($staff->status)
-            &&
-            $staff->status !== 'active'
+            && $staff->status !== 'active'
         ) {
             throw ValidationException::withMessages([
                 'staff_id' => [
@@ -1289,22 +1100,44 @@ final class PickupRequestService
             ]);
         }
 
-        $pickupBranchId =
-            $this->pickupBranchId($pickup);
-
-        $pickupSubBranchId =
-            $this->pickupSubBranchId($pickup);
+        if (
+            isset($staff->is_active)
+            && ! (bool) $staff->is_active
+        ) {
+            throw ValidationException::withMessages([
+                'staff_id' => [
+                    'Selected rider is not active.',
+                ],
+            ]);
+        }
 
         /*
-         * Branch must match.
-         */
+        |--------------------------------------------------------------------------
+        | Pickup branch
+        |--------------------------------------------------------------------------
+        */
+
+        $branchId = (int) (
+            $pickup->pickup_branch_id
+            ??
+            $pickup->branch_id
+            ??
+            0
+        );
+
+        /*
+        |--------------------------------------------------------------------------
+        | Staff branch
+        |--------------------------------------------------------------------------
+        |
+        | ONLY branch_id.
+        |
+        */
+
         if (
-            $pickupBranchId !== null
-            &&
-            isset($staff->branch_id)
-            &&
-            (int) $staff->branch_id !==
-            (int) $pickupBranchId
+            $branchId > 0
+            && $staff->branch_id !== null
+            && (int) $staff->branch_id !== $branchId
         ) {
             throw ValidationException::withMessages([
                 'staff_id' => [
@@ -1314,30 +1147,14 @@ final class PickupRequestService
         }
 
         /*
-         * If both sides have sub-branch information,
-         * enforce it.
-         */
-        if (
-            $pickupSubBranchId !== null
-            &&
-            isset($staff->sub_branch_id)
-            &&
-            $staff->sub_branch_id !== null
-            &&
-            (int) $staff->sub_branch_id !==
-            (int) $pickupSubBranchId
-        ) {
-            throw ValidationException::withMessages([
-                'staff_id' => [
-                    'Selected rider does not belong to the pickup sub-branch.',
-                ],
-            ]);
-        }
+        |--------------------------------------------------------------------------
+        | Role
+        |--------------------------------------------------------------------------
+        */
 
         if (
             method_exists($staff, 'hasAnyRole')
-            &&
-            ! $staff->hasAnyRole([
+            && ! $staff->hasAnyRole([
                 'rider',
                 'pickup_rider',
                 'staff',
@@ -1354,7 +1171,7 @@ final class PickupRequestService
 
     /*
     |--------------------------------------------------------------------------
-    | ENSURE ASSIGNED RIDER
+    | Assigned rider
     |--------------------------------------------------------------------------
     */
 
@@ -1365,8 +1182,7 @@ final class PickupRequestService
         if (
             $pickup->assigned_to === null
             ||
-            (int) $pickup->assigned_to !==
-            (int) $user->id
+            (int) $pickup->assigned_to !== (int) $user->id
         ) {
             throw ValidationException::withMessages([
                 'pickup' => [
@@ -1378,7 +1194,7 @@ final class PickupRequestService
 
     /*
     |--------------------------------------------------------------------------
-    | MANAGEMENT PERMISSION
+    | Management permission
     |--------------------------------------------------------------------------
     */
 
@@ -1387,70 +1203,59 @@ final class PickupRequestService
         User $user
     ): void {
         if (
-            method_exists($user, 'isSuperAdmin')
-            &&
             $user->isSuperAdmin()
-        ) {
-            return;
-        }
-
-        if (
-            method_exists($user, 'hasAnyRole')
-            &&
-            $user->hasAnyRole([
-                'super_admin',
-                'admin',
-                'main_admin',
-            ])
+            ||
+            $user->hasRole('main_admin')
+            ||
+            $user->hasRole('admin')
         ) {
             return;
         }
 
         /*
-         * Branch manager.
-         */
+        |--------------------------------------------------------------------------
+        | Branch manager
+        |--------------------------------------------------------------------------
+        |
+        | Branch manager uses users.branch_id.
+        | No sub_branch_id is read from users.
+        |--------------------------------------------------------------------------
+        */
+
         if (
-            method_exists($user, 'hasRole')
-            &&
             $user->hasRole('branch_manager')
-        ) {
-            $userBranchId =
-                $this->resolveUserBranchId($user);
-
-            if (
-                $userBranchId !== null
-                &&
-                $userBranchId ===
-                $this->pickupBranchId($pickup)
-            ) {
-                return;
-            }
-        }
-
-        /*
-         * Sub branch manager.
-         */
-        if (
-            method_exists($user, 'hasRole')
-            &&
+            ||
             $user->hasRole('sub_branch_manager')
         ) {
-            $userSubBranchId =
-                $this->resolveUserSubBranchId($user);
+            $userBranchId = $this->resolveUserBranchId(
+                $user
+            );
+
+            $pickupBranchId = (int) (
+                $pickup->pickup_branch_id
+                ??
+                $pickup->branch_id
+                ??
+                0
+            );
 
             if (
-                $userSubBranchId !== null
+                $userBranchId > 0
                 &&
-                $userSubBranchId ===
-                $this->pickupSubBranchId($pickup)
+                $pickupBranchId > 0
+                &&
+                $userBranchId === $pickupBranchId
             ) {
                 return;
             }
         }
 
         /*
-         * Assigned rider can manage their own pickup.
-         */
+        |--------------------------------------------------------------------------
+        | Assigned rider
+        |--------------------------------------------------------------------------
+        */
+
         if (
             $pickup->assigned_to !== null
             &&
@@ -1469,96 +1274,27 @@ final class PickupRequestService
 
     /*
     |--------------------------------------------------------------------------
-    | SHIPMENT OWNERSHIP
+    | User branch
+    |--------------------------------------------------------------------------
+    |
+    | IMPORTANT:
+    | Never reference users.sub_branch_id.
     |--------------------------------------------------------------------------
     */
-
-    private function ensureShipmentBelongsToPickup(
-        PickupRequest $pickup,
-        Shipment $shipment
-    ): void {
-        if (
-            (int) $pickup->merchant_id !==
-            (int) $shipment->merchant_id
-        ) {
-            throw ValidationException::withMessages([
-                'shipment' => [
-                    'Shipment does not belong to this pickup merchant.',
-                ],
-            ]);
-        }
-
-        if (
-            (int) $pickup->pickup_location_id !==
-            (int) $shipment->pickup_location_id
-        ) {
-            throw ValidationException::withMessages([
-                'shipment' => [
-                    'Shipment does not belong to this pickup location.',
-                ],
-            ]);
-        }
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | BRANCH HELPERS
-    |--------------------------------------------------------------------------
-    */
-
-    private function pickupBranchId(
-        PickupRequest $pickup
-    ): ?int {
-        $value =
-            $pickup->pickup_branch_id
-            ??
-            $pickup->branch_id
-            ??
-            null;
-
-        return $value !== null
-            ? (int) $value
-            : null;
-    }
-
-    private function pickupSubBranchId(
-        PickupRequest $pickup
-    ): ?int {
-        $value =
-            $pickup->pickup_sub_branch_id
-            ??
-            $pickup->sub_branch_id
-            ??
-            null;
-
-        return $value !== null
-            ? (int) $value
-            : null;
-    }
 
     private function resolveUserBranchId(
         User $user
-    ): ?int {
-        if ($user->branch_id !== null) {
-            return (int) $user->branch_id;
-        }
-
-        return null;
-    }
-
-    private function resolveUserSubBranchId(
-        User $user
-    ): ?int {
-        if ($user->sub_branch_id !== null) {
-            return (int) $user->sub_branch_id;
-        }
-
-        return null;
+    ): int {
+        return (int) (
+            $user->branch_id
+            ??
+            0
+        );
     }
 
     /*
     |--------------------------------------------------------------------------
-    | SCHEMA HELPERS
+    | Pickup schema
     |--------------------------------------------------------------------------
     */
 
@@ -1573,6 +1309,12 @@ final class PickupRequestService
         );
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | Shipment schema
+    |--------------------------------------------------------------------------
+    */
+
     private function shipmentHasColumn(
         string $column
     ): bool {
@@ -1582,30 +1324,5 @@ final class PickupRequestService
                 ->getColumnListing('shipments'),
             true
         );
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | OPTIONAL COURIER STATUS
-    |--------------------------------------------------------------------------
-    */
-
-    private function courierStatusValue(
-        string $constant
-    ): ?string {
-        $constantName =
-            CourierStatus::class .
-            '::' .
-            $constant;
-
-        if (! defined($constantName)) {
-            return null;
-        }
-
-        $value = constant($constantName);
-
-        return is_string($value)
-            ? $value
-            : null;
     }
 }

@@ -11,7 +11,6 @@ use Illuminate\Validation\ValidationException;
 use Modules\Merchant\Models\Merchant;
 use Modules\Merchant\Models\MerchantPickupLocation;
 use Modules\Pickup\Models\PickupRequest;
-use Modules\Pickup\Models\PickupRequestShipment;
 use Modules\Pickup\Support\PickupStatus;
 use Modules\Shipment\Models\Shipment;
 
@@ -19,7 +18,7 @@ final class GatewayPickupService
 {
     /*
     |--------------------------------------------------------------------------
-    | CREATE / REUSE PICKUP
+    | CREATE PICKUP
     |--------------------------------------------------------------------------
     */
 
@@ -27,71 +26,58 @@ final class GatewayPickupService
         int $merchantId,
         array $data
     ): PickupRequest {
-        if ($merchantId <= 0) {
+        $merchant = Merchant::query()
+            ->find($merchantId);
+
+        if (! $merchant) {
             throw ValidationException::withMessages([
                 'merchant' => [
-                    'Invalid merchant.',
+                    'Authenticated merchant was not found.',
+                ],
+            ]);
+        }
+
+        if ($merchant->status !== 'active') {
+            throw ValidationException::withMessages([
+                'merchant' => [
+                    'Merchant account is not active.',
                 ],
             ]);
         }
 
         return DB::transaction(
             function () use (
-                $merchantId,
+                $merchant,
                 $data
             ): PickupRequest {
-                $merchant = Merchant::query()
-                    ->lockForUpdate()
-                    ->find($merchantId);
-
-                if (! $merchant) {
-                    throw ValidationException::withMessages([
-                        'merchant' => [
-                            'Authenticated merchant was not found.',
-                        ],
-                    ]);
-                }
-
-                if ($merchant->status !== 'active') {
-                    throw ValidationException::withMessages([
-                        'merchant' => [
-                            'Merchant account is not active.',
-                        ],
-                    ]);
-                }
-
                 /*
-                 * Validate pickup location.
-                 */
-                $pickupLocationId =
-                    (int) ($data['pickup_location_id'] ?? 0);
-
-                if ($pickupLocationId <= 0) {
-                    throw ValidationException::withMessages([
-                        'pickup_location_id' => [
-                            'Pickup location is required.',
-                        ],
-                    ]);
-                }
+                |--------------------------------------------------------------------------
+                | Pickup location
+                |--------------------------------------------------------------------------
+                */
 
                 $pickupLocation =
                     MerchantPickupLocation::query()
-                        ->whereKey($pickupLocationId)
+                        ->whereKey(
+                            $data['pickup_location_id']
+                        )
                         ->where(
                             'merchant_id',
                             $merchant->id
                         )
-                        ->where(function ($query): void {
-                            $query
-                                ->whereNull('status')
-                                ->orWhereIn(
-                                    'status',
-                                    [
-                                        'active',
-                                        'approved',
-                                    ]
-                                );
-                        })
+                        ->where(
+                            function ($query): void {
+                                $query
+                                    ->whereNull('status')
+                                    ->orWhereIn(
+                                        'status',
+                                        [
+                                            'active',
+                                            'approved',
+                                        ]
+                                    );
+                            }
+                        )
                         ->lockForUpdate()
                         ->first();
 
@@ -104,14 +90,16 @@ final class GatewayPickupService
                 }
 
                 /*
-                 * Store reference.
-                 *
-                 * Example:
-                 *
-                 * PR-001
-                 */
+                |--------------------------------------------------------------------------
+                | Store reference
+                |--------------------------------------------------------------------------
+                */
+
                 $storeReference = trim(
-                    (string) ($data['store_reference'] ?? '')
+                    (string) (
+                        $data['store_reference']
+                        ?? ''
+                    )
                 );
 
                 if ($storeReference === '') {
@@ -123,23 +111,29 @@ final class GatewayPickupService
                 }
 
                 /*
-                 * Find existing physical pickup batch.
-                 *
-                 * IMPORTANT:
-                 * store_reference is NOT used to identify
-                 * the physical pickup.
-                 */
-                $openPickup = $this->findOpenPickup(
-                    merchantId: $merchant->id,
-                    pickupLocationId: $pickupLocation->id,
-                    lock: true
-                );
+                |--------------------------------------------------------------------------
+                | Find existing open pickup
+                |--------------------------------------------------------------------------
+                */
+
+                $openPickup =
+                    $this->findOpenPickup(
+                        merchantId:
+                            $merchant->id,
+
+                        pickupLocationId:
+                            (int) $pickupLocation->id,
+
+                        lock:
+                            true,
+                    );
 
                 /*
-                 * --------------------------------------------------------------
-                 * EXISTING OPEN PICKUP
-                 * --------------------------------------------------------------
-                 */
+                |--------------------------------------------------------------------------
+                | REUSE
+                |--------------------------------------------------------------------------
+                */
+
                 if ($openPickup) {
                     $this->updatePickupRequest(
                         pickup: $openPickup,
@@ -148,8 +142,11 @@ final class GatewayPickupService
 
                     $shipments =
                         $this->findEligibleShipments(
-                            merchantId: $merchant->id,
-                            pickupLocationId: $pickupLocation->id
+                            merchantId:
+                                $merchant->id,
+
+                            pickupLocationId:
+                                (int) $pickupLocation->id
                         );
 
                     foreach ($shipments as $shipment) {
@@ -163,32 +160,49 @@ final class GatewayPickupService
                         $openPickup
                     );
 
-                    return $this->freshPickup(
-                        $openPickup
-                    );
+                    return $openPickup->fresh([
+                        'merchant',
+                        'pickupLocation',
+                        'pickupBranch',
+                        'pickupSubBranch',
+                        'shipments.shipment',
+                    ]);
                 }
 
                 /*
-                 * --------------------------------------------------------------
-                 * CREATE NEW PHYSICAL PICKUP
-                 * --------------------------------------------------------------
-                 */
+                |--------------------------------------------------------------------------
+                | CREATE NEW PICKUP
+                |--------------------------------------------------------------------------
+                */
+
                 $pickup =
                     $this->createPickupRequest(
-                        merchant: $merchant,
-                        pickupLocation: $pickupLocation,
-                        storeReference: $storeReference,
-                        data: $data
+                        merchant:
+                            $merchant,
+
+                        pickupLocation:
+                            $pickupLocation,
+
+                        storeReference:
+                            $storeReference,
+
+                        data:
+                            $data
                     );
 
                 /*
-                 * Attach every currently waiting shipment
-                 * belonging to this merchant + location.
-                 */
+                |--------------------------------------------------------------------------
+                | Attach waiting shipments
+                |--------------------------------------------------------------------------
+                */
+
                 $shipments =
                     $this->findEligibleShipments(
-                        merchantId: $merchant->id,
-                        pickupLocationId: $pickupLocation->id
+                        merchantId:
+                            $merchant->id,
+
+                        pickupLocationId:
+                            (int) $pickupLocation->id
                     );
 
                 foreach ($shipments as $shipment) {
@@ -202,9 +216,13 @@ final class GatewayPickupService
                     $pickup
                 );
 
-                return $this->freshPickup(
-                    $pickup
-                );
+                return $pickup->fresh([
+                    'merchant',
+                    'pickupLocation',
+                    'pickupBranch',
+                    'pickupSubBranch',
+                    'shipments.shipment',
+                ]);
             }
         );
     }
@@ -229,8 +247,11 @@ final class GatewayPickupService
         }
 
         /*
-         * Self-drop shipment does not require merchant pickup.
-         */
+        |--------------------------------------------------------------------------
+        | Self drop never enters pickup
+        |--------------------------------------------------------------------------
+        */
+
         if (
             (bool) ($shipment->self_drop ?? false)
         ) {
@@ -238,8 +259,33 @@ final class GatewayPickupService
         }
 
         /*
-         * Safety validation.
-         */
+        |--------------------------------------------------------------------------
+        | Find pickup
+        |--------------------------------------------------------------------------
+        */
+
+        $pickup =
+            $this->findOpenPickup(
+                merchantId:
+                    $merchantId,
+
+                pickupLocationId:
+                    $pickupLocationId,
+
+                lock:
+                    true
+            );
+
+        if (! $pickup) {
+            return null;
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Ownership protection
+        |--------------------------------------------------------------------------
+        */
+
         if (
             (int) $shipment->merchant_id !==
             $merchantId
@@ -255,85 +301,39 @@ final class GatewayPickupService
         }
 
         /*
-         * Shipment must still be waiting.
-         */
-        if (
-            $shipment->status !==
-            CourierStatus::AWAITING_PICKUP
-        ) {
-            return null;
-        }
-
-        /*
-         * Lock shipment first to prevent two requests
-         * attaching the same shipment simultaneously.
-         */
-        $shipment = Shipment::query()
-            ->lockForUpdate()
-            ->find($shipment->id);
-
-        if (! $shipment) {
-            return null;
-        }
+        |--------------------------------------------------------------------------
+        | Shipment must be awaiting pickup
+        |--------------------------------------------------------------------------
+        */
 
         if (
             $shipment->status !==
             CourierStatus::AWAITING_PICKUP
         ) {
-            return null;
-        }
-
-        /*
-         * Find the open physical pickup.
-         */
-        $pickup = $this->findOpenPickup(
-            merchantId: $merchantId,
-            pickupLocationId: $pickupLocationId,
-            lock: true
-        );
-
-        if (! $pickup) {
-            /*
-             * No pickup requested yet.
-             *
-             * Shipment remains awaiting_pickup.
-             */
-            return null;
-        }
-
-        /*
-         * Make sure it is not already attached to
-         * another active pickup.
-         */
-        $alreadyAttached =
-            $shipment->pickupRequests()
-                ->whereIn(
-                    'pickup_requests.status',
-                    PickupStatus::active()
-                )
-                ->where(
-                    'pickup_requests.id',
-                    '!=',
-                    $pickup->id
-                )
-                ->exists();
-
-        if ($alreadyAttached) {
             return $pickup;
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Attach
+        |--------------------------------------------------------------------------
+        */
+
         $this->attachShipmentToPickup(
-            pickup: $pickup,
-            shipment: $shipment
+            pickup:
+                $pickup,
+
+            shipment:
+                $shipment
         );
 
         $this->recalculateParcelQuantity(
             $pickup
         );
 
-        return $this->freshPickup(
-            $pickup
-        );
+        return $pickup->fresh([
+            'shipments.shipment',
+        ]);
     }
 
     /*
@@ -379,7 +379,7 @@ final class GatewayPickupService
 
     /*
     |--------------------------------------------------------------------------
-    | FIND ELIGIBLE SHIPMENTS
+    | ELIGIBLE SHIPMENTS
     |--------------------------------------------------------------------------
     */
 
@@ -389,15 +389,15 @@ final class GatewayPickupService
     ): Collection {
         return Shipment::query()
             ->where(
-                'shipments.merchant_id',
+                'merchant_id',
                 $merchantId
             )
             ->where(
-                'shipments.pickup_location_id',
+                'pickup_location_id',
                 $pickupLocationId
             )
             ->where(
-                'shipments.status',
+                'status',
                 CourierStatus::AWAITING_PICKUP
             )
             ->whereDoesntHave(
@@ -415,7 +415,7 @@ final class GatewayPickupService
 
     /*
     |--------------------------------------------------------------------------
-    | CREATE PICKUP
+    | CREATE PICKUP REQUEST
     |--------------------------------------------------------------------------
     */
 
@@ -524,13 +524,19 @@ final class GatewayPickupService
         ];
 
         /*
-         * Coordinates.
-         */
+        |--------------------------------------------------------------------------
+        | Coordinates
+        |--------------------------------------------------------------------------
+        */
+
         $columns =
             $this->pickupRequestColumns();
 
         if (
-            isset($columns['pickup_lat'])
+            array_key_exists(
+                'pickup_lat',
+                $columns
+            )
         ) {
             $pickupData['pickup_lat'] =
                 $this->getLocationValue(
@@ -544,7 +550,10 @@ final class GatewayPickupService
         }
 
         if (
-            isset($columns['pickup_lng'])
+            array_key_exists(
+                'pickup_lng',
+                $columns
+            )
         ) {
             $pickupData['pickup_lng'] =
                 $this->getLocationValue(
@@ -558,35 +567,41 @@ final class GatewayPickupService
         }
 
         /*
-         * Only write columns that really exist.
-         */
+        |--------------------------------------------------------------------------
+        | Schema protection
+        |--------------------------------------------------------------------------
+        */
+
         $pickupData =
             array_intersect_key(
                 $pickupData,
                 $columns
             );
 
+        /*
+        |--------------------------------------------------------------------------
+        | Create
+        |--------------------------------------------------------------------------
+        */
+
         $pickup =
             PickupRequest::query()
                 ->create($pickupData);
 
         /*
-         * Generate Tukaatu pickup number.
-         */
-        if (
-            $this->pickupHasColumn(
-                'request_number'
-            )
-        ) {
-            $pickup->request_number =
-                sprintf(
-                    'PICK-%s-%06d',
-                    now()->format('Ymd'),
-                    $pickup->id
-                );
+        |--------------------------------------------------------------------------
+        | Tukaatu pickup number
+        |--------------------------------------------------------------------------
+        */
 
-            $pickup->save();
-        }
+        $pickup->request_number =
+            sprintf(
+                'PICK-%s-%06d',
+                now()->format('Ymd'),
+                $pickup->id
+            );
+
+        $pickup->save();
 
         return $pickup;
     }
@@ -607,10 +622,6 @@ final class GatewayPickupService
             ! empty(
                 $data['preferred_pickup_at']
             )
-            &&
-            $this->pickupHasColumn(
-                'preferred_pickup_at'
-            )
         ) {
             $pickup->preferred_pickup_at =
                 $data['preferred_pickup_at'];
@@ -622,10 +633,6 @@ final class GatewayPickupService
             array_key_exists(
                 'remarks',
                 $data
-            )
-            &&
-            $this->pickupHasColumn(
-                'remarks'
             )
         ) {
             $pickup->remarks =
@@ -650,14 +657,23 @@ final class GatewayPickupService
         Shipment $shipment
     ): void {
         /*
-         * Ownership.
-         */
+        |--------------------------------------------------------------------------
+        | Merchant protection
+        |--------------------------------------------------------------------------
+        */
+
         if (
             (int) $pickup->merchant_id !==
             (int) $shipment->merchant_id
         ) {
             return;
         }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Location protection
+        |--------------------------------------------------------------------------
+        */
 
         if (
             (int) $pickup->pickup_location_id !==
@@ -667,30 +683,18 @@ final class GatewayPickupService
         }
 
         /*
-         * Shipment must be pickup eligible.
-         */
-        if (
-            $shipment->status !==
-            CourierStatus::AWAITING_PICKUP
-        ) {
-            return;
-        }
+        |--------------------------------------------------------------------------
+        | Already attached
+        |--------------------------------------------------------------------------
+        */
 
-        /*
-         * Already attached to this pickup.
-         */
         $existing =
-            PickupRequestShipment::query()
-                ->where(
-                    'pickup_request_id',
-                    $pickup->id
-                )
+            $pickup->shipments()
                 ->where(
                     'shipment_id',
                     $shipment->id
                 )
                 ->whereNull('removed_at')
-                ->lockForUpdate()
                 ->first();
 
         if ($existing) {
@@ -698,8 +702,11 @@ final class GatewayPickupService
         }
 
         /*
-         * Cannot belong to another active pickup.
-         */
+        |--------------------------------------------------------------------------
+        | Another active pickup
+        |--------------------------------------------------------------------------
+        */
+
         $alreadyActive =
             $shipment->pickupRequests()
                 ->whereIn(
@@ -718,17 +725,23 @@ final class GatewayPickupService
         }
 
         /*
-         * Create pivot.
-         */
-        $pickup->shipments()->create([
-            'shipment_id' =>
-                $shipment->id,
-        ]);
+        |--------------------------------------------------------------------------
+        | Create pivot
+        |--------------------------------------------------------------------------
+        */
+
+        $pickup->shipments()
+            ->create([
+                'shipment_id' =>
+                    $shipment->id,
+            ]);
 
         /*
-         * If rider already has the pickup,
-         * immediately promote shipment.
-         */
+        |--------------------------------------------------------------------------
+        | Shipment lifecycle
+        |--------------------------------------------------------------------------
+        */
+
         if (
             in_array(
                 $pickup->status,
@@ -740,52 +753,49 @@ final class GatewayPickupService
                 true
             )
         ) {
-            $oldStatus =
-                $shipment->status;
-
-            $shipment->status =
-                CourierStatus::PICKUP_ASSIGNED;
-
             if (
-                $this->shipmentHasColumn(
-                    'merchant_status'
-                )
+                $shipment->status !==
+                CourierStatus::PICKUP_ASSIGNED
             ) {
+                $oldStatus =
+                    $shipment->status;
+
+                $shipment->status =
+                    CourierStatus::PICKUP_ASSIGNED;
+
                 $shipment->merchant_status =
                     CourierStatus::merchantStatus(
                         CourierStatus::PICKUP_ASSIGNED
                     );
+
+                $shipment->save();
+
+                $this->createTrackingEvent(
+                    shipment:
+                        $shipment,
+
+                    oldStatus:
+                        $oldStatus,
+
+                    newStatus:
+                        CourierStatus::PICKUP_ASSIGNED,
+
+                    description:
+                        'Shipment automatically added to the active pickup request.'
+                );
             }
-
-            $shipment->save();
-
-            $this->createTrackingEvent(
-                shipment: $shipment,
-                oldStatus: $oldStatus,
-                newStatus: CourierStatus::PICKUP_ASSIGNED,
-                description:
-                    'Shipment automatically added to the active pickup request.'
-            );
         }
     }
 
     /*
     |--------------------------------------------------------------------------
-    | RECALCULATE PARCEL QUANTITY
+    | PARCEL QUANTITY
     |--------------------------------------------------------------------------
     */
 
     private function recalculateParcelQuantity(
         PickupRequest $pickup
     ): void {
-        if (
-            ! $this->pickupHasColumn(
-                'parcel_quantity'
-            )
-        ) {
-            return;
-        }
-
         $pickup->parcel_quantity =
             $pickup
                 ->activeShipments()
@@ -810,9 +820,7 @@ final class GatewayPickupService
 
         $schema = DB::getSchemaBuilder();
 
-        if (
-            ! $schema->hasTable($table)
-        ) {
+        if (! $schema->hasTable($table)) {
             return;
         }
 
@@ -864,9 +872,7 @@ final class GatewayPickupService
         ];
 
         $columns =
-            $schema->getColumnListing(
-                $table
-            );
+            $schema->getColumnListing($table);
 
         $data =
             array_intersect_key(
@@ -874,29 +880,8 @@ final class GatewayPickupService
                 array_flip($columns)
             );
 
-        if ($data !== []) {
-            DB::table($table)
-                ->insert($data);
-        }
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | FRESH PICKUP
-    |--------------------------------------------------------------------------
-    */
-
-    private function freshPickup(
-        PickupRequest $pickup
-    ): PickupRequest {
-        return $pickup->fresh([
-            'merchant',
-            'pickupLocation',
-            'pickupBranch',
-            'pickupSubBranch',
-            'assignedStaff',
-            'shipments.shipment',
-        ]);
+        DB::table($table)
+            ->insert($data);
     }
 
     /*
@@ -940,7 +925,7 @@ final class GatewayPickupService
 
     /*
     |--------------------------------------------------------------------------
-    | FIND FOR MERCHANT
+    | FIND MERCHANT PICKUP
     |--------------------------------------------------------------------------
     */
 
@@ -950,11 +935,11 @@ final class GatewayPickupService
     ): PickupRequest {
         return PickupRequest::query()
             ->where(
-                'pickup_requests.merchant_id',
+                'merchant_id',
                 $merchantId
             )
             ->where(
-                'pickup_requests.request_number',
+                'request_number',
                 $requestNumber
             )
             ->with([
@@ -965,37 +950,5 @@ final class GatewayPickupService
                 'shipments.shipment',
             ])
             ->firstOrFail();
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | SCHEMA HELPERS
-    |--------------------------------------------------------------------------
-    */
-
-    private function pickupHasColumn(
-        string $column
-    ): bool {
-        return in_array(
-            $column,
-            DB::getSchemaBuilder()
-                ->getColumnListing(
-                    'pickup_requests'
-                ),
-            true
-        );
-    }
-
-    private function shipmentHasColumn(
-        string $column
-    ): bool {
-        return in_array(
-            $column,
-            DB::getSchemaBuilder()
-                ->getColumnListing(
-                    'shipments'
-                ),
-            true
-        );
     }
 }

@@ -8,6 +8,7 @@ use App\Support\CourierStatus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Modules\Merchant\Models\Merchant;
+use Modules\Pickup\Services\GatewayPickupService;
 use Modules\Shipment\Models\Shipment;
 
 final class ShipmentService
@@ -16,9 +17,29 @@ final class ShipmentService
         private readonly MerchantPickupLocationResolver $pickupResolver,
         private readonly BranchAssignmentService $branchAssignment,
         private readonly ShipmentNumberService $shipmentNumberService,
+        private readonly GatewayPickupService $pickupService,
     ) {
     }
 
+    /**
+     * Create shipment from external Store Manager.
+     *
+     * BUSINESS FLOW:
+     *
+     * 1. Store creates shipment.
+     * 2. Shipment is created as awaiting_pickup.
+     * 3. Tukaatu checks whether an OPEN pickup already exists
+     *    for this merchant + pickup location.
+     * 4. If yes:
+     *       automatically attach shipment to that pickup.
+     *
+     * 5. If no:
+     *       shipment remains awaiting_pickup.
+     *
+     * IMPORTANT:
+     *
+     * Shipment creation NEVER creates a pickup request.
+     */
     public function createFromGateway(
         int $merchantId,
         array $data
@@ -64,9 +85,10 @@ final class ShipmentService
                 $packet,
                 $products
             ): Shipment {
+
                 /*
                 |--------------------------------------------------------------------------
-                | Idempotency
+                | IDEMPOTENCY
                 |--------------------------------------------------------------------------
                 */
 
@@ -82,12 +104,14 @@ final class ShipmentService
                     ->first();
 
                 if ($existing) {
-                    return $existing;
+                    return $existing->fresh([
+                        'pickupRequests',
+                    ]);
                 }
 
                 /*
                 |--------------------------------------------------------------------------
-                | Pickup Location
+                | PICKUP LOCATION
                 |--------------------------------------------------------------------------
                 */
 
@@ -97,7 +121,17 @@ final class ShipmentService
                         $data
                     );
 
-                if (! $pickupLocation) {
+                /*
+                | Self-drop does not require a pickup location.
+                */
+                if (
+                    ! $pickupLocation
+                    &&
+                    ! filter_var(
+                        $data['self_drop'] ?? false,
+                        FILTER_VALIDATE_BOOLEAN
+                    )
+                ) {
                     throw ValidationException::withMessages([
                         'pickup_location_id' => [
                             'Pickup location could not be resolved.',
@@ -107,11 +141,13 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Ownership
+                | OWNERSHIP
                 |--------------------------------------------------------------------------
                 */
 
                 if (
+                    $pickupLocation
+                    &&
                     isset($pickupLocation->merchant_id)
                     &&
                     (int) $pickupLocation->merchant_id
@@ -126,7 +162,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Pickup Coordinates
+                | PICKUP COORDINATES
                 |--------------------------------------------------------------------------
                 */
 
@@ -138,7 +174,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Origin
+                | ORIGIN
                 |--------------------------------------------------------------------------
                 */
 
@@ -158,7 +194,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Destination
+                | DESTINATION
                 |--------------------------------------------------------------------------
                 */
 
@@ -187,7 +223,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Route
+                | ROUTE
                 |--------------------------------------------------------------------------
                 */
 
@@ -199,7 +235,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Tracking Number
+                | TRACKING NUMBER
                 |--------------------------------------------------------------------------
                 */
 
@@ -208,7 +244,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Products
+                | PRODUCTS
                 |--------------------------------------------------------------------------
                 */
 
@@ -220,7 +256,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Self Drop
+                | SELF DROP
                 |--------------------------------------------------------------------------
                 */
 
@@ -231,11 +267,12 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Shipment
+                | SHIPMENT
                 |--------------------------------------------------------------------------
                 */
 
                 $shipmentData = [
+
                     'tracking_number' =>
                         $trackingNumber,
 
@@ -249,7 +286,7 @@ final class ShipmentService
                         'store_manager',
 
                     'pickup_location_id' =>
-                        $pickupLocation->id,
+                        $pickupLocation?->id,
 
                     'pickup_lat' =>
                         $pickupCoordinates['lat'],
@@ -341,16 +378,18 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Optional Schema Columns
+                | OPTIONAL SCHEMA COLUMNS
                 |--------------------------------------------------------------------------
                 */
 
                 $columns = $this->shipmentColumns();
 
-                if (array_key_exists(
-                    'requires_transfer',
-                    $columns
-                )) {
+                if (
+                    array_key_exists(
+                        'requires_transfer',
+                        $columns
+                    )
+                ) {
                     $shipmentData['requires_transfer'] =
                         (bool) (
                             $route['requires_transfer']
@@ -358,17 +397,19 @@ final class ShipmentService
                         );
                 }
 
-                if (array_key_exists(
-                    'route_distance_km',
-                    $columns
-                )) {
+                if (
+                    array_key_exists(
+                        'route_distance_km',
+                        $columns
+                    )
+                ) {
                     $shipmentData['route_distance_km'] =
                         $route['distance_km'] ?? 0;
                 }
 
                 /*
                 |--------------------------------------------------------------------------
-                | Schema Protection
+                | SCHEMA PROTECTION
                 |--------------------------------------------------------------------------
                 */
 
@@ -379,7 +420,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Create
+                | CREATE SHIPMENT
                 |--------------------------------------------------------------------------
                 */
 
@@ -390,7 +431,7 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | Tracking Event
+                | TRACKING EVENT
                 |--------------------------------------------------------------------------
                 */
 
@@ -399,19 +440,58 @@ final class ShipmentService
                     oldStatus: null,
                     newStatus: CourierStatus::AWAITING_PICKUP,
                     description:
-                        'Shipment created successfully. Awaiting pickup request.'
+                        'Shipment created successfully. Awaiting pickup.'
                 );
 
                 /*
                 |--------------------------------------------------------------------------
-                | IMPORTANT
+                | AUTOMATIC OPEN-PICKUP ATTACHMENT
                 |--------------------------------------------------------------------------
                 |
-                | Shipment creation does NOT create a pickup request.
+                | This is the critical part of the new flow.
+                |
+                | If the merchant already has an open pickup for this
+                | pickup location, this newly-created shipment joins it.
+                |
+                | Example:
+                |
+                | PR-001 is assigned to rider.
+                |
+                | Store creates Shipment #103.
+                |
+                | Shipment #103 automatically joins PR-001.
+                |
+                | No new PR is created.
                 |
                 */
 
-                return $shipment->fresh();
+                if (
+                    $pickupLocation
+                    &&
+                    ! $selfDrop
+                ) {
+                    $this->pickupService
+                        ->attachShipmentToOpenPickup(
+                            merchantId:
+                                $merchant->id,
+
+                            pickupLocationId:
+                                (int) $pickupLocation->id,
+
+                            shipment:
+                                $shipment,
+                        );
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | RETURN
+                |--------------------------------------------------------------------------
+                */
+
+                return $shipment->fresh([
+                    'pickupRequests',
+                ]);
             }
         );
     }
@@ -420,13 +500,6 @@ final class ShipmentService
     |--------------------------------------------------------------------------
     | MANUAL SHIPMENT CREATION
     |--------------------------------------------------------------------------
-    |
-    | Your ShipmentController calls:
-    |
-    | $service->create(...)
-    |
-    | Therefore this method MUST exist.
-    |
     */
 
     public function create(
@@ -435,22 +508,10 @@ final class ShipmentService
         ?int $merchantId = null,
         string $source = 'manual'
     ): Shipment {
-        /*
-        |--------------------------------------------------------------------------
-        | Merchant
-        |--------------------------------------------------------------------------
-        */
 
         if ($merchantId !== null) {
             $data['merchant_id'] = $merchantId;
         }
-
-        /*
-        |--------------------------------------------------------------------------
-        | If the manual shipment already contains a merchant,
-        | use the same gateway creation pipeline where possible.
-        |--------------------------------------------------------------------------
-        */
 
         if (
             ! empty($data['merchant_id'])
@@ -465,18 +526,13 @@ final class ShipmentService
             );
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | Generic manual creation
-        |--------------------------------------------------------------------------
-        */
-
         return DB::transaction(
             function () use (
                 $data,
                 $userId,
                 $source
             ): Shipment {
+
                 $trackingNumber =
                     $data['tracking_number']
                     ?? $this->shipmentNumberService->generate();
@@ -623,6 +679,9 @@ final class ShipmentService
             'tracking_number' =>
                 $shipment->tracking_number,
 
+            'old_status' =>
+                $oldStatus,
+
             'status' =>
                 $newStatus,
 
@@ -632,9 +691,13 @@ final class ShipmentService
                 ),
 
             'branch_id' =>
+                $shipment->current_branch_id
+                ??
                 $shipment->origin_branch_id,
 
             'sub_branch_id' =>
+                $shipment->current_sub_branch_id
+                ??
                 $shipment->origin_sub_branch_id,
 
             'location_text' =>
@@ -717,28 +780,17 @@ final class ShipmentService
                 $userId,
                 $note
             ): Shipment {
+
                 $oldStatus =
                     $shipment->status;
 
                 $shipment->status =
                     $status;
 
-                /*
-                |--------------------------------------------------------------------------
-                | Merchant Status
-                |--------------------------------------------------------------------------
-                */
-
                 $shipment->merchant_status =
                     CourierStatus::merchantStatus(
                         $status
                     );
-
-                /*
-                |--------------------------------------------------------------------------
-                | Delivered
-                |--------------------------------------------------------------------------
-                */
 
                 if (
                     $status === CourierStatus::DELIVERED
@@ -747,12 +799,6 @@ final class ShipmentService
                         now();
                 }
 
-                /*
-                |--------------------------------------------------------------------------
-                | Cancelled
-                |--------------------------------------------------------------------------
-                */
-
                 if (
                     $status === CourierStatus::CANCELLED
                 ) {
@@ -760,19 +806,7 @@ final class ShipmentService
                         now();
                 }
 
-                /*
-                |--------------------------------------------------------------------------
-                | Save
-                |--------------------------------------------------------------------------
-                */
-
                 $shipment->save();
-
-                /*
-                |--------------------------------------------------------------------------
-                | Tracking
-                |--------------------------------------------------------------------------
-                */
 
                 $this->createTrackingEvent(
                     shipment: $shipment,

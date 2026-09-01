@@ -1,10 +1,12 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Modules\Shipment\Services;
 
 use Illuminate\Support\Str;
 
-class ShipmentNumberService
+final class ShipmentNumberService
 {
     public function generate(): string
     {
@@ -13,7 +15,10 @@ class ShipmentNumberService
             . '-'
             . strtoupper(
                 Str::padLeft(
-                    (string) random_int(1, 999999),
+                    (string) random_int(
+                        1,
+                        999999
+                    ),
                     6,
                     '0'
                 )

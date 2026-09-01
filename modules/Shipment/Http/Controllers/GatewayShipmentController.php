@@ -25,6 +25,17 @@ final class GatewayShipmentController extends Controller
      * Create shipment from external Store Manager.
      *
      * POST /api/v1/gateway/shipments
+     *
+     * IMPORTANT:
+     *
+     * Shipment creation does NOT require a pickup request.
+     *
+     * If an open pickup already exists for this merchant +
+     * pickup location, ShipmentService will automatically attach
+     * the newly-created shipment to that pickup.
+     *
+     * Otherwise the shipment remains awaiting_pickup until
+     * the merchant requests a pickup.
      */
     public function store(Request $request): JsonResponse
     {
@@ -233,11 +244,10 @@ final class GatewayShipmentController extends Controller
             'store_manager';
 
         try {
-            $shipment =
-                $this->shipmentService->createFromGateway(
-                    merchantId: $merchantId,
-                    data: $data,
-                );
+            $shipment = $this->shipmentService->createFromGateway(
+                merchantId: $merchantId,
+                data: $data,
+            );
 
             return ApiResponse::success(
                 $shipment,
@@ -268,8 +278,6 @@ final class GatewayShipmentController extends Controller
     }
 
     /**
-     * Retrieve shipment.
-     *
      * GET /api/v1/gateway/shipments/{trackingNumber}
      */
     public function show(
@@ -297,6 +305,7 @@ final class GatewayShipmentController extends Controller
                 'destinationSubBranch',
                 'routeSteps.fromBranch',
                 'routeSteps.toBranch',
+                'pickupRequests',
             ])
             ->firstOrFail();
 
@@ -307,8 +316,6 @@ final class GatewayShipmentController extends Controller
     }
 
     /**
-     * Cancel shipment.
-     *
      * POST /api/v1/gateway/shipments/{trackingNumber}/cancel
      */
     public function cancel(
@@ -348,10 +355,9 @@ final class GatewayShipmentController extends Controller
         }
 
         try {
-            $updated =
-                $this->shipmentService->cancelFromGateway(
-                    shipment: $shipment,
-                );
+            $updated = $this->shipmentService->cancelFromGateway(
+                shipment: $shipment,
+            );
 
             return ApiResponse::success(
                 $updated,

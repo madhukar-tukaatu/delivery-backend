@@ -16,9 +16,6 @@ final class GatewayCreatePickupRequest extends FormRequest
     public function rules(): array
     {
         return [
-            /*
-             * Physical pickup location/store location.
-             */
             'pickup_location_id' => [
                 'required',
                 'integer',
@@ -26,13 +23,13 @@ final class GatewayCreatePickupRequest extends FormRequest
             ],
 
             /*
-             * Store's own pickup/container reference.
+             * This is the STORE's own pickup container.
              *
-             * Example:
+             * Examples:
              *
              * PR-001
              * PR-002
-             * STORE-20260831-001
+             * PR-003
              */
             'store_reference' => [
                 'required',
@@ -51,16 +48,5 @@ final class GatewayCreatePickupRequest extends FormRequest
                 'max:1000',
             ],
         ];
-    }
-
-    protected function prepareForValidation(): void
-    {
-        if ($this->has('store_reference')) {
-            $this->merge([
-                'store_reference' => trim(
-                    (string) $this->input('store_reference')
-                ),
-            ]);
-        }
     }
 }

@@ -22,9 +22,16 @@ final class GatewayPickupController extends Controller
     }
 
     /**
-     * Create a pickup request for the authenticated merchant.
+     * Create/request a pickup batch.
      *
      * POST /api/v1/gateway/pickups
+     *
+     * The store calls this only when it wants to initiate
+     * a physical pickup.
+     *
+     * Example:
+     *
+     * store_reference = PR-001
      */
     public function store(
         GatewayCreatePickupRequest $request
@@ -41,8 +48,11 @@ final class GatewayPickupController extends Controller
 
         try {
             $pickup = $this->pickupService->create(
-                merchantId: $merchantId,
-                data: $request->validated(),
+                merchantId:
+                    $merchantId,
+
+                data:
+                    $request->validated(),
             );
 
             return ApiResponse::success(
@@ -50,27 +60,35 @@ final class GatewayPickupController extends Controller
                 'Pickup request submitted successfully.',
                 201
             );
+
         } catch (ValidationException $e) {
+
             return response()->json([
                 'success' => false,
-                'message' => 'Pickup request validation failed.',
-                'errors' => $e->errors(),
+                'message' =>
+                    'Pickup request validation failed.',
+                'errors' =>
+                    $e->errors(),
             ], 422);
+
         } catch (Throwable $e) {
+
             report($e);
 
             return response()->json([
                 'success' => false,
-                'message' => 'Unable to request pickup.',
+                'message' =>
+                    'Unable to request pickup.',
                 'errors' => [
-                    'exception' => $e->getMessage(),
+                    'exception' =>
+                        $e->getMessage(),
                 ],
             ], 422);
         }
     }
 
     /**
-     * Get a pickup request belonging to the authenticated merchant.
+     * Get pickup by Tukaatu pickup request number.
      *
      * GET /api/v1/gateway/pickups/{requestNumber}
      */
@@ -88,10 +106,14 @@ final class GatewayPickupController extends Controller
             'Invalid merchant authentication.'
         );
 
-        $pickup = $this->pickupService->findForMerchant(
-            merchantId: $merchantId,
-            requestNumber: $requestNumber,
-        );
+        $pickup =
+            $this->pickupService->findForMerchant(
+                merchantId:
+                    $merchantId,
+
+                requestNumber:
+                    $requestNumber,
+            );
 
         return ApiResponse::success(
             new GatewayPickupResource($pickup),

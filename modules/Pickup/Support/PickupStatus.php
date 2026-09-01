@@ -8,8 +8,6 @@ final class PickupStatus
 {
     public const REQUESTED = 'requested';
 
-    public const ACCEPTED = 'accepted';
-
     public const ASSIGNED = 'assigned';
 
     public const STARTED = 'started';
@@ -23,13 +21,25 @@ final class PickupStatus
     public const CANCELLED = 'cancelled';
 
     /**
-     * Pickups that are still operational.
+     * Pickup statuses which may still receive
+     * newly-created shipments.
+     *
+     * BUSINESS RULE:
+     *
+     * A shipment can join PR-001 while:
+     *
+     * requested
+     * assigned
+     * started
+     * arrived
+     *
+     * Once completed/failed/cancelled,
+     * the pickup is closed.
      */
-    public static function active(): array
+    public static function acceptingShipments(): array
     {
         return [
             self::REQUESTED,
-            self::ACCEPTED,
             self::ASSIGNED,
             self::STARTED,
             self::ARRIVED,
@@ -37,17 +47,17 @@ final class PickupStatus
     }
 
     /**
-     * Pickups that can still receive shipments.
+     * Active pickup statuses used when checking whether
+     * a shipment is already attached to an active pickup.
      */
-    public static function acceptingShipments(): array
+    public static function active(): array
     {
-        return [
-            self::REQUESTED,
-            self::ACCEPTED,
-            self::ASSIGNED,
-        ];
+        return self::acceptingShipments();
     }
 
+    /**
+     * Closed statuses.
+     */
     public static function closed(): array
     {
         return [

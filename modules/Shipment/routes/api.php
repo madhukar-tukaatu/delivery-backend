@@ -13,37 +13,28 @@ use Modules\Shipment\Http\Controllers\GatewayShipmentController;
 use Modules\Shipment\Http\Controllers\ShipmentController;
 
 use Modules\Shipment\Http\Controllers\StaffDeliveryLifecycleController;
-use Modules\Shipment\Http\Controllers\StaffPickupLifecycleController;
 
 /*
 |--------------------------------------------------------------------------
 | Shipment API Routes
 |--------------------------------------------------------------------------
 |
-| Shipment module routes.
+| Shipment module owns:
 |
-| Main areas:
+| - Shipments
+| - Shipment status
+| - Delivery lifecycle
+| - Staff
+| - Shipment administration
 |
-| /v1/admin/*
-| /v1/staff/*
-| /v1/merchant/*
-| /v1/gateway/*
+| Pickup lifecycle belongs to the Pickup module.
 |
 |--------------------------------------------------------------------------
 */
 
-
 /*
 |--------------------------------------------------------------------------
 | STAFF
-|--------------------------------------------------------------------------
-|
-| Used by:
-|
-| - Pickup staff
-| - Riders
-| - Delivery staff
-|
 |--------------------------------------------------------------------------
 */
 
@@ -51,6 +42,7 @@ Route::prefix('v1/staff')
     ->name('staff.')
     ->middleware([
         'auth:sanctum',
+        'branch.scope',
     ])
     ->group(function (): void {
 
@@ -60,63 +52,48 @@ Route::prefix('v1/staff')
 
             /*
             |--------------------------------------------------------------------------
-            | PICKUPS
-            |--------------------------------------------------------------------------
-            |
-            | Controller:
-            | StaffPickupLifecycleController
-            |
-            */
-
-            Route::get(
-                'pickups',
-                [StaffPickupLifecycleController::class, 'index']
-            )->name('pickups.index');
-
-            Route::post(
-                'pickups/{pickup}/accept',
-                [StaffPickupLifecycleController::class, 'accept']
-            )->name('pickups.accept');
-
-            Route::post(
-                'pickups/{pickup}/picked-up',
-                [StaffPickupLifecycleController::class, 'pickedUp']
-            )->name('pickups.picked-up');
-
-
-            /*
-            |--------------------------------------------------------------------------
             | DELIVERIES
             |--------------------------------------------------------------------------
-            |
-            | Controller:
-            | StaffDeliveryLifecycleController
-            |
             */
 
             Route::get(
                 'deliveries',
-                [StaffDeliveryLifecycleController::class, 'index']
+                [
+                    StaffDeliveryLifecycleController::class,
+                    'index',
+                ]
             )->name('deliveries.index');
 
             Route::post(
                 'deliveries/{delivery}/accept',
-                [StaffDeliveryLifecycleController::class, 'accept']
+                [
+                    StaffDeliveryLifecycleController::class,
+                    'accept',
+                ]
             )->name('deliveries.accept');
 
             Route::post(
                 'deliveries/{delivery}/out-for-delivery',
-                [StaffDeliveryLifecycleController::class, 'outForDelivery']
+                [
+                    StaffDeliveryLifecycleController::class,
+                    'outForDelivery',
+                ]
             )->name('deliveries.out-for-delivery');
 
             Route::post(
                 'deliveries/{delivery}/delivered',
-                [StaffDeliveryLifecycleController::class, 'delivered']
+                [
+                    StaffDeliveryLifecycleController::class,
+                    'delivered',
+                ]
             )->name('deliveries.delivered');
 
             Route::post(
                 'deliveries/{delivery}/failed',
-                [StaffDeliveryLifecycleController::class, 'failed']
+                [
+                    StaffDeliveryLifecycleController::class,
+                    'failed',
+                ]
             )->name('deliveries.failed');
         });
     });
@@ -125,15 +102,6 @@ Route::prefix('v1/staff')
 /*
 |--------------------------------------------------------------------------
 | ADMIN / BRANCH MANAGEMENT
-|--------------------------------------------------------------------------
-|
-| Used by:
-|
-| - Super Admin
-| - Main Admin
-| - Branch Manager
-| - Sub Branch Manager
-|
 |--------------------------------------------------------------------------
 */
 
@@ -149,7 +117,6 @@ Route::prefix('v1/admin')
             'route.permission',
         ])->group(function (): void {
 
-
             /*
             |--------------------------------------------------------------------------
             | STAFF
@@ -158,32 +125,50 @@ Route::prefix('v1/admin')
 
             Route::get(
                 'staff',
-                [AdminStaffController::class, 'index']
+                [
+                    AdminStaffController::class,
+                    'index',
+                ]
             )->name('staff.index');
 
             Route::post(
                 'staff',
-                [AdminStaffController::class, 'store']
+                [
+                    AdminStaffController::class,
+                    'store',
+                ]
             )->name('staff.store');
 
             Route::get(
                 'staff/{staff}',
-                [AdminStaffController::class, 'show']
+                [
+                    AdminStaffController::class,
+                    'show',
+                ]
             )->name('staff.show');
 
             Route::put(
                 'staff/{staff}',
-                [AdminStaffController::class, 'update']
+                [
+                    AdminStaffController::class,
+                    'update',
+                ]
             )->name('staff.update');
 
             Route::delete(
                 'staff/{staff}',
-                [AdminStaffController::class, 'destroy']
+                [
+                    AdminStaffController::class,
+                    'destroy',
+                ]
             )->name('staff.destroy');
 
             Route::post(
                 'staff/{staff}/toggle',
-                [AdminStaffController::class, 'toggle']
+                [
+                    AdminStaffController::class,
+                    'toggle',
+                ]
             )->name('staff.toggle');
 
 
@@ -195,32 +180,50 @@ Route::prefix('v1/admin')
 
             Route::get(
                 'shipments',
-                [ShipmentController::class, 'index']
+                [
+                    ShipmentController::class,
+                    'index',
+                ]
             )->name('shipments.index');
 
             Route::post(
                 'shipments',
-                [ShipmentController::class, 'store']
+                [
+                    ShipmentController::class,
+                    'store',
+                ]
             )->name('shipments.store');
 
             Route::get(
                 'shipments/{shipment}',
-                [ShipmentController::class, 'show']
+                [
+                    ShipmentController::class,
+                    'show',
+                ]
             )->name('shipments.show');
 
             Route::put(
                 'shipments/{shipment}',
-                [ShipmentController::class, 'update']
+                [
+                    ShipmentController::class,
+                    'update',
+                ]
             )->name('shipments.update');
 
             Route::post(
                 'shipments/{shipment}/status',
-                [ShipmentController::class, 'status']
+                [
+                    ShipmentController::class,
+                    'status',
+                ]
             )->name('shipments.status');
 
             Route::post(
                 'shipments/{shipment}/cancel',
-                [ShipmentController::class, 'cancel']
+                [
+                    ShipmentController::class,
+                    'cancel',
+                ]
             )->name('shipments.cancel');
 
 
@@ -232,17 +235,26 @@ Route::prefix('v1/admin')
 
             Route::get(
                 'shipment-tasks',
-                [AdminShipmentTaskController::class, 'index']
+                [
+                    AdminShipmentTaskController::class,
+                    'index',
+                ]
             )->name('shipment-tasks.index');
 
             Route::post(
                 'shipment-tasks/{id}/assign',
-                [AdminShipmentTaskController::class, 'assign']
+                [
+                    AdminShipmentTaskController::class,
+                    'assign',
+                ]
             )->name('shipment-tasks.assign');
 
             Route::post(
                 'shipment-tasks/{id}/status',
-                [AdminShipmentTaskController::class, 'updateStatus']
+                [
+                    AdminShipmentTaskController::class,
+                    'updateStatus',
+                ]
             )->name('shipment-tasks.status');
 
 
@@ -254,18 +266,27 @@ Route::prefix('v1/admin')
 
             Route::get(
                 'notifications',
-                [AdminNotificationController::class, 'index']
+                [
+                    AdminNotificationController::class,
+                    'index',
+                ]
             )->name('notifications.index');
 
             Route::post(
                 'notifications/{id}/read',
-                [AdminNotificationController::class, 'markRead']
+                [
+                    AdminNotificationController::class,
+                    'markRead',
+                ]
             )->name('notifications.read');
 
             Route::post(
                 'notifications/read-all',
-                [AdminNotificationController::class, 'markAllRead'
-            ])->name('notifications.read-all');
+                [
+                    AdminNotificationController::class,
+                    'markAllRead',
+                ]
+            )->name('notifications.read-all');
         });
     });
 
@@ -291,7 +312,10 @@ Route::prefix('v1/merchant')
 
             Route::post(
                 'shipments',
-                [MerchantShipmentController::class, 'store']
+                [
+                    MerchantShipmentController::class,
+                    'store',
+                ]
             )->name('shipments.store');
         });
     });
@@ -300,19 +324,6 @@ Route::prefix('v1/merchant')
 /*
 |--------------------------------------------------------------------------
 | EXTERNAL STORE MANAGER / GATEWAY
-|--------------------------------------------------------------------------
-|
-| Authentication:
-|
-| X-Tukaatu-Key
-| X-Tukaatu-Secret
-|
-| merchant.api-key middleware populates:
-|
-| request()->attributes->get('merchant_id')
-|
-| Shipment creation and pickup creation are intentionally separate.
-|
 |--------------------------------------------------------------------------
 */
 
@@ -323,23 +334,24 @@ Route::prefix('v1/gateway')
     ])
     ->group(function (): void {
 
-
         /*
         |--------------------------------------------------------------------------
         | CREATE SHIPMENT
         |--------------------------------------------------------------------------
         |
-        | Creates:
+        | This NEVER creates a pickup.
         |
-        | awaiting_pickup
-        |
-        | Does NOT create pickup request.
+        | If an open pickup already exists, the new shipment is
+        | automatically attached to it by ShipmentService.
         |
         */
 
         Route::post(
             'shipments',
-            [GatewayShipmentController::class, 'store']
+            [
+                GatewayShipmentController::class,
+                'store',
+            ]
         )->name('shipments.store');
 
 
@@ -351,7 +363,10 @@ Route::prefix('v1/gateway')
 
         Route::get(
             'shipments/{trackingNumber}',
-            [GatewayShipmentController::class, 'show']
+            [
+                GatewayShipmentController::class,
+                'show',
+            ]
         )->name('shipments.show');
 
 
@@ -363,6 +378,9 @@ Route::prefix('v1/gateway')
 
         Route::post(
             'shipments/{trackingNumber}/cancel',
-            [GatewayShipmentController::class, 'cancel']
+            [
+                GatewayShipmentController::class,
+                'cancel',
+            ]
         )->name('shipments.cancel');
     });

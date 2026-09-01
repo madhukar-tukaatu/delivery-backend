@@ -4,135 +4,151 @@ declare(strict_types=1);
 
 namespace Modules\Staff\Services;
 
-use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
-use Modules\Staff\Models\Staff;
 use Spatie\Permission\Models\Role;
-use Symfony\Component\HttpKernel\Exception\AccessDeniedHttpException;
-use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
+use RuntimeException;
 
 final class StaffService
 {
     /*
     |--------------------------------------------------------------------------
-    | LIST
+    | STAFF ROLES
     |--------------------------------------------------------------------------
+    |
+    | These are roles that can be assigned from Branch Staff management.
+    |
     */
 
-    public function paginate(
-        Request $request
-    ): LengthAwarePaginator {
-        $branchId =
-            $this->currentBranchId();
+    private const STAFF_ROLES = [
+        'rider',
+        'pickup_rider',
+        'delivery_staff',
+        'staff',
+    ];
 
-        $query =
-            Staff::query()
-                ->with([
-                    'roles:id,name',
-                    'branch',
-                ])
-                ->where(
-                    'branch_id',
-                    $branchId
-                );
+    /*
+    |--------------------------------------------------------------------------
+    | QUERY FOR USER
+    |--------------------------------------------------------------------------
+    |
+    | This is the security boundary.
+    |
+    | Global administrators can see all staff.
+    |
+    | Branch users can ONLY see users belonging to their branch.
+    |
+    */
 
-        $search =
-            trim(
-                (string) $request->input(
-                    'q',
-                    ''
-                )
+    public function queryForUser(
+        User $user
+    ): Builder {
+        $query = User::query()
+            ->with([
+                'roles:id,name',
+                'branch:id,name',
+            ])
+            ->whereHas(
+                'roles',
+                function (
+                    Builder $roleQuery
+                ): void {
+                    $roleQuery->whereIn(
+                        'name',
+                        self::STAFF_ROLES
+                    );
+                }
             );
 
-        if ($search !== '') {
-            $query->where(function (
-                Builder $builder
-            ) use ($search) {
+        /*
+        |--------------------------------------------------------------------------
+        | Global administrator
+        |--------------------------------------------------------------------------
+        */
 
-                $builder
-                    ->where(
-                        'name',
-                        'like',
-                        "%{$search}%"
-                    )
-                    ->orWhere(
-                        'email',
-                        'like',
-                        "%{$search}%"
-                    )
-                    ->orWhere(
-                        'phone',
-                        'like',
-                        "%{$search}%"
-                    );
-            });
+        if (
+            $user->hasAnyRole([
+                'super_admin',
+                'admin',
+            ])
+        ) {
+            return $query
+                ->orderBy(
+                    'name'
+                );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Branch manager / branch staff
+        |--------------------------------------------------------------------------
+        */
+
+        if ($user->branch_id === null) {
+            return $query->whereRaw(
+                '1 = 0'
+            );
         }
 
         return $query
-            ->latest('id')
-            ->paginate(
-                min(
-                    (int) $request->input(
-                        'per_page',
-                        20
-                    ),
-                    100
-                )
-            );
-    }
-
-    /*
-    |--------------------------------------------------------------------------
-    | FIND
-    |--------------------------------------------------------------------------
-    */
-
-    public function findForCurrentUser(
-        int $staffId
-    ): Staff {
-        return Staff::query()
-            ->with([
-                'roles:id,name',
-                'branch',
-            ])
             ->where(
                 'branch_id',
-                $this->currentBranchId()
+                (int) $user->branch_id
             )
-            ->findOrFail(
-                $staffId
+            ->orderBy(
+                'name'
             );
     }
 
     /*
     |--------------------------------------------------------------------------
-    | ASSIGNABLE ROLES
+    | FIND STAFF FOR USER
     |--------------------------------------------------------------------------
     */
 
-    public function assignableRoles()
-    {
-        return Role::query()
+    public function findForUser(
+        User $user,
+        int $staffId
+    ): ?User {
+        return $this->queryForUser(
+            $user
+        )->whereKey(
+            $staffId
+        )->first();
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | AVAILABLE ROLES
+    |--------------------------------------------------------------------------
+    |
+    | Branch managers don't need roles.view.
+    |
+    | They only get staff-related roles.
+    |
+    */
+
+    public function availableRolesForUser(
+        User $user
+    ) {
+        $query = Role::query()
             ->where(
                 'guard_name',
                 'web'
             )
-            ->whereNotIn(
+            ->whereIn(
                 'name',
-                [
-                    'super_admin',
-                    'branch_manager',
-                ]
+                self::STAFF_ROLES
             )
-            ->orderBy('name')
-            ->get([
-                'id',
-                'name',
-            ]);
+            ->orderBy(
+                'name'
+            );
+
+        return $query->get([
+            'id',
+            'name',
+        ]);
     }
 
     /*
@@ -141,105 +157,55 @@ final class StaffService
     |--------------------------------------------------------------------------
     */
 
-    public function create(
+    public function createForUser(
+        User $creator,
         array $data
-    ): Staff {
-        $branchId =
-            $this->currentBranchId();
-
-        /*
-        |--------------------------------------------------------------------------
-        | Never accept branch_id from frontend.
-        |--------------------------------------------------------------------------
-        */
-
-        unset(
-            $data['branch_id']
+    ): User {
+        $roleName = $this->validateRole(
+            $data['role'] ?? null
         );
 
-        return DB::transaction(
-            function () use (
-                $data,
-                $branchId
-            ): Staff {
-
-                $roleIds =
-                    $data['role_ids']
-                    ?? [];
-
-                unset(
-                    $data['role_ids']
-                );
-
-                /*
-                |--------------------------------------------------------------------------
-                | Password
-                |--------------------------------------------------------------------------
-                */
-
-                if (
-                    isset(
-                        $data['password']
-                    )
-                ) {
-                    $data['password'] =
-                        Hash::make(
-                            $data['password']
-                        );
-                }
-
-                /*
-                |--------------------------------------------------------------------------
-                | Generate invitation token if
-                | your application uses invitations.
-                |--------------------------------------------------------------------------
-                */
-
-                $staff =
-                    Staff::create(
-                        array_merge(
-                            $data,
-                            [
-                                'branch_id' =>
-                                    $branchId,
-
-                                'is_active' =>
-                                    true,
-                            ]
-                        )
-                    );
-
-                /*
-                |--------------------------------------------------------------------------
-                | Only assign allowed roles.
-                |--------------------------------------------------------------------------
-                */
-
-                $roles =
-                    Role::query()
-                        ->whereIn(
-                            'id',
-                            $roleIds
-                        )
-                        ->whereNotIn(
-                            'name',
-                            [
-                                'super_admin',
-                                'branch_manager',
-                            ]
-                        )
-                        ->get();
-
-                $staff->syncRoles(
-                    $roles
-                );
-
-                return $staff->load([
-                    'roles',
-                    'branch',
-                ]);
-            }
+        $branchId = $this->resolveBranchId(
+            $creator
         );
+
+        $staff = new User();
+
+        $staff->name =
+            $data['name'];
+
+        $staff->email =
+            $data['email'];
+
+        $staff->phone =
+            $data['phone'] ?? null;
+
+        $staff->password =
+            Hash::make(
+                $data['password']
+            );
+
+        $staff->branch_id =
+            $branchId;
+
+        $staff->is_active =
+            array_key_exists(
+                'is_active',
+                $data
+            )
+                ? (bool) $data['is_active']
+                : true;
+
+        $staff->save();
+
+        $staff->syncRoles([
+            $roleName,
+        ]);
+
+        return $staff->load([
+            'roles:id,name',
+            'branch:id,name',
+        ]);
     }
 
     /*
@@ -248,86 +214,93 @@ final class StaffService
     |--------------------------------------------------------------------------
     */
 
-    public function update(
-        int $staffId,
+    public function updateForUser(
+        User $editor,
+        User $staff,
         array $data
-    ): Staff {
-        $staff =
-            $this->findForCurrentUser(
-                $staffId
-            );
-
-        unset(
-            $data['branch_id']
+    ): User {
+        $roleName = $this->validateRole(
+            $data['role'] ?? null
         );
 
-        return DB::transaction(
-            function () use (
-                $staff,
+        /*
+        |--------------------------------------------------------------------------
+        | Never allow branch managers to move
+        | staff into another branch.
+        |--------------------------------------------------------------------------
+        */
+
+        if (
+            ! $editor->hasAnyRole([
+                'super_admin',
+                'admin',
+            ])
+        ) {
+            $staff->branch_id =
+                $editor->branch_id;
+        }
+
+        $staff->name =
+            $data['name'];
+
+        $staff->email =
+            $data['email'];
+
+        $staff->phone =
+            $data['phone'] ?? null;
+
+        if (
+            ! empty(
+                $data['password']
+            )
+        ) {
+            $staff->password =
+                Hash::make(
+                    $data['password']
+                );
+        }
+
+        if (
+            array_key_exists(
+                'is_active',
                 $data
-            ): Staff {
+            )
+        ) {
+            $staff->is_active =
+                (bool) $data['is_active'];
+        }
 
-                $roleIds =
-                    $data['role_ids']
-                    ?? null;
+        $staff->save();
 
-                unset(
-                    $data['role_ids']
-                );
+        $staff->syncRoles([
+            $roleName,
+        ]);
 
-                if (
-                    isset(
-                        $data['password']
-                    ) &&
-                    filled(
-                        $data['password']
-                    )
-                ) {
-                    $data['password'] =
-                        Hash::make(
-                            $data['password']
-                        );
-                } else {
-                    unset(
-                        $data['password']
-                    );
-                }
+        return $staff->load([
+            'roles:id,name',
+            'branch:id,name',
+        ]);
+    }
 
-                $staff->update(
-                    $data
-                );
+    /*
+    |--------------------------------------------------------------------------
+    | TOGGLE
+    |--------------------------------------------------------------------------
+    */
 
-                if (
-                    is_array(
-                        $roleIds
-                    )
-                ) {
-                    $roles =
-                        Role::query()
-                            ->whereIn(
-                                'id',
-                                $roleIds
-                            )
-                            ->whereNotIn(
-                                'name',
-                                [
-                                    'super_admin',
-                                    'branch_manager',
-                                ]
-                            )
-                            ->get();
+    public function toggleForUser(
+        User $editor,
+        User $staff
+    ): User {
+        $staff->is_active =
+            ! (bool) $staff->is_active;
 
-                    $staff->syncRoles(
-                        $roles
-                    );
-                }
+        $staff->save();
 
-                return $staff->fresh([
-                    'roles',
-                    'branch',
-                ]);
-            }
-        );
+        return $staff->load([
+            'roles:id,name',
+            'branch:id,name',
+        ]);
     }
 
     /*
@@ -336,81 +309,75 @@ final class StaffService
     |--------------------------------------------------------------------------
     */
 
-    public function deactivate(
-        int $staffId
+    public function deactivateForUser(
+        User $editor,
+        User $staff
     ): void {
-        $staff =
-            $this->findForCurrentUser(
-                $staffId
-            );
+        $staff->is_active = false;
 
-        $staff->update([
-            'is_active' => false,
-        ]);
+        $staff->save();
     }
 
     /*
     |--------------------------------------------------------------------------
-    | TOGGLE STATUS
+    | RESOLVE BRANCH
     |--------------------------------------------------------------------------
     */
 
-    public function toggleStatus(
-        int $staffId
-    ): Staff {
-        $staff =
-            $this->findForCurrentUser(
-                $staffId
+    private function resolveBranchId(
+        User $creator
+    ): ?int {
+        if (
+            $creator->hasAnyRole([
+                'super_admin',
+                'admin',
+            ])
+        ) {
+            /*
+             * Global admins must explicitly provide
+             * a branch in the future if cross-branch
+             * staff creation is required.
+             */
+            return $creator->branch_id !== null
+                ? (int) $creator->branch_id
+                : null;
+        }
+
+        if ($creator->branch_id === null) {
+            throw new RuntimeException(
+                'The authenticated user is not assigned to a branch.'
             );
+        }
 
-        $staff->update([
-            'is_active' =>
-                !$staff->is_active,
-        ]);
-
-        return $staff->fresh([
-            'roles',
-            'branch',
-        ]);
+        return (int) $creator->branch_id;
     }
 
     /*
     |--------------------------------------------------------------------------
-    | CURRENT BRANCH
+    | VALIDATE ROLE
     |--------------------------------------------------------------------------
     */
 
-    private function currentBranchId(): int
-    {
-        $user =
-            auth()->user();
+    private function validateRole(
+        ?string $role
+    ): string {
+        $role = trim(
+            (string) $role
+        );
 
-        if (!$user) {
-            throw new AccessDeniedHttpException(
-                'Unauthenticated.'
+        if (
+            $role === '' ||
+            ! in_array(
+                $role,
+                self::STAFF_ROLES,
+                true
+            )
+        ) {
+            throw new RuntimeException(
+                'The selected role cannot be assigned from branch staff management.'
             );
         }
 
-        /*
-        |--------------------------------------------------------------------------
-        | IMPORTANT
-        |--------------------------------------------------------------------------
-        |
-        | Adjust this one part if your User model stores the branch
-        | relationship differently.
-        |
-        */
-
-        $branchId =
-            $user->branch_id
-            ?? $user->branch?->id;
-
-        if (!$branchId) {
-            throw new AccessDeniedHttpException(
-                'Your account is not assigned to a branch.'
-            );
-        }
-
-        return (int) $branchId;
+        return $role;
     }
 }

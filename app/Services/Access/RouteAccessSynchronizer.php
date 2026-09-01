@@ -1,4 +1,7 @@
 <?php
+
+declare(strict_types=1);
+
 namespace App\Services\Access;
 
 use Illuminate\Routing\Route;
@@ -13,70 +16,104 @@ use Spatie\Permission\PermissionRegistrar;
 
 final class RouteAccessSynchronizer
 {
+    /**
+     * Permission guard used by the application.
+     */
     private string $guardName = 'web';
 
+    /**
+     * Synchronize route permissions and admin menus.
+     */
     public function sync(): array
     {
+        /*
+        |--------------------------------------------------------------------------
+        | Clear Spatie permission cache
+        |--------------------------------------------------------------------------
+        */
+
         app(PermissionRegistrar::class)
             ->forgetCachedPermissions();
 
         $createdPermissions = [];
-        $syncedMenus        = 0;
+        $syncedMenus = 0;
 
-        foreach (
-            RouteFacade::getRoutes(); as $route
-        ) {
+        /*
+        |--------------------------------------------------------------------------
+        | Scan application routes
+        |--------------------------------------------------------------------------
+        */
+
+        foreach (RouteFacade::getRoutes() as $route) {
             if (! $route instanceof Route) {
                 continue;
             }
 
-            $permissions =
-            $this->extractPermissions(
-                $route
-            );
+            /*
+            |--------------------------------------------------------------------------
+            | Extract permissions from route middleware
+            |--------------------------------------------------------------------------
+            */
 
-            foreach (
-                $permissions; as $permissionName
-            ) {
-                $permission =
-                $this->syncPermission(
+            $permissions = $this->extractPermissions($route);
+
+            /*
+            |--------------------------------------------------------------------------
+            | Synchronize permissions
+            |--------------------------------------------------------------------------
+            */
+
+            foreach ($permissions as $permissionName) {
+                $permission = $this->syncPermission(
                     $permissionName
                 );
 
-                $createdPermissions[
-                    $permission->name
-                ] = $permission->name;
+                $createdPermissions[$permission->name] =
+                    $permission->name;
             }
 
-            $menu =
-            $route->getAction(
-                '_admin_menu'
-            );
+            /*
+            |--------------------------------------------------------------------------
+            | Synchronize admin menu
+            |--------------------------------------------------------------------------
+            */
+
+            $menu = $route->getAction('_admin_menu');
 
             if (
                 is_array($menu) &&
                 $menu !== []
             ) {
                 /*
-                 * Use the view permission from
-                 * the index/page route.
-                 */
-                $menuPermission =
-                collect($permissions)
-                    ->first(
-                        static fn(
-                            string $permission
-                        ): bool =>
-                        str_ends_with(
-                            $permission,
-                            '.view'
-                        )
-                    ) ?? collect($permissions)
-                    ->first();
+                |--------------------------------------------------------------------------
+                | Prefer the .view permission for the menu
+                |--------------------------------------------------------------------------
+                |
+                | Example:
+                |
+                | pickups.view
+                | pickups.assign
+                | pickups.transfer
+                |
+                | The menu should normally use:
+                |
+                | pickups.view
+                |
+                */
 
-                if ($menuPermission) {
-                    $menu['permission'] =
-                        $menuPermission;
+                $menuPermission =
+                    collect($permissions)
+                        ->first(
+                            static fn(string $permission): bool =>
+                                str_ends_with(
+                                    $permission,
+                                    '.view'
+                                )
+                        )
+                    ?? collect($permissions)->first();
+
+                if ($menuPermission !== null) {
+                    $menu['permission'] = $menuPermission;
                 }
 
                 $this->syncMenu($menu);
@@ -86,112 +123,66 @@ final class RouteAccessSynchronizer
         }
 
         /*
-         * Super admin receives every new permission.
-         * Other role permissions are selected on the Roles page.
-         */
+        |--------------------------------------------------------------------------
+        | Super admin
+        |--------------------------------------------------------------------------
+        |
+        | Super admin receives every synchronized permission.
+        |
+        */
+
         $this->syncSuperAdmin();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Clear permission cache again
+        |--------------------------------------------------------------------------
+        */
 
         app(PermissionRegistrar::class)
             ->forgetCachedPermissions();
 
         return [
-            'permissions' =>
-            count(
+            'permissions' => count(
                 $createdPermissions
             ),
 
-            'menus'       =>
-            $syncedMenus,
+            'menus' => $syncedMenus,
         ];
     }
 
-    // private function extractPermissions(
-    //     Route $route
-    // ): array {
-    //     $permissions = [];
-
-    //     foreach (
-    //         $route->gatherMiddleware()
-    //         as $middleware
-    //     ) {
-    //         if (!is_string($middleware)) {
-    //             continue;
-    //         }
-
-    //         if (
-    //             !str_starts_with(
-    //                 $middleware,
-    //                 'permission:'
-    //             )
-    //         ) {
-    //             continue;
-    //         }
-
-    //         $definition =
-    //             Str::after(
-    //                 $middleware,
-    //                 'permission:'
-    //             );
-
-    //         /*
-    //          * Remove optional guard:
-    //          *
-    //          * permission:permission.name,web
-    //          */
-    //         $definition =
-    //             explode(
-    //                 ',',
-    //                 $definition,
-    //                 2
-    //             )[0];
-
-    //         /*
-    //          * Spatie supports:
-    //          *
-    //          * permission:first|second
-    //          */
-    //         foreach (
-    //             explode('|', $definition)
-    //             as $permission
-    //         ) {
-    //             $permission = trim(
-    //                 $permission
-    //             );
-
-    //             if ($permission !== '') {
-    //                 $permissions[] =
-    //                     $permission;
-    //             }
-    //         }
-    //     }
-
-    //     return array_values(
-    //         array_unique(
-    //             $permissions
-    //         )
-    //     );
-    // }
+    /*
+    |--------------------------------------------------------------------------
+    | EXTRACT PERMISSIONS
+    |--------------------------------------------------------------------------
+    |
+    | Reads middleware such as:
+    |
+    | permission:staff.view
+    |
+    | permission:staff.edit
+    |
+    | permission:staff.view,web
+    |
+    | permission:staff.view|staff.edit
+    |
+    */
 
     private function extractPermissions(
         Route $route
     ): array {
         $permissions = [];
 
-        foreach (
-            $route->gatherMiddleware(); as $middleware
-        ) {
+        foreach ($route->gatherMiddleware() as $middleware) {
             if (! is_string($middleware)) {
                 continue;
             }
 
             /*
-        |--------------------------------------------------------------------------
-        | permission:staff.view
-        | permission:staff.edit
-        | permission:staff.view,web
-        | permission:staff.view|staff.edit
-        |--------------------------------------------------------------------------
-        */
+            |--------------------------------------------------------------------------
+            | Only process permission middleware
+            |--------------------------------------------------------------------------
+            */
 
             if (! str_starts_with(
                 $middleware,
@@ -200,19 +191,26 @@ final class RouteAccessSynchronizer
                 continue;
             }
 
+            /*
+            |--------------------------------------------------------------------------
+            | Remove "permission:"
+            |--------------------------------------------------------------------------
+            */
+
             $definition = Str::after(
                 $middleware,
                 'permission:'
             );
 
             /*
-        |--------------------------------------------------------------------------
-        | Remove optional guard
-        |--------------------------------------------------------------------------
-        |
-        | permission:staff.view,web
-        |
-        */
+            |--------------------------------------------------------------------------
+            | Remove optional guard
+            |--------------------------------------------------------------------------
+            |
+            | permission:staff.view,web
+            |
+            */
+
             $definition = explode(
                 ',',
                 $definition,
@@ -220,15 +218,16 @@ final class RouteAccessSynchronizer
             )[0];
 
             /*
-        |--------------------------------------------------------------------------
-        | Multiple permissions
-        |--------------------------------------------------------------------------
-        |
-        | permission:staff.view|staff.edit
-        |
-        */
+            |--------------------------------------------------------------------------
+            | Multiple permissions
+            |--------------------------------------------------------------------------
+            |
+            | permission:staff.view|staff.edit
+            |
+            */
+
             foreach (
-                explode('|', $definition); as $permission
+                explode('|', $definition) as $permission
             ) {
                 $permission = trim(
                     $permission
@@ -249,30 +248,53 @@ final class RouteAccessSynchronizer
         );
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | SYNCHRONIZE PERMISSION
+    |--------------------------------------------------------------------------
+    */
+
     private function syncPermission(
         string $permissionName
     ): Permission {
-        $permission =
-        Permission::query()
-            ->firstOrCreate([
-                'name'       =>
-                $permissionName,
+        /*
+        |--------------------------------------------------------------------------
+        | Create permission if it does not exist
+        |--------------------------------------------------------------------------
+        */
 
-                'guard_name' =>
-                $this->guardName,
+        $permission = Permission::query()
+            ->firstOrCreate([
+                'name' => $permissionName,
+
+                'guard_name' => $this->guardName,
             ]);
 
-        $displayName =
-        $this->displayName(
+        /*
+        |--------------------------------------------------------------------------
+        | Generate display information
+        |--------------------------------------------------------------------------
+        */
+
+        $displayName = $this->displayName(
             $permissionName
         );
 
-        $groupName =
-        $this->groupName(
+        $groupName = $this->groupName(
             $permissionName
         );
 
         $updates = [];
+
+        /*
+        |--------------------------------------------------------------------------
+        | Optional custom permission columns
+        |--------------------------------------------------------------------------
+        |
+        | Your project may have some or all of these columns.
+        | Only update columns that actually exist.
+        |
+        */
 
         if (
             Schema::hasColumn(
@@ -340,9 +362,14 @@ final class RouteAccessSynchronizer
                 'is_active'
             )
         ) {
-            $updates['is_active'] =
-                true;
+            $updates['is_active'] = true;
         }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Update optional metadata
+        |--------------------------------------------------------------------------
+        */
 
         if ($updates !== []) {
             $permission->update(
@@ -353,11 +380,23 @@ final class RouteAccessSynchronizer
         return $permission;
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | SYNCHRONIZE MENU
+    |--------------------------------------------------------------------------
+    */
+
     private function syncMenu(
         array $menu
     ): void {
-        $table =
-        (new MenuItem())->getTable();
+        $table = (new MenuItem())
+            ->getTable();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Route
+        |--------------------------------------------------------------------------
+        */
 
         $route = trim(
             (string) (
@@ -369,84 +408,129 @@ final class RouteAccessSynchronizer
             return;
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Section
+        |--------------------------------------------------------------------------
+        */
+
         $section = trim(
             (string) (
                 $menu['section'] ?? 'admin'
             )
         );
 
+        /*
+        |--------------------------------------------------------------------------
+        | Prepare menu data
+        |--------------------------------------------------------------------------
+        */
+
         $data = $this->filterColumns(
             $table,
             [
-                'section'    =>
-                $section,
+                'section' =>
+                    $section,
 
-                'title'      =>
-                $menu['title'] ?? $menu['label'],
+                'title' =>
+                    $menu['title']
+                    ?? $menu['label']
+                    ?? null,
 
-                'label'      =>
-                $menu['label'] ?? $menu['title'],
+                'label' =>
+                    $menu['label']
+                    ?? $menu['title']
+                    ?? null,
 
-                'name'       =>
-                $menu['label'] ?? $menu['title'],
+                'name' =>
+                    $menu['label']
+                    ?? $menu['title']
+                    ?? null,
 
-                'route'      =>
-                $route,
+                'route' =>
+                    $route,
 
-                'href'       =>
-                $route,
+                'href' =>
+                    $route,
 
-                'url'        =>
-                $route,
+                'url' =>
+                    $route,
 
-                'path'       =>
-                $route,
+                'path' =>
+                    $route,
 
-                'icon'       =>
-                $menu['icon'] ?? 'menu',
+                'icon' =>
+                    $menu['icon']
+                    ?? 'menu',
 
                 'permission' =>
-                $menu['permission'] ?? null,
+                    $menu['permission']
+                    ?? null,
 
                 'sort_order' =>
-                $menu['sort_order'] ?? 999,
+                    $menu['sort_order']
+                    ?? 999,
 
-                'order'      =>
-                $menu['sort_order'] ?? 999,
+                'order' =>
+                    $menu['sort_order']
+                    ?? 999,
 
-                'is_active'  =>
-                true,
+                'is_active' =>
+                    true,
 
                 'updated_at' =>
-                now(),
+                    now(),
             ]
         );
 
-        $routeColumn =
-        collect([
+        /*
+        |--------------------------------------------------------------------------
+        | Find the actual route column
+        |--------------------------------------------------------------------------
+        |
+        | Different versions of the menu table may use:
+        |
+        | route
+        | href
+        | url
+        | path
+        |
+        */
+
+        $routeColumn = collect([
             'route',
             'href',
             'url',
             'path',
         ])->first(
-            static fn(
-                string $column
-            ): bool =>
-            Schema::hasColumn(
-                $table,
-                $column
-            )
+            static fn(string $column): bool =>
+                Schema::hasColumn(
+                    $table,
+                    $column
+                )
         );
 
         if (! $routeColumn) {
             return;
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Find existing menu
+        |--------------------------------------------------------------------------
+        */
+
         $query = DB::table($table)
             ->where(
                 $routeColumn,
                 $route
             );
+
+        /*
+        |--------------------------------------------------------------------------
+        | Respect section when available
+        |--------------------------------------------------------------------------
+        */
 
         if (
             Schema::hasColumn(
@@ -460,8 +544,13 @@ final class RouteAccessSynchronizer
             );
         }
 
-        $existing =
-        $query->first();
+        $existing = $query->first();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Update existing menu
+        |--------------------------------------------------------------------------
+        */
 
         if ($existing) {
             DB::table($table)
@@ -474,34 +563,55 @@ final class RouteAccessSynchronizer
             return;
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Insert new menu
+        |--------------------------------------------------------------------------
+        */
+
         if (
             Schema::hasColumn(
                 $table,
                 'created_at'
             )
         ) {
-            $data['created_at'] =
-                now();
+            $data['created_at'] = now();
         }
 
         DB::table($table)
             ->insert($data);
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | SYNCHRONIZE SUPER ADMIN
+    |--------------------------------------------------------------------------
+    */
+
     private function syncSuperAdmin(): void
     {
-        $superAdmin =
-        Role::query()
+        /*
+        |--------------------------------------------------------------------------
+        | Find or create super_admin role
+        |--------------------------------------------------------------------------
+        */
+
+        $superAdmin = Role::query()
             ->firstOrCreate([
-                'name'       =>
-                'super_admin',
+                'name' =>
+                    'super_admin',
 
                 'guard_name' =>
-                $this->guardName,
+                    $this->guardName,
             ]);
 
-        $permissions =
-        Permission::query()
+        /*
+        |--------------------------------------------------------------------------
+        | Get all permissions for this guard
+        |--------------------------------------------------------------------------
+        */
+
+        $permissions = Permission::query()
             ->where(
                 'guard_name',
                 $this->guardName
@@ -509,19 +619,58 @@ final class RouteAccessSynchronizer
             ->pluck('name')
             ->all();
 
+        /*
+        |--------------------------------------------------------------------------
+        | Give every permission to super admin
+        |--------------------------------------------------------------------------
+        */
+
         $superAdmin->syncPermissions(
             $permissions
         );
     }
 
+    /*
+    |--------------------------------------------------------------------------
+    | DISPLAY NAME
+    |--------------------------------------------------------------------------
+    |
+    | Example:
+    |
+    | pickups.assignable_staff
+    |
+    | becomes:
+    |
+    | Pickups Assignable Staff
+    |
+    */
+
     private function displayName(
         string $permission
     ): string {
         return Str::of($permission)
-            ->replace(['.', '_', '-'], ' ')
+            ->replace(
+                ['.', '_', '-'],
+                ' '
+            )
             ->title()
             ->toString();
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | GROUP NAME
+    |--------------------------------------------------------------------------
+    |
+    | Example:
+    |
+    | pricing.transfer_routes.view
+    |
+    | becomes:
+    |
+    | Pricing Transfer Routes
+    |
+    */
 
     private function groupName(
         string $permission
@@ -532,19 +681,41 @@ final class RouteAccessSynchronizer
         );
 
         /*
-         * pricing.transfer_routes.view
-         * becomes:
-         * Pricing Transfer Routes
-         */
-        array_pop($segments);
+        |--------------------------------------------------------------------------
+        | Remove action
+        |--------------------------------------------------------------------------
+        |
+        | pricing.transfer_routes.view
+        |
+        | becomes:
+        |
+        | pricing.transfer_routes
+        |
+        */
+
+        if (count($segments) > 1) {
+            array_pop($segments);
+        }
 
         return Str::of(
-            implode(' ', $segments)
+            implode(
+                ' ',
+                $segments
+            )
         )
-            ->replace(['_', '-'], ' ')
+            ->replace(
+                ['_', '-'],
+                ' '
+            )
             ->title()
             ->toString();
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | FILTER EXISTING DATABASE COLUMNS
+    |--------------------------------------------------------------------------
+    */
 
     private function filterColumns(
         string $table,
@@ -556,10 +727,10 @@ final class RouteAccessSynchronizer
                     mixed $value,
                     string $column
                 ): bool =>
-                Schema::hasColumn(
-                    $table,
-                    $column
-                )
+                    Schema::hasColumn(
+                        $table,
+                        $column
+                    )
             )
             ->all();
     }

@@ -20,10 +20,22 @@ Route::prefix('v1/gateway')
     ])
     ->group(function (): void {
 
+        /*
+        |--------------------------------------------------------------------------
+        | Create pickup
+        |--------------------------------------------------------------------------
+        */
+
         Route::post(
             'pickups',
             [GatewayPickupController::class, 'store']
         )->name('pickups.store');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Pickup status
+        |--------------------------------------------------------------------------
+        */
 
         Route::get(
             'pickups/{requestNumber}',
@@ -46,45 +58,115 @@ Route::prefix('v1/admin')
     ])
     ->group(function (): void {
 
-        Route::middleware([
-            'route.permission',
-        ])->group(function (): void {
+        /*
+        |--------------------------------------------------------------------------
+        | View pickup
+        |--------------------------------------------------------------------------
+        */
 
-            Route::get(
-                'pickups',
-                [AdminPickupController::class, 'index']
-            )->name('pickups.index');
+        Route::get(
+            'pickups',
+            [AdminPickupController::class, 'index']
+        )
+            ->middleware([
+                'route.permission:pickups.view',
+            ])
+            ->name('pickups.index');
 
-            Route::get(
-                'pickups/{pickup}',
-                [AdminPickupController::class, 'show']
-            )->name('pickups.show');
+        /*
+        |--------------------------------------------------------------------------
+        | Pickup details
+        |--------------------------------------------------------------------------
+        */
 
-            Route::get(
-                'pickups/{pickup}/assignable-staff',
-                [AdminPickupController::class, 'assignableStaff']
-            )->name('pickups.assignable-staff');
+        Route::get(
+            'pickups/{pickup}',
+            [AdminPickupController::class, 'show']
+        )
+            ->middleware([
+                'route.permission:pickups.view',
+            ])
+            ->name('pickups.show');
 
-            Route::post(
-                'pickups/{pickup}/assign',
-                [AdminPickupController::class, 'assign']
-            )->name('pickups.assign');
+        /*
+        |--------------------------------------------------------------------------
+        | Assignable staff
+        |--------------------------------------------------------------------------
+        |
+        | This creates:
+        |
+        | pickups.assignable_staff
+        |
+        */
 
-            Route::post(
-                'pickups/{pickup}/transfer',
-                [AdminPickupController::class, 'transfer']
-            )->name('pickups.transfer');
+        Route::get(
+            'pickups/{pickup}/assignable-staff',
+            [AdminPickupController::class, 'assignableStaff']
+        )
+            ->middleware([
+                'route.permission:pickups.assignable_staff',
+            ])
+            ->name('pickups.assignable-staff');
 
-            Route::post(
-                'pickups/{pickup}/fail',
-                [AdminPickupController::class, 'fail']
-            )->name('pickups.fail');
+        /*
+        |--------------------------------------------------------------------------
+        | Assign pickup
+        |--------------------------------------------------------------------------
+        */
 
-            Route::post(
-                'pickups/{pickup}/shipments/{shipment}/receive',
-                [AdminPickupController::class, 'receiveShipment']
-            )->name('pickups.shipments.receive');
-        });
+        Route::post(
+            'pickups/{pickup}/assign',
+            [AdminPickupController::class, 'assign']
+        )
+            ->middleware([
+                'route.permission:pickups.assign',
+            ])
+            ->name('pickups.assign');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Transfer pickup
+        |--------------------------------------------------------------------------
+        */
+
+        Route::post(
+            'pickups/{pickup}/transfer',
+            [AdminPickupController::class, 'transfer']
+        )
+            ->middleware([
+                'route.permission:pickups.transfer',
+            ])
+            ->name('pickups.transfer');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Fail pickup
+        |--------------------------------------------------------------------------
+        */
+
+        Route::post(
+            'pickups/{pickup}/fail',
+            [AdminPickupController::class, 'fail']
+        )
+            ->middleware([
+                'route.permission:pickups.failed',
+            ])
+            ->name('pickups.fail');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Receive shipment
+        |--------------------------------------------------------------------------
+        */
+
+        Route::post(
+            'pickups/{pickup}/shipments/{shipment}/receive',
+            [AdminPickupController::class, 'receiveShipment']
+        )
+            ->middleware([
+                'route.permission:pickups.receive',
+            ])
+            ->name('pickups.shipments.receive');
     });
 
 
@@ -103,25 +185,50 @@ Route::prefix('v1/merchant')
     ])
     ->group(function (): void {
 
-        Route::middleware([
-            'route.permission',
-        ])->group(function (): void {
+        /*
+        |--------------------------------------------------------------------------
+        | Merchant pickup list
+        |--------------------------------------------------------------------------
+        */
 
-            Route::get(
-                'pickups',
-                [PickupController::class, 'index']
-            )->name('pickups.index');
+        Route::get(
+            'pickups',
+            [PickupController::class, 'index']
+        )
+            ->middleware([
+                'route.permission:pickups.view',
+            ])
+            ->name('pickups.index');
 
-            Route::get(
-                'pickups/{pickup}',
-                [PickupController::class, 'show']
-            )->name('pickups.show');
+        /*
+        |--------------------------------------------------------------------------
+        | Merchant pickup details
+        |--------------------------------------------------------------------------
+        */
 
-            Route::post(
-                'pickups/shipments',
-                [PickupController::class, 'addShipment']
-            )->name('pickups.shipments.store');
-        });
+        Route::get(
+            'pickups/{pickup}',
+            [PickupController::class, 'show']
+        )
+            ->middleware([
+                'route.permission:pickups.view',
+            ])
+            ->name('pickups.show');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Add shipment to pickup
+        |--------------------------------------------------------------------------
+        */
+
+        Route::post(
+            'pickups/shipments',
+            [PickupController::class, 'addShipment']
+        )
+            ->middleware([
+                'route.permission:pickups.create',
+            ])
+            ->name('pickups.shipments.store');
     });
 
 
@@ -139,48 +246,123 @@ Route::prefix('v1/staff')
     ])
     ->group(function (): void {
 
-        Route::middleware([
-            'route.permission',
-        ])->group(function (): void {
+        /*
+        |--------------------------------------------------------------------------
+        | Pickup list
+        |--------------------------------------------------------------------------
+        */
 
-            Route::get(
-                'pickups',
-                [PickupController::class, 'index']
-            )->name('pickups.index');
+        Route::get(
+            'pickups',
+            [PickupController::class, 'index']
+        )
+            ->middleware([
+                'route.permission:pickups.view',
+            ])
+            ->name('pickups.index');
 
-            Route::get(
-                'pickups/{pickup}',
-                [PickupController::class, 'show']
-            )->name('pickups.show');
+        /*
+        |--------------------------------------------------------------------------
+        | Pickup details
+        |--------------------------------------------------------------------------
+        */
 
-            Route::post(
-                'pickups/{pickup}/start',
-                [PickupController::class, 'start']
-            )->name('pickups.start');
+        Route::get(
+            'pickups/{pickup}',
+            [PickupController::class, 'show']
+        )
+            ->middleware([
+                'route.permission:pickups.view',
+            ])
+            ->name('pickups.show');
 
-            Route::post(
-                'pickups/{pickup}/arrive',
-                [PickupController::class, 'arrive']
-            )->name('pickups.arrive');
+        /*
+        |--------------------------------------------------------------------------
+        | Start pickup
+        |--------------------------------------------------------------------------
+        */
 
-            Route::post(
-                'pickups/{pickup}/shipments/{shipment}/collect',
-                [PickupController::class, 'collectShipment']
-            )->name('pickups.shipments.collect');
+        Route::post(
+            'pickups/{pickup}/start',
+            [PickupController::class, 'start']
+        )
+            ->middleware([
+                'route.permission:pickups.accept',
+            ])
+            ->name('pickups.start');
 
-            Route::post(
-                'pickups/{pickup}/complete',
-                [PickupController::class, 'complete']
-            )->name('pickups.complete');
+        /*
+        |--------------------------------------------------------------------------
+        | Arrive at pickup
+        |--------------------------------------------------------------------------
+        */
 
-            Route::post(
-                'pickups/{pickup}/shipments/{shipment}/receive',
-                [PickupController::class, 'receiveShipment']
-            )->name('pickups.shipments.receive');
+        Route::post(
+            'pickups/{pickup}/arrive',
+            [PickupController::class, 'arrive']
+        )
+            ->middleware([
+                'route.permission:pickups.status',
+            ])
+            ->name('pickups.arrive');
 
-            Route::post(
-                'pickups/{pickup}/fail',
-                [PickupController::class, 'fail']
-            )->name('pickups.fail');
-        });
+        /*
+        |--------------------------------------------------------------------------
+        | Collect shipment
+        |--------------------------------------------------------------------------
+        */
+
+        Route::post(
+            'pickups/{pickup}/shipments/{shipment}/collect',
+            [PickupController::class, 'collectShipment']
+        )
+            ->middleware([
+                'route.permission:pickups.picked_up',
+            ])
+            ->name('pickups.shipments.collect');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Complete pickup
+        |--------------------------------------------------------------------------
+        */
+
+        Route::post(
+            'pickups/{pickup}/complete',
+            [PickupController::class, 'complete']
+        )
+            ->middleware([
+                'route.permission:pickups.status',
+            ])
+            ->name('pickups.complete');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Receive shipment
+        |--------------------------------------------------------------------------
+        */
+
+        Route::post(
+            'pickups/{pickup}/shipments/{shipment}/receive',
+            [PickupController::class, 'receiveShipment']
+        )
+            ->middleware([
+                'route.permission:pickups.status',
+            ])
+            ->name('pickups.shipments.receive');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Fail pickup
+        |--------------------------------------------------------------------------
+        */
+
+        Route::post(
+            'pickups/{pickup}/fail',
+            [PickupController::class, 'fail']
+        )
+            ->middleware([
+                'route.permission:pickups.failed',
+            ])
+            ->name('pickups.fail');
     });

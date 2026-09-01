@@ -34,6 +34,12 @@ final class RouteAccessSynchronizer
 
             $permissions = $this->extractPermissions($route);
 
+            /*
+            |--------------------------------------------------------------------------
+            | Sync permissions
+            |--------------------------------------------------------------------------
+            */
+
             foreach ($permissions as $permissionName) {
 
                 $permission = $this->syncPermission(
@@ -46,7 +52,7 @@ final class RouteAccessSynchronizer
 
             /*
             |--------------------------------------------------------------------------
-            | Admin Menu
+            | Admin menu
             |--------------------------------------------------------------------------
             */
 
@@ -55,8 +61,11 @@ final class RouteAccessSynchronizer
             if (is_array($menu) && $menu !== []) {
 
                 /*
-                 * Prefer *.view as the menu permission.
-                 */
+                |--------------------------------------------------------------------------
+                | Prefer *.view permission
+                |--------------------------------------------------------------------------
+                */
+
                 $menuPermission = collect($permissions)
                     ->first(
                         static fn(string $permission): bool =>
@@ -84,6 +93,12 @@ final class RouteAccessSynchronizer
         */
 
         $this->syncSuperAdmin();
+
+        /*
+        |--------------------------------------------------------------------------
+        | Clear Spatie permission cache
+        |--------------------------------------------------------------------------
+        */
 
         app(PermissionRegistrar::class)
             ->forgetCachedPermissions();
@@ -113,32 +128,45 @@ final class RouteAccessSynchronizer
 
             /*
             |--------------------------------------------------------------------------
-            | permission:staff.view
-            | permission:staff.edit
-            | permission:staff.view,web
-            | permission:staff.view|staff.edit
+            | route.permission:pickups.view
+            |
+            | Also support:
+            |
+            | permission:pickups.view
             |--------------------------------------------------------------------------
             */
 
-            if (! str_starts_with(
-                $middleware,
-                'permission:'
-            )) {
+            if (
+                str_starts_with(
+                    $middleware,
+                    'route.permission:'
+                )
+            ) {
+                $definition = Str::after(
+                    $middleware,
+                    'route.permission:'
+                );
+            } elseif (
+                str_starts_with(
+                    $middleware,
+                    'permission:'
+                )
+            ) {
+                $definition = Str::after(
+                    $middleware,
+                    'permission:'
+                );
+            } else {
                 continue;
             }
-
-            $definition = Str::after(
-                $middleware,
-                'permission:'
-            );
 
             /*
             |--------------------------------------------------------------------------
             | Remove optional guard
             |--------------------------------------------------------------------------
             |
-            | permission:staff.view,web
-            |
+            | pickups.view,web
+            |--------------------------------------------------------------------------
             */
 
             $definition = explode(
@@ -152,8 +180,8 @@ final class RouteAccessSynchronizer
             | Multiple permissions
             |--------------------------------------------------------------------------
             |
-            | permission:staff.view|staff.edit
-            |
+            | pickups.view|pickups.edit
+            |--------------------------------------------------------------------------
             */
 
             foreach (
@@ -359,7 +387,7 @@ final class RouteAccessSynchronizer
 
         /*
         |--------------------------------------------------------------------------
-        | Find Existing Menu
+        | Find existing menu
         |--------------------------------------------------------------------------
         */
 
@@ -383,7 +411,7 @@ final class RouteAccessSynchronizer
 
         /*
         |--------------------------------------------------------------------------
-        | Update Existing
+        | Update existing
         |--------------------------------------------------------------------------
         */
 
@@ -401,7 +429,7 @@ final class RouteAccessSynchronizer
 
         /*
         |--------------------------------------------------------------------------
-        | Create New
+        | Create menu
         |--------------------------------------------------------------------------
         */
 
@@ -493,7 +521,7 @@ final class RouteAccessSynchronizer
 
     /*
     |--------------------------------------------------------------------------
-    | Filter Existing Database Columns
+    | Filter Existing Columns
     |--------------------------------------------------------------------------
     */
 

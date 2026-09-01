@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Modules\Pickup\Models;
 
-use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -97,9 +96,6 @@ final class PickupRequest extends Model
     |--------------------------------------------------------------------------
     */
 
-    /**
-     * Merchant who created the pickup request.
-     */
     public function merchant(): BelongsTo
     {
         return $this->belongsTo(
@@ -108,9 +104,6 @@ final class PickupRequest extends Model
         );
     }
 
-    /**
-     * Main branch associated with the request.
-     */
     public function branch(): BelongsTo
     {
         return $this->belongsTo(
@@ -119,9 +112,6 @@ final class PickupRequest extends Model
         );
     }
 
-    /**
-     * Sub branch associated with the request.
-     */
     public function subBranch(): BelongsTo
     {
         return $this->belongsTo(
@@ -130,9 +120,6 @@ final class PickupRequest extends Model
         );
     }
 
-    /**
-     * Pickup origin branch.
-     */
     public function pickupBranch(): BelongsTo
     {
         return $this->belongsTo(
@@ -141,9 +128,6 @@ final class PickupRequest extends Model
         );
     }
 
-    /**
-     * Pickup origin sub branch.
-     */
     public function pickupSubBranch(): BelongsTo
     {
         return $this->belongsTo(
@@ -152,9 +136,6 @@ final class PickupRequest extends Model
         );
     }
 
-    /**
-     * Merchant pickup location.
-     */
     public function pickupLocation(): BelongsTo
     {
         return $this->belongsTo(
@@ -163,59 +144,60 @@ final class PickupRequest extends Model
         );
     }
 
-    /**
-     * Staff/rider currently assigned to this pickup.
-     *
-     * Database column:
-     * pickup_requests.assigned_to
-     */
+    /*
+    |--------------------------------------------------------------------------
+    | Assigned Staff / Rider
+    |--------------------------------------------------------------------------
+    */
+
     public function assignedStaff(): BelongsTo
     {
         return $this->belongsTo(
-            User::class,
+            \App\Models\User::class,
             'assigned_to'
         );
     }
 
-    /**
-     * Alias for assignedStaff().
-     *
-     * This keeps compatibility with code that uses
-     * assignedRider.
-     */
+    /*
+    |--------------------------------------------------------------------------
+    | Compatibility alias
+    |--------------------------------------------------------------------------
+    |
+    | Existing controller/frontend code uses assignedRider.
+    | Keep this alias so both names work.
+    |
+    */
+
     public function assignedRider(): BelongsTo
     {
         return $this->belongsTo(
-            User::class,
+            \App\Models\User::class,
             'assigned_to'
         );
     }
 
-    /**
-     * User who assigned the pickup.
-     */
     public function assignedBy(): BelongsTo
     {
         return $this->belongsTo(
-            User::class,
+            \App\Models\User::class,
             'assigned_by'
         );
     }
 
-    /**
-     * User who picked up the shipment/request.
-     */
     public function pickedUpBy(): BelongsTo
     {
         return $this->belongsTo(
-            User::class,
+            \App\Models\User::class,
             'picked_up_by'
         );
     }
 
-    /**
-     * All shipments attached to this pickup request.
-     */
+    /*
+    |--------------------------------------------------------------------------
+    | Pickup Shipments
+    |--------------------------------------------------------------------------
+    */
+
     public function shipments(): HasMany
     {
         return $this->hasMany(
@@ -224,9 +206,6 @@ final class PickupRequest extends Model
         );
     }
 
-    /**
-     * Active shipments attached to this pickup request.
-     */
     public function activeShipments(): HasMany
     {
         return $this->hasMany(
@@ -274,6 +253,7 @@ final class PickupRequest extends Model
         int $branchId
     ): Builder {
         return $query->where(function (Builder $q) use ($branchId): void {
+
             $q->where(
                 'branch_id',
                 $branchId

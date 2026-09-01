@@ -3,23 +3,13 @@
 declare(strict_types=1);
 
 use Illuminate\Support\Facades\Route;
+use Modules\Pickup\Http\Controllers\AdminPickupController;
 use Modules\Pickup\Http\Controllers\GatewayPickupController;
 use Modules\Pickup\Http\Controllers\PickupController;
 
 /*
 |--------------------------------------------------------------------------
-| External Store Manager Gateway
-|--------------------------------------------------------------------------
-|
-| Authentication:
-|
-| X-Tukaatu-Key
-| X-Tukaatu-Secret
-|
-| merchant.api-key middleware must populate:
-|
-| request()->attributes->get('merchant_id')
-|
+| Gateway
 |--------------------------------------------------------------------------
 */
 
@@ -30,36 +20,10 @@ Route::prefix('v1/gateway')
     ])
     ->group(function () {
 
-        /*
-        |--------------------------------------------------------------------------
-        | Request Pickup
-        |--------------------------------------------------------------------------
-        |
-        | IMPORTANT:
-        |
-        | Store Manager does NOT send shipment tracking numbers.
-        |
-        | The pickup already contains its shipments.
-        |
-        | Payload:
-        |
-        | {
-        |     "pickup_location_id": 51,
-        |     "remarks": "Container ready for pickup."
-        | }
-        |
-        */
-
         Route::post(
             'pickups',
             [GatewayPickupController::class, 'store']
         )->name('pickups.store');
-
-        /*
-        |--------------------------------------------------------------------------
-        | Get Pickup
-        |--------------------------------------------------------------------------
-        */
 
         Route::get(
             'pickups/{requestNumber}',
@@ -70,7 +34,7 @@ Route::prefix('v1/gateway')
 
 /*
 |--------------------------------------------------------------------------
-| Admin
+| Admin Pickup Management
 |--------------------------------------------------------------------------
 */
 
@@ -86,29 +50,81 @@ Route::prefix('v1/admin')
             'route.permission',
         ])->group(function () {
 
+            /*
+            |--------------------------------------------------------------------------
+            | Pickup list
+            |--------------------------------------------------------------------------
+            */
+
             Route::get(
                 'pickups',
-                [PickupController::class, 'index']
+                [AdminPickupController::class, 'index']
             )->name('pickups.index');
+
+            /*
+            |--------------------------------------------------------------------------
+            | Pickup details
+            |--------------------------------------------------------------------------
+            */
 
             Route::get(
                 'pickups/{pickup}',
-                [PickupController::class, 'show']
+                [AdminPickupController::class, 'show']
             )->name('pickups.show');
+
+            /*
+            |--------------------------------------------------------------------------
+            | Assignable riders
+            |--------------------------------------------------------------------------
+            */
+
+            Route::get(
+                'pickups/{pickup}/assignable-staff',
+                [AdminPickupController::class, 'assignableStaff']
+            )->name('pickups.assignable-staff');
+
+            /*
+            |--------------------------------------------------------------------------
+            | Accept / Assign pickup
+            |--------------------------------------------------------------------------
+            */
 
             Route::post(
                 'pickups/{pickup}/assign',
-                [PickupController::class, 'assign']
+                [AdminPickupController::class, 'assign']
             )->name('pickups.assign');
+
+            /*
+            |--------------------------------------------------------------------------
+            | Transfer pickup
+            |--------------------------------------------------------------------------
+            */
+
+            Route::post(
+                'pickups/{pickup}/transfer',
+                [AdminPickupController::class, 'transfer']
+            )->name('pickups.transfer');
+
+            /*
+            |--------------------------------------------------------------------------
+            | Cancel / Fail pickup
+            |--------------------------------------------------------------------------
+            */
 
             Route::post(
                 'pickups/{pickup}/fail',
-                [PickupController::class, 'fail']
+                [AdminPickupController::class, 'fail']
             )->name('pickups.fail');
+
+            /*
+            |--------------------------------------------------------------------------
+            | Receive shipment
+            |--------------------------------------------------------------------------
+            */
 
             Route::post(
                 'pickups/{pickup}/shipments/{shipment}/receive',
-                [PickupController::class, 'receiveShipment']
+                [AdminPickupController::class, 'receiveShipment']
             )->name('pickups.shipments.receive');
         });
     });
@@ -142,15 +158,6 @@ Route::prefix('v1/merchant')
                 'pickups/{pickup}',
                 [PickupController::class, 'show']
             )->name('pickups.show');
-
-            /*
-            |--------------------------------------------------------------------------
-            | Manual attachment
-            |--------------------------------------------------------------------------
-            |
-            | This remains for internal merchant operations only.
-            |
-            */
 
             Route::post(
                 'pickups/shipments',

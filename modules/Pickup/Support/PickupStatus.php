@@ -8,6 +8,8 @@ final class PickupStatus
 {
     public const REQUESTED = 'requested';
 
+    public const ACCEPTED = 'accepted';
+
     public const ASSIGNED = 'assigned';
 
     public const STARTED = 'started';
@@ -18,13 +20,16 @@ final class PickupStatus
 
     public const FAILED = 'failed';
 
+    public const CANCELLED = 'cancelled';
+
     /**
-     * Pickup requests which are still operationally active.
+     * Pickups that are still operational.
      */
     public static function active(): array
     {
         return [
             self::REQUESTED,
+            self::ACCEPTED,
             self::ASSIGNED,
             self::STARTED,
             self::ARRIVED,
@@ -32,36 +37,23 @@ final class PickupStatus
     }
 
     /**
-     * Pickup requests which may still receive additional shipments.
-     *
-     * IMPORTANT:
-     *
-     * A rider can already be assigned and travelling while the
-     * merchant adds another shipment.
-     *
-     * Therefore ASSIGNED and STARTED are intentionally included.
-     *
-     * ARRIVED is also included because the rider may be at the
-     * merchant while the merchant is still preparing/adding parcels.
-     *
-     * If your business rule says "no new parcels once rider arrives",
-     * remove ARRIVED.
+     * Pickups that can still receive shipments.
      */
     public static function acceptingShipments(): array
     {
         return [
             self::REQUESTED,
+            self::ACCEPTED,
             self::ASSIGNED,
-            self::STARTED,
-            self::ARRIVED,
         ];
     }
 
-    public static function terminal(): array
+    public static function closed(): array
     {
         return [
             self::COMPLETED,
             self::FAILED,
+            self::CANCELLED,
         ];
     }
 }

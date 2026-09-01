@@ -7,6 +7,7 @@ use Modules\Pickup\Http\Controllers\AdminPickupController;
 use Modules\Pickup\Http\Controllers\GatewayPickupController;
 use Modules\Pickup\Http\Controllers\PickupController;
 
+
 /*
 |--------------------------------------------------------------------------
 | Gateway
@@ -42,7 +43,6 @@ Route::prefix('v1/admin')
     ->name('admin.')
     ->middleware([
         'auth:sanctum',
-        'branch.scope',
     ])
     ->group(function () {
 
@@ -50,82 +50,53 @@ Route::prefix('v1/admin')
             'route.permission',
         ])->group(function () {
 
-            /*
-            |--------------------------------------------------------------------------
-            | Pickup list
-            |--------------------------------------------------------------------------
-            */
-
             Route::get(
                 'pickups',
                 [AdminPickupController::class, 'index']
             )->name('pickups.index');
 
-            /*
-            |--------------------------------------------------------------------------
-            | Pickup details
-            |--------------------------------------------------------------------------
-            */
-
             Route::get(
                 'pickups/{pickup}',
                 [AdminPickupController::class, 'show']
-            )->name('pickups.show');
-
-            /*
-            |--------------------------------------------------------------------------
-            | Assignable riders
-            |--------------------------------------------------------------------------
-            */
+            )
+                ->whereNumber('pickup')
+                ->name('pickups.show');
 
             Route::get(
                 'pickups/{pickup}/assignable-staff',
                 [AdminPickupController::class, 'assignableStaff']
-            )->name('pickups.assignable-staff');
-
-            /*
-            |--------------------------------------------------------------------------
-            | Accept / Assign pickup
-            |--------------------------------------------------------------------------
-            */
+            )
+                ->whereNumber('pickup')
+                ->name('pickups.assignable-staff');
 
             Route::post(
                 'pickups/{pickup}/assign',
                 [AdminPickupController::class, 'assign']
-            )->name('pickups.assign');
-
-            /*
-            |--------------------------------------------------------------------------
-            | Transfer pickup
-            |--------------------------------------------------------------------------
-            */
+            )
+                ->whereNumber('pickup')
+                ->name('pickups.assign');
 
             Route::post(
                 'pickups/{pickup}/transfer',
                 [AdminPickupController::class, 'transfer']
-            )->name('pickups.transfer');
-
-            /*
-            |--------------------------------------------------------------------------
-            | Cancel / Fail pickup
-            |--------------------------------------------------------------------------
-            */
+            )
+                ->whereNumber('pickup')
+                ->name('pickups.transfer');
 
             Route::post(
                 'pickups/{pickup}/fail',
                 [AdminPickupController::class, 'fail']
-            )->name('pickups.fail');
-
-            /*
-            |--------------------------------------------------------------------------
-            | Receive shipment
-            |--------------------------------------------------------------------------
-            */
+            )
+                ->whereNumber('pickup')
+                ->name('pickups.fail');
 
             Route::post(
                 'pickups/{pickup}/shipments/{shipment}/receive',
                 [AdminPickupController::class, 'receiveShipment']
-            )->name('pickups.shipments.receive');
+            )
+                ->whereNumber('pickup')
+                ->whereNumber('shipment')
+                ->name('pickups.shipments.receive');
         });
     });
 
@@ -141,7 +112,6 @@ Route::prefix('v1/merchant')
     ->middleware([
         'auth:sanctum',
         'role:merchant',
-        'branch.scope',
     ])
     ->group(function () {
 
@@ -157,7 +127,9 @@ Route::prefix('v1/merchant')
             Route::get(
                 'pickups/{pickup}',
                 [PickupController::class, 'show']
-            )->name('pickups.show');
+            )
+                ->whereNumber('pickup')
+                ->name('pickups.show');
 
             Route::post(
                 'pickups/shipments',
@@ -177,7 +149,6 @@ Route::prefix('v1/staff')
     ->name('staff.')
     ->middleware([
         'auth:sanctum',
-        'branch.scope',
     ])
     ->group(function () {
 
@@ -193,36 +164,52 @@ Route::prefix('v1/staff')
             Route::get(
                 'pickups/{pickup}',
                 [PickupController::class, 'show']
-            )->name('pickups.show');
+            )
+                ->whereNumber('pickup')
+                ->name('pickups.show');
 
             Route::post(
                 'pickups/{pickup}/start',
                 [PickupController::class, 'start']
-            )->name('pickups.start');
+            )
+                ->whereNumber('pickup')
+                ->name('pickups.start');
 
             Route::post(
                 'pickups/{pickup}/arrive',
                 [PickupController::class, 'arrive']
-            )->name('pickups.arrive');
+            )
+                ->whereNumber('pickup')
+                ->name('pickups.arrive');
 
             Route::post(
                 'pickups/{pickup}/shipments/{shipment}/collect',
                 [PickupController::class, 'collectShipment']
-            )->name('pickups.shipments.collect');
+            )
+                ->whereNumber('pickup')
+                ->whereNumber('shipment')
+                ->name('pickups.shipments.collect');
 
             Route::post(
                 'pickups/{pickup}/complete',
                 [PickupController::class, 'complete']
-            )->name('pickups.complete');
+            )
+                ->whereNumber('pickup')
+                ->name('pickups.complete');
 
             Route::post(
                 'pickups/{pickup}/shipments/{shipment}/receive',
                 [PickupController::class, 'receiveShipment']
-            )->name('pickups.shipments.receive');
+            )
+                ->whereNumber('pickup')
+                ->whereNumber('shipment')
+                ->name('pickups.shipments.receive');
 
             Route::post(
                 'pickups/{pickup}/fail',
                 [PickupController::class, 'fail']
-            )->name('pickups.fail');
+            )
+                ->whereNumber('pickup')
+                ->name('pickups.fail');
         });
     });

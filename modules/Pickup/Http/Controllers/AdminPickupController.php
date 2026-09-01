@@ -7,6 +7,7 @@ namespace Modules\Pickup\Http\Controllers;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Support\ApiResponse;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -15,207 +16,178 @@ use Modules\Pickup\Services\PickupRequestService;
 
 final class AdminPickupController extends Controller
 {
+    public function __construct(
+        private readonly PickupRequestService $pickupRequestService,
+    ) {
+    }
+
     /*
     |--------------------------------------------------------------------------
     | INDEX
     |--------------------------------------------------------------------------
+    |
+    | GET /api/v1/admin/pickups
+    |
     */
 
-    public function index(
-        Request $request
-    ): JsonResponse {
+    public function index(Request $request): JsonResponse
+    {
         $user = $request->user();
+
+        $perPage = min(
+            max((int) $request->input('per_page', 20), 1),
+            100
+        );
+
+        $page = max(
+            (int) $request->input('page', 1),
+            1
+        );
+
+        $search = trim(
+            (string) $request->input('search', '')
+        );
+
+        $status = trim(
+            (string) $request->input('status', '')
+        );
 
         $query = PickupRequest::query()
             ->with([
-                'merchant',
-                'branch',
-                'subBranch',
-                'pickupBranch',
-                'pickupSubBranch',
+                'merchant:id,name',
                 'pickupLocation',
-                'assignedStaff',
-                'assignedBy',
-                'pickedUpBy',
-                'shipments.shipment',
-            ])
-            ->latest('id');
+                'assignedRider:id,name,email,phone,branch_id',
+            ]);
 
         /*
-         * Global admin can see everything.
-         */
-        if (! $this->isGlobalAdmin($user)) {
-            $branchId = $this->resolveUserBranchId($user);
+        |--------------------------------------------------------------------------
+        | Branch scope
+        |--------------------------------------------------------------------------
+        |
+        | IMPORTANT:
+        | Do NOT use users.sub_branch_id here.
+        |
+        | Pickup visibility is determined from the pickup's own branch fields.
+        |
+        */
 
-            if ($branchId <= 0) {
-                return ApiResponse::success([
-                    'data'         => [],
-                    'current_page' => 1,
-                    'per_page'     => 20,
-                    'total'        => 0,
-                ]);
-            }
-
-            $this->applyBranchScope(
-                $query,
-                $branchId
-            );
-        }
+        $this->applyBranchScope(
+            $query,
+            $user
+        );
 
         /*
-         * Global admin branch filter.
-         */
-        if (
-            $this->isGlobalAdmin($user)
-            && $request->filled('branch_id')
-        ) {
-            $this->applyBranchScope(
-                $query,
-                (int) $request->input('branch_id')
-            );
-        }
+        |--------------------------------------------------------------------------
+        | Search
+        |--------------------------------------------------------------------------
+        */
 
-        /*
-         * Sub branch.
-         */
-        if ($request->filled('sub_branch_id')) {
-            $subBranchId =
-            (int) $request->input('sub_branch_id');
+        if ($search !== '') {
+            $query->where(function (Builder $q) use ($search): void {
 
-            $query->where(function ($q) use (
-                $subBranchId
-            ): void {
                 $q->where(
-                    'pickup_sub_branch_id',
-                    $subBranchId
-                )->orWhere(
-                    'sub_branch_id',
-                    $subBranchId
+                    'request_number',
+                    'like',
+                    '%' . $search . '%'
+                );
+
+                /*
+                 * Merchant search.
+                 */
+                $q->orWhereHas(
+                    'merchant',
+                    function (Builder $merchantQuery) use ($search): void {
+                        $merchantQuery
+                            ->where('name', 'like', '%' . $search . '%')
+                            ->orWhere('phone', 'like', '%' . $search . '%')
+                            ->orWhere('email', 'like', '%' . $search . '%');
+                    }
+                );
+
+                /*
+                 * Pickup location search.
+                 */
+                $q->orWhereHas(
+                    'pickupLocation',
+                    function (Builder $locationQuery) use ($search): void {
+                        $locationQuery
+                            ->where('name', 'like', '%' . $search . '%')
+                            ->orWhere('address', 'like', '%' . $search . '%')
+                            ->orWhere('phone', 'like', '%' . $search . '%');
+                    }
                 );
             });
         }
 
         /*
-         * Status.
-         */
-        if ($request->filled('status')) {
-            $query->where(
-                'status',
-                $request->string('status')->toString()
-            );
+        |--------------------------------------------------------------------------
+        | Status filter
+        |--------------------------------------------------------------------------
+        */
+
+        if ($status !== '') {
+            $query->where('status', $status);
         }
 
         /*
-         * Merchant.
-         */
-        if ($request->filled('merchant_id')) {
-            $query->where(
-                'merchant_id',
-                (int) $request->input('merchant_id')
-            );
-        }
+        |--------------------------------------------------------------------------
+        | Ordering
+        |--------------------------------------------------------------------------
+        */
+
+        $query
+            ->orderByDesc('created_at')
+            ->orderByDesc('id');
 
         /*
-         * Pickup location.
-         */
-        if ($request->filled('pickup_location_id')) {
-            $query->where(
-                'pickup_location_id',
-                (int) $request->input('pickup_location_id')
-            );
-        }
+        |--------------------------------------------------------------------------
+        | Pagination
+        |--------------------------------------------------------------------------
+        */
 
-        /*
-         * Assigned rider.
-         */
-        if ($request->filled('assigned_to')) {
-            $query->where(
-                'assigned_to',
-                (int) $request->input('assigned_to')
-            );
-        }
-
-        /*
-         * Search.
-         */
-        $search = trim(
-            (string) $request->input(
-                'search',
-                $request->input('q', '')
-            )
+        $paginator = $query->paginate(
+            $perPage,
+            ['*'],
+            'page',
+            $page
         );
 
-        if ($search !== '') {
-            $query->where(function ($q) use (
-                $search
-            ): void {
-                $q->where(
-                    'request_number',
-                    'like',
-                    "%{$search}%"
-                )
-                    ->orWhere(
-                        'store_reference',
-                        'like',
-                        "%{$search}%"
-                    )
-                    ->orWhere(
-                        'pickup_name',
-                        'like',
-                        "%{$search}%"
-                    )
-                    ->orWhere(
-                        'pickup_phone',
-                        'like',
-                        "%{$search}%"
-                    );
-            });
-        }
+        /*
+        |--------------------------------------------------------------------------
+        | Response
+        |--------------------------------------------------------------------------
+        */
 
-        $perPage = min(
-            max(
-                (int) $request->input(
-                    'per_page',
-                    20
-                ),
-                1
-            ),
-            100
+        return ApiResponse::success(
+            $paginator,
+            'Pickup requests retrieved successfully.'
         );
-
-        $pickups = $query
-            ->paginate($perPage)
-            ->appends($request->query());
-
-        return ApiResponse::success($pickups);
     }
 
     /*
     |--------------------------------------------------------------------------
     | SHOW
     |--------------------------------------------------------------------------
+    |
+    | GET /api/v1/admin/pickups/{pickup}
+    |
     */
 
     public function show(
         Request $request,
         PickupRequest $pickup
     ): JsonResponse {
-        $this->authorizeManagement(
+        $this->authorizePickup(
             $request,
             $pickup
         );
 
         $pickup->load([
             'merchant',
-            'branch',
-            'subBranch',
-            'pickupBranch',
-            'pickupSubBranch',
             'pickupLocation',
-            'assignedStaff',
+            'assignedRider',
             'assignedBy',
-            'pickedUpBy',
-            'shipments.shipment',
+            'shipments',
         ]);
 
         return ApiResponse::success(
@@ -228,220 +200,96 @@ final class AdminPickupController extends Controller
     |--------------------------------------------------------------------------
     | ASSIGNABLE STAFF
     |--------------------------------------------------------------------------
+    |
+    | GET /api/v1/admin/pickups/{pickup}/assignable-staff
+    |
     */
-
-    /*
-|--------------------------------------------------------------------------
-| ASSIGNABLE STAFF
-|--------------------------------------------------------------------------
-*/
 
     public function assignableStaff(
         Request $request,
         PickupRequest $pickup
     ): JsonResponse {
-        $this->authorizeManagement(
+        $this->authorizePickup(
             $request,
             $pickup
         );
 
         /*
-    |--------------------------------------------------------------------------
-    | Determine pickup branch
-    |--------------------------------------------------------------------------
-    */
+        |--------------------------------------------------------------------------
+        | Determine pickup branch
+        |--------------------------------------------------------------------------
+        */
 
-        $branchId = (int) (
-            $pickup->pickup_branch_id ??
-            $pickup->branch_id ??
-            0
-        );
-
-        $subBranchId = (int) (
-            $pickup->pickup_sub_branch_id ??
-            $pickup->sub_branch_id ??
-            0
+        $pickupBranchId = $this->pickupBranchId(
+            $pickup
         );
 
         /*
-    |--------------------------------------------------------------------------
-    | Users table columns
-    |--------------------------------------------------------------------------
-    |
-    | IMPORTANT:
-    | Do not select sub_branch_id unless the users table actually
-    | contains that column.
-    |
-    */
+        |--------------------------------------------------------------------------
+        | Find staff / riders
+        |--------------------------------------------------------------------------
+        |
+        | We deliberately do NOT select sub_branch_id from users.
+        |
+        */
 
-        $schema = DB::getSchemaBuilder();
-
-        $userColumns = $schema->getColumnListing('users');
-
-        /*
-    |--------------------------------------------------------------------------
-    | Base staff query
-    |--------------------------------------------------------------------------
-    */
-
-        $staffQuery = User::query();
-
-        /*
-    |--------------------------------------------------------------------------
-    | Active users
-    |--------------------------------------------------------------------------
-    */
-
-        if (in_array('status', $userColumns, true)) {
-            $staffQuery->where(
-                'status',
-                'active'
-            );
-        }
-
-        /*
-    |--------------------------------------------------------------------------
-    | Rider / staff roles
-    |--------------------------------------------------------------------------
-    */
-
-        $staffQuery->whereHas(
-            'roles',
-            function ($query): void {
-                $query->whereIn(
+        $query = User::query()
+            ->select([
+                'id',
+                'name',
+                'email',
+                'phone',
+                'branch_id',
+            ])
+            ->where('is_active', true)
+            ->whereHas('roles', function (Builder $roleQuery): void {
+                $roleQuery->whereIn(
                     'name',
                     [
                         'rider',
+                        'pickup_rider',
                         'staff',
-                        'delivery_staff',
                     ]
                 );
-            }
-        );
+            });
 
         /*
-    |--------------------------------------------------------------------------
-    | Branch filter
-    |--------------------------------------------------------------------------
-    */
+        |--------------------------------------------------------------------------
+        | Branch restriction
+        |--------------------------------------------------------------------------
+        */
 
-        if (
-            $branchId > 0
-            &&
-            in_array('branch_id', $userColumns, true)
-        ) {
-            $staffQuery->where(
+        if ($pickupBranchId !== null) {
+            $query->where(
                 'branch_id',
-                $branchId
+                $pickupBranchId
             );
         }
 
-        /*
-    |--------------------------------------------------------------------------
-    | Sub branch filter
-    |--------------------------------------------------------------------------
-    |
-    | Only apply this if users.sub_branch_id actually exists.
-    |
-    */
-
-        if (
-            $subBranchId > 0
-            &&
-            in_array('sub_branch_id', $userColumns, true)
-        ) {
-            $staffQuery->where(
-                'sub_branch_id',
-                $subBranchId
-            );
-        }
-
-        /*
-    |--------------------------------------------------------------------------
-    | Dynamic select
-    |--------------------------------------------------------------------------
-    */
-
-        $selectColumns = [
-            'id',
-            'name',
-            'email',
-        ];
-
-        if (
-            in_array(
-                'branch_id',
-                $userColumns,
-                true
-            )
-        ) {
-            $selectColumns[] = 'branch_id';
-        }
-
-        if (
-            in_array(
-                'sub_branch_id',
-                $userColumns,
-                true
-            )
-        ) {
-            $selectColumns[] = 'sub_branch_id';
-        }
-
-        /*
-    |--------------------------------------------------------------------------
-    | Get staff
-    |--------------------------------------------------------------------------
-    */
-
-        $staff = $staffQuery
-            ->select($selectColumns)
+        $staff = $query
             ->orderBy('name')
             ->get();
 
-        /*
-    |--------------------------------------------------------------------------
-    | Return
-    |--------------------------------------------------------------------------
-    */
-
-        return ApiResponse::success([
-            'pickup'         => [
-                'id'                   =>
-                $pickup->id,
-
-                'request_number'       =>
-                $pickup->request_number,
-
-                'status'               =>
-                $pickup->status,
-
-                'pickup_branch_id'     =>
-                $pickup->pickup_branch_id,
-
-                'pickup_sub_branch_id' =>
-                $pickup->pickup_sub_branch_id,
-            ],
-
-            'staff'          =>
+        return ApiResponse::success(
             $staff,
-
-            'assigned_staff' =>
-            $pickup->assignedStaff,
-        ]);
+            'Assignable staff retrieved successfully.'
+        );
     }
+
     /*
     |--------------------------------------------------------------------------
     | ASSIGN
     |--------------------------------------------------------------------------
+    |
+    | POST /api/v1/admin/pickups/{pickup}/assign
+    |
     */
 
     public function assign(
         Request $request,
-        PickupRequest $pickup,
-        PickupRequestService $service
+        PickupRequest $pickup
     ): JsonResponse {
-        $this->authorizeManagement(
+        $this->authorizePickup(
             $request,
             $pickup
         );
@@ -455,19 +303,88 @@ final class AdminPickupController extends Controller
         ]);
 
         $staff = User::query()
-            ->findOrFail(
-                (int) $validated['staff_id']
-            );
+            ->select([
+                'id',
+                'name',
+                'email',
+                'phone',
+                'branch_id',
+            ])
+            ->whereKey(
+                $validated['staff_id']
+            )
+            ->where('is_active', true)
+            ->firstOrFail();
 
-        $pickup = $service->assign(
-            pickup: $pickup,
-            staff: $staff,
-            assignedBy: $request->user()
+        /*
+        |--------------------------------------------------------------------------
+        | Verify staff role
+        |--------------------------------------------------------------------------
+        */
+
+        if (! $staff->hasAnyRole([
+            'rider',
+            'pickup_rider',
+            'staff',
+        ])) {
+            return ApiResponse::error(
+                'Selected staff member cannot be assigned to a pickup.',
+                422
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Verify branch
+        |--------------------------------------------------------------------------
+        */
+
+        $pickupBranchId = $this->pickupBranchId(
+            $pickup
         );
 
+        if (
+            $pickupBranchId !== null &&
+            (int) $staff->branch_id !== (int) $pickupBranchId
+        ) {
+            return ApiResponse::error(
+                'The selected staff member does not belong to the pickup branch.',
+                422
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Assign through service
+        |--------------------------------------------------------------------------
+        */
+
+        $updatedPickup = DB::transaction(
+            function () use (
+                $pickup,
+                $staff,
+                $request
+            ): PickupRequest {
+
+                return $this->pickupRequestService->assign(
+                    $pickup,
+                    $staff,
+                    $request->user()
+                );
+            }
+        );
+
+        $updatedPickup->load([
+            'merchant',
+            'pickupLocation',
+            'assignedRider',
+            'assignedBy',
+            'shipments',
+        ]);
+
         return ApiResponse::success(
-            $pickup,
-            'Pickup rider assigned successfully.'
+            $updatedPickup,
+            'Pickup assigned successfully.'
         );
     }
 
@@ -475,14 +392,16 @@ final class AdminPickupController extends Controller
     |--------------------------------------------------------------------------
     | TRANSFER
     |--------------------------------------------------------------------------
+    |
+    | POST /api/v1/admin/pickups/{pickup}/transfer
+    |
     */
 
     public function transfer(
         Request $request,
-        PickupRequest $pickup,
-        PickupRequestService $service
+        PickupRequest $pickup
     ): JsonResponse {
-        $this->authorizeManagement(
+        $this->authorizePickup(
             $request,
             $pickup
         );
@@ -494,43 +413,97 @@ final class AdminPickupController extends Controller
                 'exists:users,id',
             ],
 
-            'reason'   => [
-                'required',
+            'remarks'  => [
+                'nullable',
                 'string',
-                'max:1000',
+                'max:2000',
             ],
         ]);
 
         $staff = User::query()
-            ->findOrFail(
-                (int) $validated['staff_id']
-            );
+            ->select([
+                'id',
+                'name',
+                'email',
+                'phone',
+                'branch_id',
+            ])
+            ->whereKey(
+                $validated['staff_id']
+            )
+            ->where('is_active', true)
+            ->firstOrFail();
 
-        $pickup = $service->transfer(
-            pickup: $pickup,
-            newStaff: $staff,
-            transferredBy: $request->user(),
-            reason: $validated['reason']
+        if (! $staff->hasAnyRole([
+            'rider',
+            'pickup_rider',
+            'staff',
+        ])) {
+            return ApiResponse::error(
+                'Selected staff member cannot receive a pickup transfer.',
+                422
+            );
+        }
+
+        $pickupBranchId = $this->pickupBranchId(
+            $pickup
         );
 
+        if (
+            $pickupBranchId !== null &&
+            (int) $staff->branch_id !== (int) $pickupBranchId
+        ) {
+            return ApiResponse::error(
+                'The selected staff member does not belong to the pickup branch.',
+                422
+            );
+        }
+
+        $updatedPickup = DB::transaction(
+            function () use (
+                $pickup,
+                $staff,
+                $request,
+                $validated
+            ): PickupRequest {
+
+                return $this->pickupRequestService->transfer(
+                    $pickup,
+                    $staff,
+                    $request->user(),
+                    $validated['remarks'] ?? null
+                );
+            }
+        );
+
+        $updatedPickup->load([
+            'merchant',
+            'pickupLocation',
+            'assignedRider',
+            'assignedBy',
+            'shipments',
+        ]);
+
         return ApiResponse::success(
-            $pickup,
+            $updatedPickup,
             'Pickup transferred successfully.'
         );
     }
 
     /*
     |--------------------------------------------------------------------------
-    | FAIL / CANCEL
+    | FAIL
     |--------------------------------------------------------------------------
+    |
+    | POST /api/v1/admin/pickups/{pickup}/fail
+    |
     */
 
     public function fail(
         Request $request,
-        PickupRequest $pickup,
-        PickupRequestService $service
+        PickupRequest $pickup
     ): JsonResponse {
-        $this->authorizeManagement(
+        $this->authorizePickup(
             $request,
             $pickup
         );
@@ -539,19 +512,36 @@ final class AdminPickupController extends Controller
             'reason' => [
                 'required',
                 'string',
-                'max:1000',
+                'max:2000',
             ],
         ]);
 
-        $pickup = $service->fail(
-            pickup: $pickup,
-            user: $request->user(),
-            reason: $validated['reason']
+        $updatedPickup = DB::transaction(
+            function () use (
+                $pickup,
+                $request,
+                $validated
+            ): PickupRequest {
+
+                return $this->pickupRequestService->fail(
+                    $pickup,
+                    $request->user(),
+                    $validated['reason']
+                );
+            }
         );
 
+        $updatedPickup->load([
+            'merchant',
+            'pickupLocation',
+            'assignedRider',
+            'assignedBy',
+            'shipments',
+        ]);
+
         return ApiResponse::success(
-            $pickup,
-            'Pickup cancelled successfully.'
+            $updatedPickup,
+            'Pickup marked as failed successfully.'
         );
     }
 
@@ -559,152 +549,223 @@ final class AdminPickupController extends Controller
     |--------------------------------------------------------------------------
     | RECEIVE SHIPMENT
     |--------------------------------------------------------------------------
+    |
+    | POST /api/v1/admin/pickups/{pickup}/shipments/{shipment}/receive
+    |
     */
 
     public function receiveShipment(
         Request $request,
         PickupRequest $pickup,
-        $shipment,
-        PickupRequestService $service
+        int $shipment
     ): JsonResponse {
-        $this->authorizeManagement(
+        $this->authorizePickup(
             $request,
             $pickup
         );
 
-        $shipmentModel =
-        \Modules\Shipment\Models\Shipment::query()
-            ->findOrFail((int) $shipment);
+        $updatedPickup = DB::transaction(
+            function () use (
+                $pickup,
+                $shipment,
+                $request
+            ): PickupRequest {
 
-        $item = $service->receiveShipment(
-            pickup: $pickup,
-            shipment: $shipmentModel,
-            staff: $request->user()
+                return $this->pickupRequestService->receiveShipment(
+                    $pickup,
+                    $shipment,
+                    $request->user()
+                );
+            }
         );
 
+        $updatedPickup->load([
+            'merchant',
+            'pickupLocation',
+            'assignedRider',
+            'assignedBy',
+            'shipments',
+        ]);
+
         return ApiResponse::success(
-            $item,
-            'Shipment received at origin branch successfully.'
+            $updatedPickup,
+            'Shipment received successfully.'
         );
     }
 
     /*
     |--------------------------------------------------------------------------
-    | Branch scope
+    | BRANCH SCOPE
     |--------------------------------------------------------------------------
+    |
+    | Determine whether the authenticated admin can see the pickup.
+    |
     */
 
     private function applyBranchScope(
-        $query,
-        int $branchId
+        Builder $query,
+        ?User $user
     ): void {
-        $query->where(function ($q) use (
-            $branchId
-        ): void {
-            $q->where(
-                'pickup_branch_id',
-                $branchId
-            )
-                ->orWhere(
-                    'pickup_sub_branch_id',
-                    $branchId
-                )
-                ->orWhere(
-                    'branch_id',
-                    $branchId
-                )
-                ->orWhere(
-                    'sub_branch_id',
-                    $branchId
-                );
-        });
-    }
+        if ($user === null) {
+            $query->whereRaw('1 = 0');
 
-    /*
-    |--------------------------------------------------------------------------
-    | Authorization
-    |--------------------------------------------------------------------------
-    */
-
-    private function authorizeManagement(
-        Request $request,
-        PickupRequest $pickup
-    ): void {
-        $user = $request->user();
-
-        if (! $user) {
-            abort(401);
+            return;
         }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Global administrators
+        |--------------------------------------------------------------------------
+        */
 
         if ($this->isGlobalAdmin($user)) {
             return;
         }
 
-        if (
-            $user->hasRole('branch_manager')
-            ||
-            $user->hasRole('sub_branch_manager')
-        ) {
-            $branchId =
-            $this->resolveUserBranchId($user);
+        /*
+        |--------------------------------------------------------------------------
+        | Branch users
+        |--------------------------------------------------------------------------
+        */
 
-            $allowed =
-            $branchId > 0
-            &&
-            in_array(
-                $branchId,
-                [
-                    (int) $pickup->pickup_branch_id,
-                    (int) $pickup->pickup_sub_branch_id,
-                    (int) $pickup->branch_id,
-                    (int) $pickup->sub_branch_id,
-                ],
-                true
-            );
+        $branchId = $this->userBranchId(
+            $user
+        );
 
-            abort_unless(
-                $allowed,
-                403,
-                'You are not allowed to manage this pickup.'
-            );
+        if ($branchId === null) {
+            /*
+             * No branch means no pickup visibility.
+             */
+            $query->whereRaw('1 = 0');
 
             return;
         }
 
-        abort(
-            403,
-            'You are not allowed to manage pickups.'
+        /*
+        |--------------------------------------------------------------------------
+        | Pickup branch
+        |--------------------------------------------------------------------------
+        |
+        | Support the actual pickup branch column used by the application.
+        |
+        */
+
+        $query->where(
+            'pickup_branch_id',
+            $branchId
         );
     }
 
     /*
     |--------------------------------------------------------------------------
-    | Global admin
+    | AUTHORIZE PICKUP
+    |--------------------------------------------------------------------------
+    */
+
+    private function authorizePickup(
+        Request $request,
+        PickupRequest $pickup
+    ): void {
+        $user = $request->user();
+
+        if ($user === null) {
+            abort(
+                401,
+                'Unauthenticated.'
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Global admin
+        |--------------------------------------------------------------------------
+        */
+
+        if ($this->isGlobalAdmin($user)) {
+            return;
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Branch user
+        |--------------------------------------------------------------------------
+        */
+
+        $userBranchId = $this->userBranchId(
+            $user
+        );
+
+        $pickupBranchId = $this->pickupBranchId(
+            $pickup
+        );
+
+        if (
+            $userBranchId === null ||
+            $pickupBranchId === null ||
+            (int) $userBranchId !== (int) $pickupBranchId
+        ) {
+            abort(
+                403,
+                'You are not authorized to access this pickup.'
+            );
+        }
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | GLOBAL ADMIN CHECK
     |--------------------------------------------------------------------------
     */
 
     private function isGlobalAdmin(
-        $user
+        User $user
     ): bool {
-        return;
-        $user->isSuperAdmin()
-        ||
-        $user->hasRole('main_admin');
+        return $user->hasAnyRole([
+            'super_admin',
+            'admin',
+        ]);
     }
 
     /*
     |--------------------------------------------------------------------------
-    | User branch
+    | USER BRANCH
+    |--------------------------------------------------------------------------
+    |
+    | IMPORTANT:
+    | Only branch_id is queried.
+    |
+    | NEVER use:
+    |
+    | users.sub_branch_id
+    |
+    */
+
+    private function userBranchId(
+        User $user
+    ): ?int {
+        if ($user->branch_id === null) {
+            return null;
+        }
+
+        return (int) $user->branch_id;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | PICKUP BRANCH
     |--------------------------------------------------------------------------
     */
 
-    private function resolveUserBranchId(
-        $user
-    ): int {
-        return (int) (
-            $user->branch_id ??
-            $user->sub_branch_id ??
-            0
-        );
+    private function pickupBranchId(
+        PickupRequest $pickup
+    ): ?int {
+        if (
+            ! isset($pickup->pickup_branch_id) ||
+            $pickup->pickup_branch_id === null
+        ) {
+            return null;
+        }
+
+        return (int) $pickup->pickup_branch_id;
     }
 }

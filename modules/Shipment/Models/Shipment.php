@@ -1,6 +1,6 @@
 <?php
 
-declare(strict_types=1);
+declare (strict_types = 1);
 
 namespace Modules\Shipment\Models;
 
@@ -28,11 +28,11 @@ class Shipment extends Model
         |--------------------------------------------------------------------------
         */
 
-        'fragile' =>
-            'boolean',
+        'fragile'                   =>
+        'boolean',
 
-        'self_drop' =>
-            'boolean',
+        'self_drop'                 =>
+        'boolean',
 
         /*
         |--------------------------------------------------------------------------
@@ -40,11 +40,11 @@ class Shipment extends Model
         |--------------------------------------------------------------------------
         */
 
-        'delivered_at' =>
-            'datetime',
+        'delivered_at'              =>
+        'datetime',
 
-        'cancelled_at' =>
-            'datetime',
+        'cancelled_at'              =>
+        'datetime',
 
         /*
         |--------------------------------------------------------------------------
@@ -53,10 +53,10 @@ class Shipment extends Model
         */
 
         'delivery_charge_breakdown' =>
-            'array',
+        'array',
 
-        'packet_products' =>
-            'array',
+        'packet_products'           =>
+        'array',
 
         /*
         |--------------------------------------------------------------------------
@@ -64,17 +64,17 @@ class Shipment extends Model
         |--------------------------------------------------------------------------
         */
 
-        'pickup_lat' =>
-            'decimal:7',
+        'pickup_lat'                =>
+        'decimal:7',
 
-        'pickup_lng' =>
-            'decimal:7',
+        'pickup_lng'                =>
+        'decimal:7',
 
-        'delivery_lat' =>
-            'decimal:7',
+        'delivery_lat'              =>
+        'decimal:7',
 
-        'delivery_lng' =>
-            'decimal:7',
+        'delivery_lng'              =>
+        'decimal:7',
 
         /*
         |--------------------------------------------------------------------------
@@ -82,11 +82,11 @@ class Shipment extends Model
         |--------------------------------------------------------------------------
         */
 
-        'route_distance_km' =>
-            'decimal:2',
+        'route_distance_km'         =>
+        'decimal:2',
 
-        'route_fee' =>
-            'decimal:2',
+        'route_fee'                 =>
+        'decimal:2',
     ];
 
     public function merchant(): BelongsTo
@@ -166,23 +166,38 @@ class Shipment extends Model
         )->orderBy('sequence');
     }
 
+    // public function pickupRequests(): BelongsToMany
+    // {
+    //     return $this->belongsToMany(
+    //         PickupRequest::class,
+    //         'pickup_request_shipments'
+    //     )
+    //         ->withPivot([
+    //             'added_at',
+    //             'added_by',
+    //             'removed_at',
+    //             'removed_by',
+    //             'collection_status',
+    //             'collected_at',
+    //             'collected_by',
+    //             'remarks',
+    //         ])
+    //         ->withTimestamps();
+    // }
+
     public function pickupRequests(): BelongsToMany
     {
         return $this->belongsToMany(
             PickupRequest::class,
             'pickup_request_shipments'
-        )
-            ->withPivot([
-                'added_at',
-                'added_by',
-                'removed_at',
-                'removed_by',
-                'collection_status',
-                'collected_at',
-                'collected_by',
-                'remarks',
-            ])
-            ->withTimestamps();
+        )->withPivot([
+            'added_at',
+            'added_by',
+            'removed_at',
+            'removed_by',
+            'status',
+            'remarks',
+        ])->withTimestamps();
     }
 
     public function deliveryAssignment(): HasOne

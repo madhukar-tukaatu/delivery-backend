@@ -135,20 +135,20 @@ final class GatewayPickupResource extends JsonResource
                     'shipments',
                     fn () => $this->shipments
                         ->map(
-                            static function ($pickupShipment) {
+                            static function ($shipment) {
                                 return [
                                     'id' =>
-                                        $pickupShipment->shipment_id,
+                                        $shipment->id,
 
                                     'tracking_number' =>
-                                        $pickupShipment
-                                            ->shipment
-                                            ?->tracking_number,
+                                        $shipment->tracking_number,
 
                                     'status' =>
-                                        $pickupShipment
-                                            ->shipment
-                                            ?->status,
+                                        $shipment->status,
+
+                                    'collection_status' =>
+                                        $shipment->pivot
+                                            ?->collection_status,
                                 ];
                             }
                         )

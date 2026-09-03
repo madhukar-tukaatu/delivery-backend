@@ -40,7 +40,7 @@ final class PickupController extends Controller
                 'assignedStaff',
                 'assignedBy',
                 'pickedUpBy',
-                'shipments.shipment',
+                'shipments',
             ]);
 
         /*

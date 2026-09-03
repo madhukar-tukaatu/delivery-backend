@@ -34,7 +34,7 @@ final class PickupRequestService
             'assignedStaff',
             'assignedBy',
             'pickedUpBy',
-            'shipments.shipment',
+            'shipments',
         ]);
     }
 
@@ -182,15 +182,12 @@ final class PickupRequestService
                 |--------------------------------------------------------------------------
                 */
 
-                $items = $pickup
+                $shipments = $pickup
                     ->activeShipments()
-                    ->with('shipment')
                     ->lockForUpdate()
                     ->get();
 
-                foreach ($items as $item) {
-                    $shipment = $item->shipment;
-
+                foreach ($shipments as $shipment) {
                     if (! $shipment) {
                         continue;
                     }
@@ -306,15 +303,12 @@ final class PickupRequestService
                     description: $reason
                 );
 
-                $items = $pickup
+                $shipments = $pickup
                     ->activeShipments()
-                    ->with('shipment')
                     ->lockForUpdate()
                     ->get();
 
-                foreach ($items as $item) {
-                    $shipment = $item->shipment;
-
+                foreach ($shipments as $shipment) {
                     if (! $shipment) {
                         continue;
                     }
@@ -720,15 +714,12 @@ final class PickupRequestService
 
                 $pending = $pickup
                     ->activeShipments()
-                    ->with('shipment')
                     ->lockForUpdate()
                     ->get()
                     ->filter(
                         static function (
-                            PickupRequestShipment $item
+                            $shipment
                         ): bool {
-                            $shipment = $item->shipment;
-
                             if (! $shipment) {
                                 return false;
                             }
@@ -812,15 +803,12 @@ final class PickupRequestService
                 $pickup->failed_reason = $reason;
                 $pickup->save();
 
-                $items = $pickup
+                $shipments = $pickup
                     ->activeShipments()
-                    ->with('shipment')
                     ->lockForUpdate()
                     ->get();
 
-                foreach ($items as $item) {
-                    $shipment = $item->shipment;
-
+                foreach ($shipments as $shipment) {
                     if (! $shipment) {
                         continue;
                     }

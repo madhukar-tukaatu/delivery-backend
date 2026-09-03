@@ -190,7 +190,7 @@ final class PickupTransferService
                     'pickupBranch',
                     'pickupSubBranch',
                     'assignedStaff',
-                    'shipments.shipment',
+                    'shipments',
                 ]);
             }
         );

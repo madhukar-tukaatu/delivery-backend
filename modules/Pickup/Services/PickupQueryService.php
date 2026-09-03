@@ -41,7 +41,7 @@ final class PickupQueryService
                 'pickupBranch:id,name',
                 'pickupSubBranch:id,name',
                 'assignedStaff:id,name,phone',
-                'shipments.shipment',
+                'shipments',
             ]);
 
         /*
@@ -161,7 +161,7 @@ final class PickupQueryService
                     | Shipment tracking number
                     */
                     ->orWhereHas(
-                        'shipments.shipment',
+                        'shipments',
                         function (Builder $shipment) use ($search) {
                             $shipment
                                 ->where(
@@ -244,7 +244,7 @@ final class PickupQueryService
                 'pickupBranch',
                 'pickupSubBranch',
                 'assignedStaff',
-                'shipments.shipment',
+                'shipments',
             ])
             ->whereKey($pickupId);
 

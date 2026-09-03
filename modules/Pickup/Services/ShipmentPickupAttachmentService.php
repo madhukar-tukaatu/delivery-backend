@@ -113,7 +113,7 @@ final class ShipmentPickupAttachmentService
                 return $pickup->fresh([
                     'merchant',
                     'pickupLocation',
-                    'shipments.shipment',
+                    'shipments',
                     'pickupBranch',
                     'pickupSubBranch',
                     'assignedStaff',

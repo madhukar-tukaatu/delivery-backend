@@ -1,17 +1,14 @@
 <?php
 
-declare(strict_types=1);
+declare (strict_types = 1);
 
 use Illuminate\Support\Facades\Route;
-
 use Modules\Shipment\Http\Controllers\Api\AdminNotificationController;
 use Modules\Shipment\Http\Controllers\Api\AdminShipmentTaskController;
 use Modules\Shipment\Http\Controllers\Api\AdminStaffController;
 use Modules\Shipment\Http\Controllers\Api\MerchantShipmentController;
-
 use Modules\Shipment\Http\Controllers\GatewayShipmentController;
 use Modules\Shipment\Http\Controllers\ShipmentController;
-
 use Modules\Shipment\Http\Controllers\StaffDeliveryLifecycleController;
 
 /*
@@ -98,7 +95,6 @@ Route::prefix('v1/staff')
         });
     });
 
-
 /*
 |--------------------------------------------------------------------------
 | ADMIN / BRANCH MANAGEMENT
@@ -171,7 +167,6 @@ Route::prefix('v1/admin')
                 ]
             )->name('staff.toggle');
 
-
             /*
             |--------------------------------------------------------------------------
             | SHIPMENTS
@@ -226,7 +221,6 @@ Route::prefix('v1/admin')
                 ]
             )->name('shipments.cancel');
 
-
             /*
             |--------------------------------------------------------------------------
             | SHIPMENT TASKS
@@ -256,7 +250,6 @@ Route::prefix('v1/admin')
                     'updateStatus',
                 ]
             )->name('shipment-tasks.status');
-
 
             /*
             |--------------------------------------------------------------------------
@@ -290,7 +283,6 @@ Route::prefix('v1/admin')
         });
     });
 
-
 /*
 |--------------------------------------------------------------------------
 | INTERNAL MERCHANT PORTAL
@@ -319,7 +311,6 @@ Route::prefix('v1/merchant')
             )->name('shipments.store');
         });
     });
-
 
 /*
 |--------------------------------------------------------------------------
@@ -354,7 +345,6 @@ Route::prefix('v1/gateway')
             ]
         )->name('shipments.store');
 
-
         /*
         |--------------------------------------------------------------------------
         | GET SHIPMENT
@@ -368,7 +358,6 @@ Route::prefix('v1/gateway')
                 'show',
             ]
         )->name('shipments.show');
-
 
         /*
         |--------------------------------------------------------------------------

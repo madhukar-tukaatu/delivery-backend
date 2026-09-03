@@ -653,10 +653,6 @@ final class GatewayPickupService
                 $pickupLocation->phone
                 ?? null,
 
-            'pickup_email' =>
-                $pickupLocation->email
-                ?? null,
-
             'pickup_address' =>
                 $pickupLocation->address
                 ?? null,

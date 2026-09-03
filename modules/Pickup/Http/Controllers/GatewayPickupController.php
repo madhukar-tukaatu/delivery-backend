@@ -22,23 +22,22 @@ final class GatewayPickupController extends Controller
     }
 
     /**
-     * Create/request a pickup batch.
+     * Create pickup request/container.
      *
-     * POST /api/v1/gateway/pickups
+     * IMPORTANT:
      *
-     * The store calls this only when it wants to initiate
-     * a physical pickup.
+     * If an active pickup already exists for this merchant +
+     * pickup location, the existing pickup is returned.
      *
-     * Example:
-     *
-     * store_reference = PR-001
+     * A second active pickup is never created.
      */
     public function store(
         GatewayCreatePickupRequest $request
     ): JsonResponse {
-        $merchantId = (int) $request
-            ->attributes
-            ->get('merchant_id');
+        $merchantId =
+            (int) $request
+                ->attributes
+                ->get('merchant_id');
 
         abort_unless(
             $merchantId > 0,
@@ -47,22 +46,18 @@ final class GatewayPickupController extends Controller
         );
 
         try {
-            $pickup = $this->pickupService->create(
-                merchantId:
-                    $merchantId,
-
-                data:
-                    $request->validated(),
-            );
+            $pickup =
+                $this->pickupService->create(
+                    merchantId: $merchantId,
+                    data: $request->validated(),
+                );
 
             return ApiResponse::success(
                 new GatewayPickupResource($pickup),
                 'Pickup request submitted successfully.',
                 201
             );
-
         } catch (ValidationException $e) {
-
             return response()->json([
                 'success' => false,
                 'message' =>
@@ -70,9 +65,7 @@ final class GatewayPickupController extends Controller
                 'errors' =>
                     $e->errors(),
             ], 422);
-
         } catch (Throwable $e) {
-
             report($e);
 
             return response()->json([
@@ -88,17 +81,16 @@ final class GatewayPickupController extends Controller
     }
 
     /**
-     * Get pickup by Tukaatu pickup request number.
-     *
-     * GET /api/v1/gateway/pickups/{requestNumber}
+     * Get pickup request.
      */
     public function show(
         Request $request,
         string $requestNumber
     ): JsonResponse {
-        $merchantId = (int) $request
-            ->attributes
-            ->get('merchant_id');
+        $merchantId =
+            (int) $request
+                ->attributes
+                ->get('merchant_id');
 
         abort_unless(
             $merchantId > 0,
@@ -107,13 +99,11 @@ final class GatewayPickupController extends Controller
         );
 
         $pickup =
-            $this->pickupService->findForMerchant(
-                merchantId:
-                    $merchantId,
-
-                requestNumber:
-                    $requestNumber,
-            );
+            $this->pickupService
+                ->findForMerchant(
+                    merchantId: $merchantId,
+                    requestNumber: $requestNumber,
+                );
 
         return ApiResponse::success(
             new GatewayPickupResource($pickup),

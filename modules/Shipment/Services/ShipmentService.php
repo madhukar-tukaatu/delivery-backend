@@ -21,30 +21,33 @@ final class ShipmentService
     ) {
     }
 
-    /**
-     * Create shipment from external Store Manager.
-     *
-     * BUSINESS FLOW:
-     *
-     * 1. Store creates shipment.
-     * 2. Shipment is created as awaiting_pickup.
-     * 3. Tukaatu checks whether an OPEN pickup already exists
-     *    for this merchant + pickup location.
-     * 4. If yes:
-     *       automatically attach shipment to that pickup.
-     *
-     * 5. If no:
-     *       shipment remains awaiting_pickup.
-     *
-     * IMPORTANT:
-     *
-     * Shipment creation NEVER creates a pickup request.
-     */
+    /*
+    |--------------------------------------------------------------------------
+    | GATEWAY SHIPMENT
+    |--------------------------------------------------------------------------
+    |
+    | Store Manager -> Tukaatu Express
+    |
+    | IMPORTANT:
+    |
+    | Shipment creation NEVER creates a pickup.
+    |
+    | If an active pickup already exists:
+    |
+    |     shipment -> active pickup
+    |
+    | If no active pickup exists:
+    |
+    |     shipment -> AWAITING_PICKUP
+    |
+    */
+
     public function createFromGateway(
         int $merchantId,
         array $data
     ): Shipment {
-        $merchant = Merchant::query()->find($merchantId);
+        $merchant = Merchant::query()
+            ->find($merchantId);
 
         if (! $merchant) {
             throw ValidationException::withMessages([
@@ -85,7 +88,6 @@ final class ShipmentService
                 $packet,
                 $products
             ): Shipment {
-
                 /*
                 |--------------------------------------------------------------------------
                 | IDEMPOTENCY
@@ -101,9 +103,41 @@ final class ShipmentService
                         'merchant_order_id',
                         $data['merchant_order_id']
                     )
+                    ->lockForUpdate()
                     ->first();
 
                 if ($existing) {
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Retry-safe reconciliation.
+                    |--------------------------------------------------------------------------
+                    |
+                    | If the first request created the shipment but the caller
+                    | retries, we still attempt to attach it to an active pickup.
+                    |
+                    */
+
+                    if (
+                        ! $existing->self_drop
+                        &&
+                        $existing->pickup_location_id
+                        &&
+                        $existing->status
+                        === CourierStatus::AWAITING_PICKUP
+                    ) {
+                        $this->pickupService
+                            ->attachShipmentToOpenPickup(
+                                merchantId:
+                                    (int) $merchant->id,
+
+                                pickupLocationId:
+                                    (int) $existing->pickup_location_id,
+
+                                shipment:
+                                    $existing,
+                            );
+                    }
+
                     return $existing->fresh([
                         'pickupRequests',
                     ]);
@@ -122,15 +156,20 @@ final class ShipmentService
                     );
 
                 /*
-                | Self-drop does not require a pickup location.
+                |--------------------------------------------------------------------------
+                | SELF DROP
+                |--------------------------------------------------------------------------
                 */
+
+                $selfDrop = filter_var(
+                    $data['self_drop'] ?? false,
+                    FILTER_VALIDATE_BOOLEAN
+                );
+
                 if (
                     ! $pickupLocation
                     &&
-                    ! filter_var(
-                        $data['self_drop'] ?? false,
-                        FILTER_VALIDATE_BOOLEAN
-                    )
+                    ! $selfDrop
                 ) {
                     throw ValidationException::withMessages([
                         'pickup_location_id' => [
@@ -240,7 +279,8 @@ final class ShipmentService
                 */
 
                 $trackingNumber =
-                    $this->shipmentNumberService->generate();
+                    $this->shipmentNumberService
+                        ->generate();
 
                 /*
                 |--------------------------------------------------------------------------
@@ -256,23 +296,11 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | SELF DROP
-                |--------------------------------------------------------------------------
-                */
-
-                $selfDrop = filter_var(
-                    $data['self_drop'] ?? false,
-                    FILTER_VALIDATE_BOOLEAN
-                );
-
-                /*
-                |--------------------------------------------------------------------------
-                | SHIPMENT
+                | SHIPMENT DATA
                 |--------------------------------------------------------------------------
                 */
 
                 $shipmentData = [
-
                     'tracking_number' =>
                         $trackingNumber,
 
@@ -378,11 +406,12 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | OPTIONAL SCHEMA COLUMNS
+                | OPTIONAL COLUMNS
                 |--------------------------------------------------------------------------
                 */
 
-                $columns = $this->shipmentColumns();
+                $columns =
+                    $this->shipmentColumns();
 
                 if (
                     array_key_exists(
@@ -431,37 +460,27 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
-                | TRACKING EVENT
+                | INITIAL TRACKING
                 |--------------------------------------------------------------------------
                 */
 
                 $this->createTrackingEvent(
                     shipment: $shipment,
                     oldStatus: null,
-                    newStatus: CourierStatus::AWAITING_PICKUP,
+                    newStatus:
+                        CourierStatus::AWAITING_PICKUP,
                     description:
                         'Shipment created successfully. Awaiting pickup.'
                 );
 
                 /*
                 |--------------------------------------------------------------------------
-                | AUTOMATIC OPEN-PICKUP ATTACHMENT
+                | AUTOMATIC ACTIVE PICKUP BATCHING
                 |--------------------------------------------------------------------------
                 |
-                | This is the critical part of the new flow.
+                | This DOES NOT create a pickup.
                 |
-                | If the merchant already has an open pickup for this
-                | pickup location, this newly-created shipment joins it.
-                |
-                | Example:
-                |
-                | PR-001 is assigned to rider.
-                |
-                | Store creates Shipment #103.
-                |
-                | Shipment #103 automatically joins PR-001.
-                |
-                | No new PR is created.
+                | It only searches for an existing active pickup.
                 |
                 */
 
@@ -473,7 +492,7 @@ final class ShipmentService
                     $this->pickupService
                         ->attachShipmentToOpenPickup(
                             merchantId:
-                                $merchant->id,
+                                (int) $merchant->id,
 
                             pickupLocationId:
                                 (int) $pickupLocation->id,
@@ -482,12 +501,6 @@ final class ShipmentService
                                 $shipment,
                         );
                 }
-
-                /*
-                |--------------------------------------------------------------------------
-                | RETURN
-                |--------------------------------------------------------------------------
-                */
 
                 return $shipment->fresh([
                     'pickupRequests',
@@ -508,17 +521,20 @@ final class ShipmentService
         ?int $merchantId = null,
         string $source = 'manual'
     ): Shipment {
-
         if ($merchantId !== null) {
             $data['merchant_id'] = $merchantId;
         }
 
         if (
             ! empty($data['merchant_id'])
-            && isset($data['pickup_location_id'])
-            && isset($data['delivery_lat'])
-            && isset($data['delivery_lng'])
-            && isset($data['packet'])
+            &&
+            isset($data['pickup_location_id'])
+            &&
+            isset($data['delivery_lat'])
+            &&
+            isset($data['delivery_lng'])
+            &&
+            isset($data['packet'])
         ) {
             return $this->createFromGateway(
                 (int) $data['merchant_id'],
@@ -532,10 +548,11 @@ final class ShipmentService
                 $userId,
                 $source
             ): Shipment {
-
                 $trackingNumber =
                     $data['tracking_number']
-                    ?? $this->shipmentNumberService->generate();
+                    ??
+                    $this->shipmentNumberService
+                        ->generate();
 
                 $shipmentData = array_merge(
                     $data,
@@ -548,7 +565,8 @@ final class ShipmentService
 
                         'status' =>
                             $data['status']
-                            ?? CourierStatus::AWAITING_PICKUP,
+                            ??
+                            CourierStatus::AWAITING_PICKUP,
                     ]
                 );
 
@@ -574,7 +592,39 @@ final class ShipmentService
                         'Shipment created.'
                 );
 
-                return $shipment->fresh();
+                /*
+                |--------------------------------------------------------------------------
+                | Manual creation can also join an active pickup when the
+                | necessary merchant/location information is available.
+                |--------------------------------------------------------------------------
+                */
+
+                if (
+                    $shipment->merchant_id
+                    &&
+                    $shipment->pickup_location_id
+                    &&
+                    ! $shipment->self_drop
+                    &&
+                    $shipment->status
+                    === CourierStatus::AWAITING_PICKUP
+                ) {
+                    $this->pickupService
+                        ->attachShipmentToOpenPickup(
+                            merchantId:
+                                (int) $shipment->merchant_id,
+
+                            pickupLocationId:
+                                (int) $shipment->pickup_location_id,
+
+                            shipment:
+                                $shipment,
+                        );
+                }
+
+                return $shipment->fresh([
+                    'pickupRequests',
+                ]);
             }
         );
     }
@@ -672,6 +722,10 @@ final class ShipmentService
             return;
         }
 
+        $columns =
+            DB::getSchemaBuilder()
+                ->getColumnListing($table);
+
         $data = [
             'shipment_id' =>
                 $shipment->id,
@@ -719,10 +773,6 @@ final class ShipmentService
                 now(),
         ];
 
-        $columns =
-            DB::getSchemaBuilder()
-                ->getColumnListing($table);
-
         $data =
             array_intersect_key(
                 $data,
@@ -745,12 +795,6 @@ final class ShipmentService
                 ->getColumnListing('shipments')
         );
     }
-
-    /*
-    |--------------------------------------------------------------------------
-    | FILTER SHIPMENT COLUMNS
-    |--------------------------------------------------------------------------
-    */
 
     private function filterShipmentColumns(
         array $data
@@ -780,6 +824,12 @@ final class ShipmentService
                 $userId,
                 $note
             ): Shipment {
+                $shipment =
+                    Shipment::query()
+                        ->lockForUpdate()
+                        ->findOrFail(
+                            $shipment->id
+                        );
 
                 $oldStatus =
                     $shipment->status;
@@ -793,14 +843,16 @@ final class ShipmentService
                     );
 
                 if (
-                    $status === CourierStatus::DELIVERED
+                    $status
+                    === CourierStatus::DELIVERED
                 ) {
                     $shipment->delivered_at =
                         now();
                 }
 
                 if (
-                    $status === CourierStatus::CANCELLED
+                    $status
+                    === CourierStatus::CANCELLED
                 ) {
                     $shipment->cancelled_at =
                         now();

@@ -4,14 +4,16 @@ declare(strict_types=1);
 
 namespace Modules\Pickup\Models;
 
+use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Modules\Branch\Models\Branch;
 use Modules\Merchant\Models\Merchant;
 use Modules\Merchant\Models\MerchantPickupLocation;
 use Modules\Pickup\Support\PickupStatus;
+use Modules\Shipment\Models\Shipment;
 
 final class PickupRequest extends Model
 {
@@ -19,7 +21,6 @@ final class PickupRequest extends Model
 
     protected $fillable = [
         'request_number',
-
         'merchant_id',
 
         'store_reference',
@@ -30,17 +31,19 @@ final class PickupRequest extends Model
         'pickup_branch_id',
         'pickup_sub_branch_id',
 
+        'pickup_location_id',
+
         'assigned_to',
+        'assigned_by',
+
         'picked_up_by',
 
         'pickup_name',
         'pickup_phone',
         'pickup_email',
-
         'pickup_address',
         'pickup_city',
         'pickup_area',
-
         'pickup_lat',
         'pickup_lng',
 
@@ -54,18 +57,22 @@ final class PickupRequest extends Model
 
         'requested_at',
         'assigned_at',
+        'accepted_at',
+
+        'arrived_at',
+        'rider_arrived_at',
+
+        'collection_started_at',
+
         'picked_up_at',
+
+        'received_at_origin_at',
+
+        'completed_at',
+
         'failed_at',
         'failed_reason',
 
-        'pickup_location_id',
-
-        'accepted_at',
-        'received_at_origin_at',
-
-        'assigned_by',
-        'arrived_at',
-        'completed_at',
         'cancelled_at',
     ];
 
@@ -77,14 +84,21 @@ final class PickupRequest extends Model
 
         'requested_at' => 'datetime',
         'assigned_at' => 'datetime',
-        'picked_up_at' => 'datetime',
-        'failed_at' => 'datetime',
-
         'accepted_at' => 'datetime',
-        'received_at_origin_at' => 'datetime',
 
         'arrived_at' => 'datetime',
+        'rider_arrived_at' => 'datetime',
+
+        'collection_started_at' => 'datetime',
+
+        'picked_up_at' => 'datetime',
+
+        'received_at_origin_at' => 'datetime',
+
         'completed_at' => 'datetime',
+
+        'failed_at' => 'datetime',
+
         'cancelled_at' => 'datetime',
 
         'parcel_quantity' => 'integer',
@@ -144,34 +158,18 @@ final class PickupRequest extends Model
         );
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Assigned Staff / Rider
-    |--------------------------------------------------------------------------
-    */
-
     public function assignedStaff(): BelongsTo
     {
         return $this->belongsTo(
-            \App\Models\User::class,
+            User::class,
             'assigned_to'
         );
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Compatibility alias
-    |--------------------------------------------------------------------------
-    |
-    | Existing controller/frontend code uses assignedRider.
-    | Keep this alias so both names work.
-    |
-    */
-
     public function assignedRider(): BelongsTo
     {
         return $this->belongsTo(
-            \App\Models\User::class,
+            User::class,
             'assigned_to'
         );
     }
@@ -179,7 +177,7 @@ final class PickupRequest extends Model
     public function assignedBy(): BelongsTo
     {
         return $this->belongsTo(
-            \App\Models\User::class,
+            User::class,
             'assigned_by'
         );
     }
@@ -187,31 +185,45 @@ final class PickupRequest extends Model
     public function pickedUpBy(): BelongsTo
     {
         return $this->belongsTo(
-            \App\Models\User::class,
+            User::class,
             'picked_up_by'
         );
     }
 
-    /*
-    |--------------------------------------------------------------------------
-    | Pickup Shipments
-    |--------------------------------------------------------------------------
-    */
-
-    public function shipments(): HasMany
+    public function shipments(): BelongsToMany
     {
-        return $this->hasMany(
-            PickupRequestShipment::class,
-            'pickup_request_id'
-        );
+        return $this->belongsToMany(
+            Shipment::class,
+            'pickup_request_shipments',
+            'pickup_request_id',
+            'shipment_id'
+        )
+            ->withPivot([
+                'added_at',
+                'added_by',
+
+                'removed_at',
+                'removed_by',
+
+                'status',
+
+                'collection_status',
+                'collected_at',
+                'collected_by',
+
+                'remarks',
+            ])
+            ->withTimestamps();
     }
 
-    public function activeShipments(): HasMany
+    public function activeShipments(): BelongsToMany
     {
-        return $this->hasMany(
-            PickupRequestShipment::class,
-            'pickup_request_id'
-        )->whereNull('removed_at');
+        return $this->shipments()
+            ->wherePivotNull('removed_at')
+            ->wherePivotIn(
+                'status',
+                \Modules\Pickup\Support\PickupShipmentStatus::active()
+            );
     }
 
     /*
@@ -248,28 +260,40 @@ final class PickupRequest extends Model
         );
     }
 
-    public function scopeForBranch(
+    public function scopeForPickupLocation(
         Builder $query,
-        int $branchId
+        int $pickupLocationId
     ): Builder {
-        return $query->where(function (Builder $q) use ($branchId): void {
+        return $query->where(
+            'pickup_location_id',
+            $pickupLocationId
+        );
+    }
 
-            $q->where(
-                'branch_id',
-                $branchId
-            )
-                ->orWhere(
-                    'sub_branch_id',
-                    $branchId
-                )
-                ->orWhere(
-                    'pickup_branch_id',
-                    $branchId
-                )
-                ->orWhere(
-                    'pickup_sub_branch_id',
-                    $branchId
-                );
-        });
+    /*
+    |--------------------------------------------------------------------------
+    | State helpers
+    |--------------------------------------------------------------------------
+    */
+
+    public function canAcceptShipments(): bool
+    {
+        return PickupStatus::canAddShipments(
+            (string) $this->status
+        );
+    }
+
+    public function isClosed(): bool
+    {
+        return PickupStatus::isClosed(
+            (string) $this->status
+        );
+    }
+
+    public function isActive(): bool
+    {
+        return PickupStatus::isActive(
+            (string) $this->status
+        );
     }
 }

@@ -22,17 +22,8 @@ final class GatewayCreatePickupRequest extends FormRequest
                 'min:1',
             ],
 
-            /*
-             * This is the STORE's own pickup container.
-             *
-             * Examples:
-             *
-             * PR-001
-             * PR-002
-             * PR-003
-             */
             'store_reference' => [
-                'required',
+                'nullable',
                 'string',
                 'max:100',
             ],

@@ -108,6 +108,7 @@ class SendPickupCallback implements ShouldQueue
         | signature because signing happens after this merge.
         |--------------------------------------------------------------------------
         */
+
         $body = array_merge(
             [
                 'application_number' => $merchant->application_number,
@@ -115,6 +116,8 @@ class SendPickupCallback implements ShouldQueue
             ],
             $this->payload
         );
+
+        dd($body);
 
         $rawBody = json_encode(
             $body,

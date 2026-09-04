@@ -314,34 +314,47 @@ final class PickupCallbackService
     }
 
     /**
+     * Persist a callback log row (pending) and queue the delivery job.
+     *
+     * The job receives the log id so it can update the same row to
+     * delivered/failed. This is the source of truth the admin UI reads to
+     * show per-event status and offer a Retry only on failed callbacks.
+     *
      * @param  array<string, mixed>  $payload
      */
-    private function dispatch(int $merchantId, array $payload): void
-    {
-        /*
-        |--------------------------------------------------------------------------
-        | Visibility log
-        |
-        | Records that a pickup callback was queued, and whether the target
-        | merchant actually has a callback URL configured. This lets us tell
-        | "never queued" apart from "queued but not delivered" from the app log
-        | alone, without needing tinker on the server.
-        |--------------------------------------------------------------------------
-        */
+    private function dispatch(
+        int $merchantId,
+        array $payload,
+        int $pickupRequestId,
+        ?int $shipmentId = null,
+    ): void {
         $callbackUrl = trim(
             (string) Merchant::query()
                 ->whereKey($merchantId)
                 ->value('integration_callback_url')
         );
 
+        $log = PickupCallbackLog::create([
+            'pickup_request_id' => $pickupRequestId,
+            'merchant_id' => $merchantId,
+            'shipment_id' => $shipmentId,
+            'event' => $payload['event'] ?? null,
+            'event_id' => $payload['event_id'] ?? null,
+            'callback_url' => $callbackUrl !== '' ? $callbackUrl : null,
+            'payload' => $payload,
+            'status' => PickupCallbackLog::STATUS_PENDING,
+            'attempt_count' => 0,
+        ]);
+
         Log::info('Pickup callback queued.', [
+            'log_id' => $log->id,
             'merchant_id' => $merchantId,
             'event' => $payload['event'] ?? null,
             'event_id' => $payload['event_id'] ?? null,
             'has_callback_url' => $callbackUrl !== '',
         ]);
 
-        SendPickupCallback::dispatch($merchantId, $payload)
+        SendPickupCallback::dispatch($merchantId, $payload, $log->id)
             ->afterCommit()
             ->onQueue('webhooks');
     }

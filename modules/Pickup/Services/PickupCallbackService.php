@@ -327,7 +327,7 @@ final class PickupCallbackService
                 ->value('integration_callback_url')
         );
 
-        Log::info('Pickup callback queued.', [
+        Log::warning('Pickup callback queued.', [
             'merchant_id' => $merchantId,
             'event' => $payload['event'] ?? null,
             'event_id' => $payload['event_id'] ?? null,
@@ -336,6 +336,8 @@ final class PickupCallbackService
              * Full event payload (before the job prepends
              * application_number / merchant_reference). Logged so every
              * pickup callback event can be inspected in storage/logs.
+             * Uses warning level so it is not filtered out by a production
+             * LOG_LEVEL of warning/error.
              */
             'payload' => $payload,
         ]);

@@ -290,12 +290,6 @@ final class PickupCallbackService
             ],
         ];
 
-        // TEMP DEBUG: verify the rider_assigned payload before queuing the callback.
-        // Remove after verification.
-        if ($event === 'pickup.rider_assigned') {
-            dd($payload);
-        }
-
         $this->dispatch($merchantId, $payload);
     }
 
@@ -337,6 +331,12 @@ final class PickupCallbackService
             'event' => $payload['event'] ?? null,
             'event_id' => $payload['event_id'] ?? null,
             'has_callback_url' => $callbackUrl !== '',
+            /*
+             * Full event payload (before the job prepends
+             * application_number / merchant_reference). Logged so every
+             * pickup callback event can be inspected in storage/logs.
+             */
+            'payload' => $payload,
         ]);
 
         SendPickupCallback::dispatch($merchantId, $payload)

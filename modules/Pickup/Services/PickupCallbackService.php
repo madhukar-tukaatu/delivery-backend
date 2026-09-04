@@ -298,9 +298,10 @@ final class PickupCallbackService
      */
     private function riderPayload(PickupRequest $pickup): ?array
     {
-        $rider = $pickup->relationLoaded('assignedStaff')
-            ? $pickup->assignedStaff
-            : $pickup->assignedStaff()->first();
+        $rider = $pickup->assignedStaff
+            ?? ($pickup->assigned_to
+                ? \App\Models\User::query()->find($pickup->assigned_to)
+                : null);
 
         if (! $rider) {
             return null;

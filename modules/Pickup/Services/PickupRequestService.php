@@ -133,7 +133,7 @@ final class PickupRequestService
         User $staff,
         User $assignedBy
     ): PickupRequest {
-        return DB::transaction(
+        $fresh = DB::transaction(
             function () use (
                 $pickup,
                 $staff,
@@ -229,13 +229,23 @@ final class PickupRequestService
                         : 'Pickup rider assigned.'
                 );
 
-                $fresh = $this->get($pickup);
-
-                $this->callbacks->riderAssigned($fresh);
-
-                return $fresh;
+                return $this->get($pickup);
             }
         );
+
+        /*
+        |--------------------------------------------------------------------------
+        | Fire the callback AFTER the transaction has fully committed.
+        |
+        | Dispatching from inside the DB::transaction closure relied on
+        | ->afterCommit(), which can silently skip queuing. Doing it here,
+        | outside the transaction, matches the (working) resend path and
+        | guarantees the job is queued.
+        |--------------------------------------------------------------------------
+        */
+        $this->callbacks->riderAssigned($fresh);
+
+        return $fresh;
     }
 
     /*
@@ -351,7 +361,7 @@ final class PickupRequestService
         PickupRequest $pickup,
         User $user
     ): PickupRequest {
-        return DB::transaction(
+        $fresh = DB::transaction(
             function () use (
                 $pickup,
                 $user
@@ -393,13 +403,13 @@ final class PickupRequestService
                     description: 'Rider started travelling to pickup location.'
                 );
 
-                $fresh = $this->get($pickup);
-
-                $this->callbacks->riderStarted($fresh);
-
-                return $fresh;
+                return $this->get($pickup);
             }
         );
+
+        $this->callbacks->riderStarted($fresh);
+
+        return $fresh;
     }
 
     /*
@@ -412,7 +422,7 @@ final class PickupRequestService
         PickupRequest $pickup,
         User $user
     ): PickupRequest {
-        return DB::transaction(
+        $fresh = DB::transaction(
             function () use (
                 $pickup,
                 $user
@@ -447,13 +457,13 @@ final class PickupRequestService
                     description: 'Rider arrived at pickup location.'
                 );
 
-                $fresh = $this->get($pickup);
-
-                $this->callbacks->riderArrived($fresh);
-
-                return $fresh;
+                return $this->get($pickup);
             }
         );
+
+        $this->callbacks->riderArrived($fresh);
+
+        return $fresh;
     }
 
     /*
@@ -468,7 +478,7 @@ final class PickupRequestService
         User $user,
         ?string $remarks = null
     ): PickupRequestShipment {
-        return DB::transaction(
+        $result = DB::transaction(
             function () use (
                 $pickup,
                 $shipment,
@@ -562,17 +572,19 @@ final class PickupRequestService
                 $pickup->picked_up_by = $user->id;
                 $pickup->save();
 
-                $this->callbacks->shipmentCollected(
-                    pickup: $pickup,
-                    shipment: $shipment
-                );
-
                 return $item->fresh([
                     'pickupRequest',
                     'shipment',
                 ]);
             }
         );
+
+        $this->callbacks->shipmentCollected(
+            pickup: $result->pickupRequest,
+            shipment: $result->shipment
+        );
+
+        return $result;
     }
 
     /*
@@ -586,7 +598,7 @@ final class PickupRequestService
         Shipment $shipment,
         User $staff
     ): PickupRequestShipment {
-        return DB::transaction(
+        $result = DB::transaction(
             function () use (
                 $pickup,
                 $shipment,
@@ -691,17 +703,19 @@ final class PickupRequestService
                     $pickup->save();
                 }
 
-                $this->callbacks->shipmentReceivedAtOrigin(
-                    pickup: $pickup,
-                    shipment: $shipment
-                );
-
                 return $item->fresh([
                     'pickupRequest',
                     'shipment',
                 ]);
             }
         );
+
+        $this->callbacks->shipmentReceivedAtOrigin(
+            pickup: $result->pickupRequest,
+            shipment: $result->shipment
+        );
+
+        return $result;
     }
 
     /*
@@ -714,7 +728,7 @@ final class PickupRequestService
         PickupRequest $pickup,
         User $user
     ): PickupRequest {
-        return DB::transaction(
+        $fresh = DB::transaction(
             function () use (
                 $pickup,
                 $user
@@ -780,13 +794,13 @@ final class PickupRequestService
                     description: 'Pickup completed successfully.'
                 );
 
-                $fresh = $this->get($pickup);
-
-                $this->callbacks->pickupCompleted($fresh);
-
-                return $fresh;
+                return $this->get($pickup);
             }
         );
+
+        $this->callbacks->pickupCompleted($fresh);
+
+        return $fresh;
     }
 
     /*

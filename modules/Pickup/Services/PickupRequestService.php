@@ -15,6 +15,11 @@ use Modules\Shipment\Models\Shipment;
 
 final class PickupRequestService
 {
+    public function __construct(
+        private readonly PickupCallbackService $callbacks,
+    ) {
+    }
+
     /*
     |--------------------------------------------------------------------------
     | Get
@@ -224,7 +229,11 @@ final class PickupRequestService
                         : 'Pickup rider assigned.'
                 );
 
-                return $this->get($pickup);
+                $fresh = $this->get($pickup);
+
+                $this->callbacks->riderAssigned($fresh);
+
+                return $fresh;
             }
         );
     }
@@ -384,7 +393,11 @@ final class PickupRequestService
                     description: 'Rider started travelling to pickup location.'
                 );
 
-                return $this->get($pickup);
+                $fresh = $this->get($pickup);
+
+                $this->callbacks->riderStarted($fresh);
+
+                return $fresh;
             }
         );
     }
@@ -434,7 +447,11 @@ final class PickupRequestService
                     description: 'Rider arrived at pickup location.'
                 );
 
-                return $this->get($pickup);
+                $fresh = $this->get($pickup);
+
+                $this->callbacks->riderArrived($fresh);
+
+                return $fresh;
             }
         );
     }
@@ -544,6 +561,11 @@ final class PickupRequestService
 
                 $pickup->picked_up_by = $user->id;
                 $pickup->save();
+
+                $this->callbacks->shipmentCollected(
+                    pickup: $pickup,
+                    shipment: $shipment->refresh()
+                );
 
                 return $item->fresh([
                     'pickupRequest',
@@ -669,6 +691,11 @@ final class PickupRequestService
                     $pickup->save();
                 }
 
+                $this->callbacks->shipmentReceivedAtOrigin(
+                    pickup: $pickup,
+                    shipment: $shipment->refresh()
+                );
+
                 return $item->fresh([
                     'pickupRequest',
                     'shipment',
@@ -753,7 +780,11 @@ final class PickupRequestService
                     description: 'Pickup completed successfully.'
                 );
 
-                return $this->get($pickup);
+                $fresh = $this->get($pickup);
+
+                $this->callbacks->pickupCompleted($fresh);
+
+                return $fresh;
             }
         );
     }

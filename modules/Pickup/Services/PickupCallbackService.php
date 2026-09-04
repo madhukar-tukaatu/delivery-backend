@@ -290,6 +290,12 @@ final class PickupCallbackService
             ],
         ];
 
+        // TEMP DEBUG: verify the rider_assigned payload before queuing the callback.
+        // Remove after verification.
+        if ($event === 'pickup.rider_assigned') {
+            dd($payload);
+        }
+
         $this->dispatch($merchantId, $payload);
     }
 

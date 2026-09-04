@@ -12,6 +12,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Modules\Pickup\Models\PickupRequest;
+use Modules\Pickup\Services\PickupCallbackService;
 use Modules\Pickup\Services\PickupRequestService;
 use Modules\Shipment\Models\Shipment;
 
@@ -19,6 +20,7 @@ final class AdminPickupController extends Controller
 {
     public function __construct(
         private readonly PickupRequestService $pickupRequestService,
+        private readonly PickupCallbackService $callbackService,
     ) {
     }
 
@@ -642,6 +644,116 @@ final class AdminPickupController extends Controller
                 'pickup_shipment' => $updatedItem,
             ],
             'Shipment received successfully.'
+        );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | RESEND CALLBACK
+    |--------------------------------------------------------------------------
+    |
+    | POST:
+    | /api/v1/admin/pickups/{pickup}/resend-callback
+    |
+    | Body:
+    |   event       (required) one of PickupCallbackService::RESENDABLE_EVENTS
+    |   shipment_id  (required only for shipment.* events)
+    |
+    | Re-queues a pickup callback to the store partner using the pickup's
+    | current state. Useful when a callback previously failed (e.g. the store
+    | returned 422) and needs to be replayed after the issue is resolved.
+    |--------------------------------------------------------------------------
+    */
+
+    public function resendCallback(
+        Request $request,
+        PickupRequest $pickup
+    ): JsonResponse {
+        $this->authorizePickup(
+            $request,
+            $pickup
+        );
+
+        $validated = $request->validate([
+            'event' => [
+                'required',
+                'string',
+                'in:' . implode(
+                    ',',
+                    PickupCallbackService::RESENDABLE_EVENTS
+                ),
+            ],
+
+            'shipment_id' => [
+                'nullable',
+                'integer',
+                'exists:shipments,id',
+            ],
+        ]);
+
+        $event = $validated['event'];
+
+        $shipmentModel = null;
+
+        /*
+        |--------------------------------------------------------------------------
+        | Shipment-scoped events need a shipment that belongs to this pickup.
+        |--------------------------------------------------------------------------
+        */
+        if (str_starts_with($event, 'shipment.')) {
+            if (empty($validated['shipment_id'])) {
+                return ApiResponse::error(
+                    'A shipment_id is required to resend a shipment event.',
+                    422
+                );
+            }
+
+            $shipmentModel = Shipment::query()
+                ->whereKey($validated['shipment_id'])
+                ->first();
+
+            if (! $shipmentModel) {
+                return ApiResponse::error(
+                    'Shipment not found.',
+                    404
+                );
+            }
+
+            $belongsToPickup = $pickup->shipments()
+                ->where(
+                    'shipment_id',
+                    $shipmentModel->id
+                )
+                ->exists();
+
+            if (! $belongsToPickup) {
+                return ApiResponse::error(
+                    'Shipment does not belong to this pickup request.',
+                    422
+                );
+            }
+        }
+
+        $pickup->load([
+            'merchant',
+            'pickupLocation',
+            'assignedStaff',
+            'shipments',
+        ]);
+
+        $this->callbackService->resend(
+            pickup: $pickup,
+            event: $event,
+            shipment: $shipmentModel
+        );
+
+        return ApiResponse::success(
+            [
+                'event' => $event,
+                'pickup_id' => $pickup->id,
+                'shipment_id' => $shipmentModel?->id,
+            ],
+            'Callback re-queued successfully.'
         );
     }
 

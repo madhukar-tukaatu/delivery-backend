@@ -154,6 +154,18 @@ Route::prefix('v1/admin')
                 'route.permission:pickups.receive',
             ])
             ->name('pickups.shipments.receive');
+
+        Route::post(
+            'pickups/{pickup}/resend-callback',
+            [
+                AdminPickupController::class,
+                'resendCallback',
+            ]
+        )
+            ->middleware([
+                'route.permission:pickups.assign',
+            ])
+            ->name('pickups.resend-callback');
     });
 
 /*

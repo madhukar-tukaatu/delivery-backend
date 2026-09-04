@@ -94,8 +94,30 @@ class SendPickupCallback implements ShouldQueue
 
         $timestamp = (string) now()->timestamp;
 
+        /*
+        |--------------------------------------------------------------------------
+        | Identity fields required by the store partner
+        |
+        | The partner endpoint validates every callback the same way it
+        | validates the onboarding callback and rejects any body that is
+        | missing application_number (HTTP 422). We add the merchant's
+        | application_number (and merchant_reference for parity with the
+        | onboarding payload) so every pickup event passes validation.
+        |
+        | These are placed at the front of the body and are covered by the
+        | signature because signing happens after this merge.
+        |--------------------------------------------------------------------------
+        */
+        $body = array_merge(
+            [
+                'application_number' => $merchant->application_number,
+                'merchant_reference' => $merchant->code,
+            ],
+            $this->payload
+        );
+
         $rawBody = json_encode(
-            $this->payload,
+            $body,
             JSON_UNESCAPED_SLASHES
             | JSON_UNESCAPED_UNICODE
             | JSON_THROW_ON_ERROR

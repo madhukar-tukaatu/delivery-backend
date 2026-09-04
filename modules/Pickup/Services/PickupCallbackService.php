@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Modules\Pickup\Services;
 
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Modules\Merchant\Models\Merchant;
 use Modules\Pickup\Jobs\SendPickupCallback;
 use Modules\Pickup\Models\PickupRequest;
 use Modules\Shipment\Models\Shipment;
@@ -188,6 +190,75 @@ final class PickupCallbackService
 
     /*
     |--------------------------------------------------------------------------
+    | Manual re-send
+    |
+    | Rebuilds and re-dispatches a callback for a given pickup + event using
+    | the pickup's CURRENT state. Used by the admin "resend callback" action
+    | to replay an event to the store partner (e.g. after a delivery failure
+    | or a 422 that has since been fixed).
+    |
+    | Shipment-scoped events (shipment.collected / shipment.received_at_origin)
+    | require a shipment; the caller must pass one for those events.
+    |--------------------------------------------------------------------------
+    */
+    public const RESENDABLE_EVENTS = [
+        'pickup.rider_assigned',
+        'pickup.rider_started',
+        'pickup.rider_arrived',
+        'pickup.completed',
+        'shipment.collected',
+        'shipment.received_at_origin',
+    ];
+
+    public function resend(
+        PickupRequest $pickup,
+        string $event,
+        ?Shipment $shipment = null,
+    ): void {
+        switch ($event) {
+            case 'pickup.rider_assigned':
+                $this->riderAssigned($pickup);
+                break;
+
+            case 'pickup.rider_started':
+                $this->riderStarted($pickup);
+                break;
+
+            case 'pickup.rider_arrived':
+                $this->riderArrived($pickup);
+                break;
+
+            case 'pickup.completed':
+                $this->pickupCompleted($pickup);
+                break;
+
+            case 'shipment.collected':
+                if ($shipment === null) {
+                    throw new \InvalidArgumentException(
+                        'A shipment is required to resend shipment.collected.'
+                    );
+                }
+                $this->shipmentCollected($pickup, $shipment);
+                break;
+
+            case 'shipment.received_at_origin':
+                if ($shipment === null) {
+                    throw new \InvalidArgumentException(
+                        'A shipment is required to resend shipment.received_at_origin.'
+                    );
+                }
+                $this->shipmentReceivedAtOrigin($pickup, $shipment);
+                break;
+
+            default:
+                throw new \InvalidArgumentException(
+                    'Unsupported pickup callback event: ' . $event
+                );
+        }
+    }
+
+    /*
+    |--------------------------------------------------------------------------
     | Shared builder for the pickup-level rider events
     | (rider_assigned / rider_started / rider_arrived)
     |--------------------------------------------------------------------------
@@ -247,6 +318,29 @@ final class PickupCallbackService
      */
     private function dispatch(int $merchantId, array $payload): void
     {
+        /*
+        |--------------------------------------------------------------------------
+        | Visibility log
+        |
+        | Records that a pickup callback was queued, and whether the target
+        | merchant actually has a callback URL configured. This lets us tell
+        | "never queued" apart from "queued but not delivered" from the app log
+        | alone, without needing tinker on the server.
+        |--------------------------------------------------------------------------
+        */
+        $callbackUrl = trim(
+            (string) Merchant::query()
+                ->whereKey($merchantId)
+                ->value('integration_callback_url')
+        );
+
+        Log::info('Pickup callback queued.', [
+            'merchant_id' => $merchantId,
+            'event' => $payload['event'] ?? null,
+            'event_id' => $payload['event_id'] ?? null,
+            'has_callback_url' => $callbackUrl !== '',
+        ]);
+
         SendPickupCallback::dispatch($merchantId, $payload)
             ->afterCommit()
             ->onQueue('webhooks');

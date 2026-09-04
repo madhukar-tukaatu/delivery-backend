@@ -61,6 +61,7 @@ final class AdminPickupController extends Controller
                 'merchant:id,name,phone,email',
                 'pickupLocation',
                 'assignedStaff:id,name,email,phone,branch_id',
+                'shipments',
             ]);
 
         $this->applyBranchScope(

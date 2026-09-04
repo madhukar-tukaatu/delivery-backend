@@ -314,54 +314,35 @@ final class PickupCallbackService
     }
 
     /**
-     * Persist a callback log row (pending) and queue the delivery job.
-     *
-     * The job receives the log id so it can update the same row to
-     * delivered/failed. This is the source of truth the admin UI reads to
-     * show per-event status and offer a Retry only on failed callbacks.
+     * Queue the delivery job for a pickup callback event.
      *
      * @param  array<string, mixed>  $payload
      */
-    private function dispatch(
-        int $merchantId,
-        array $payload,
-        int $pickupRequestId,
-        ?int $shipmentId = null,
-    ): void {
+    private function dispatch(int $merchantId, array $payload): void
+    {
         $callbackUrl = trim(
             (string) Merchant::query()
                 ->whereKey($merchantId)
                 ->value('integration_callback_url')
         );
 
-        $log = PickupCallbackLog::create([
-            'pickup_request_id' => $pickupRequestId,
-            'merchant_id' => $merchantId,
-            'shipment_id' => $shipmentId,
-            'event' => $payload['event'] ?? null,
-            'event_id' => $payload['event_id'] ?? null,
-            'callback_url' => $callbackUrl !== '' ? $callbackUrl : null,
-            'payload' => $payload,
-            'status' => PickupCallbackLog::STATUS_PENDING,
-            'attempt_count' => 0,
-        ]);
-
         Log::info('Pickup callback queued.', [
-            'log_id' => $log->id,
             'merchant_id' => $merchantId,
             'event' => $payload['event'] ?? null,
             'event_id' => $payload['event_id'] ?? null,
             'has_callback_url' => $callbackUrl !== '',
         ]);
 
-        SendPickupCallback::dispatch($merchantId, $payload, $log->id)
+        SendPickupCallback::dispatch($merchantId, $payload)
             ->afterCommit()
             ->onQueue('webhooks');
     }
 
     private function eventId(string $prefix): string
     {
-        return 'evt_' . $prefix . '_' . Str::lower(Str::random(24));
+        $clean = str_replace('.', '_', $prefix);
+
+        return 'evt_' . $clean . '_' . Str::lower(Str::random(24));
     }
 
     private function now(): string

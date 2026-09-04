@@ -117,14 +117,29 @@ class SendPickupCallback implements ShouldQueue
             $this->payload
         );
 
-        dd($body);
-
         $rawBody = json_encode(
             $body,
             JSON_UNESCAPED_SLASHES
             | JSON_UNESCAPED_UNICODE
             | JSON_THROW_ON_ERROR
         );
+
+        /*
+        |--------------------------------------------------------------------------
+        | Outbound payload log
+        |
+        | Records the exact JSON body sent to the store callback URL so the
+        | actual payload for pickup.rider_assigned / pickup.completed / etc.
+        | can be inspected from storage/logs/laravel.log.
+        |--------------------------------------------------------------------------
+        */
+        Log::info('Pickup callback sending.', [
+            'merchant_id' => $this->merchantId,
+            'event' => $body['event'] ?? null,
+            'event_id' => $eventId,
+            'url' => $callbackUrl,
+            'body' => $rawBody,
+        ]);
 
         $signature = hash_hmac(
             'sha256',

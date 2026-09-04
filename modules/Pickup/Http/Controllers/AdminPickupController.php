@@ -212,7 +212,7 @@ final class AdminPickupController extends Controller
             'pickedUpBy',
             'pickupBranch',
             'pickupSubBranch',
-            'shipments.shipment',
+            'shipments',
         ]);
 
         return ApiResponse::success(
@@ -392,7 +392,7 @@ final class AdminPickupController extends Controller
             'assignedStaff',
             'assignedBy',
             'pickedUpBy',
-            'shipments.shipment',
+            'shipments',
         ]);
 
         return ApiResponse::success(
@@ -504,7 +504,7 @@ final class AdminPickupController extends Controller
             'assignedStaff',
             'assignedBy',
             'pickedUpBy',
-            'shipments.shipment',
+            'shipments',
         ]);
 
         return ApiResponse::success(
@@ -549,7 +549,7 @@ final class AdminPickupController extends Controller
             'assignedStaff',
             'assignedBy',
             'pickedUpBy',
-            'shipments.shipment',
+            'shipments',
         ]);
 
         return ApiResponse::success(
@@ -632,7 +632,7 @@ final class AdminPickupController extends Controller
             'assignedStaff',
             'assignedBy',
             'pickedUpBy',
-            'shipments.shipment',
+            'shipments',
         ]);
 
         return ApiResponse::success(

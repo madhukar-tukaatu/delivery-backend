@@ -7,6 +7,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Modules\Pickup\Models\PickupRequest;
 use Modules\Pickup\Services\PickupWorkflowService;
+use Modules\Pickup\Support\PickupStatus;
 
 class StaffPickupController extends Controller
 {
@@ -15,8 +16,11 @@ class StaffPickupController extends Controller
         $user = $request->user();
 
         $query = PickupRequest::query()
-            ->with(['shipment.merchant', 'assignedUser'])
-            ->whereIn('status', ['pending', 'assigned']);
+            ->with(['merchant', 'shipments', 'assignedStaff'])
+            ->whereIn('status', [
+                PickupStatus::REQUESTED,
+                PickupStatus::ASSIGNED,
+            ]);
 
         if ($user->isSuperAdmin() || $user->hasRole('main_admin')) {
             // sees all pickups

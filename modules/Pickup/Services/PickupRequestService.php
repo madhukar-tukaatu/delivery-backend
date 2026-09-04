@@ -564,7 +564,7 @@ final class PickupRequestService
 
                 $this->callbacks->shipmentCollected(
                     pickup: $pickup,
-                    shipment: $shipment->refresh()
+                    shipment: $shipment
                 );
 
                 return $item->fresh([
@@ -693,7 +693,7 @@ final class PickupRequestService
 
                 $this->callbacks->shipmentReceivedAtOrigin(
                     pickup: $pickup,
-                    shipment: $shipment->refresh()
+                    shipment: $shipment
                 );
 
                 return $item->fresh([

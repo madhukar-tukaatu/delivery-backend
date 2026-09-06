@@ -17,12 +17,21 @@ class RoutePermissionMapper
         }
 
         $section = $parts[0];
-        $module = $parts[1];
-        $action = $parts[2];
-
+        
         if (!in_array($section, ['admin', 'merchant', 'staff'], true)) {
             return null;
         }
+
+        // Handle nested resources like staff.pickups.shipments.collect
+        // Take the LAST part as action, second-to-last as module
+        $action = end($parts);
+        $module = $parts[1]; // Always use second part (pickups, shipments, etc)
+        
+        // If there are more than 3 parts and the second part is a common nested module,
+        // use it as the module. Examples:
+        // - staff.pickups.shipments.collect -> pickups.collect (not pickups.shipments)
+        // - admin.shipments.index -> shipments.view
+        // - staff.orders.items.store -> orders.create (not orders.items)
 
         $module = self::normalize($module);
         $action = self::mapAction($action);

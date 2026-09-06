@@ -133,12 +133,31 @@ class SendPickupCallback implements ShouldQueue
         | can be inspected from storage/logs/laravel.log.
         |--------------------------------------------------------------------------
         */
-        Log::info('Pickup callback sending.', [
+        Log::warning('Pickup callback sending.', [
             'merchant_id' => $this->merchantId,
             'event' => $body['event'] ?? null,
             'event_id' => $eventId,
             'url' => $callbackUrl,
             'body' => $rawBody,
+        ]);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Persist a log row for this attempt (source of truth for the UI /
+        | verification). Starts as pending; updated to delivered/failed below.
+        |--------------------------------------------------------------------------
+        */
+        $log = PickupCallbackLog::create([
+            'pickup_request_id' => $this->payload['pickup']['id'] ?? null,
+            'merchant_id' => $this->merchantId,
+            'shipment_id' => $this->payload['shipment']['id'] ?? null,
+            'event' => $body['event'] ?? null,
+            'event_id' => $eventId,
+            'callback_url' => $callbackUrl,
+            'payload' => $body,
+            'status' => PickupCallbackLog::STATUS_PENDING,
+            'attempt_count' => 1,
+            'last_attempt_at' => now(),
         ]);
 
         $signature = hash_hmac(
@@ -167,6 +186,13 @@ class SendPickupCallback implements ShouldQueue
                 Str::limit(trim($response->body()), 2000)
             );
 
+            $log->forceFill([
+                'status' => PickupCallbackLog::STATUS_FAILED,
+                'response_status_code' => $response->status(),
+                'response_body' => Str::limit(trim($response->body()), 4000),
+                'error' => $message,
+            ])->save();
+
             Log::warning($message, [
                 'merchant_id' => $this->merchantId,
                 'event_id' => $eventId,
@@ -174,6 +200,13 @@ class SendPickupCallback implements ShouldQueue
 
             throw new RuntimeException($message);
         }
+
+        $log->forceFill([
+            'status' => PickupCallbackLog::STATUS_DELIVERED,
+            'response_status_code' => $response->status(),
+            'response_body' => Str::limit(trim($response->body()), 4000),
+            'delivered_at' => now(),
+        ])->save();
     }
 
     public function failed(Throwable $exception): void

@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 use Modules\Branch\Models\Branch;
 use Modules\Delivery\Models\DeliveryAssignment;
 use Modules\Merchant\Models\Merchant;
+use Modules\Merchant\Models\MerchantPickupLocation;
 use Modules\Pickup\Models\PickupRequest;
 use Modules\Routing\Models\ShipmentRouteStep;
 use Modules\Tracking\Models\TrackingEvent;
@@ -94,6 +95,14 @@ class Shipment extends Model
         return $this->belongsTo(
             Merchant::class,
             'merchant_id'
+        );
+    }
+
+    public function pickupLocation(): BelongsTo
+    {
+        return $this->belongsTo(
+            MerchantPickupLocation::class,
+            'pickup_location_id'
         );
     }
 

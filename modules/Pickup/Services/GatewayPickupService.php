@@ -839,42 +839,66 @@ final class GatewayPickupService
     ): string {
         /*
         |--------------------------------------------------------------------------
-        | We generate PR-001, PR-002, ...
+        | request_number is GLOBALLY unique: PR-000001, PR-000002, ...
         |
-        | The pickup-location row is already locked by create(),
-        | preventing concurrent creation for the same merchant/location.
+        | It is Tukaatu's own identifier and is NOT scoped to a merchant.
+        | Two pickups can never share a request_number, regardless of merchant.
+        |
+        | (The store's own reference is stored separately in `store_reference`,
+        |  which is unique only per merchant.)
+        |
+        | We compute the next number from the highest EXISTING numeric suffix
+        | across ALL pickup requests, then defensively skip any candidate that
+        | already exists. The surrounding transaction locks the pickup location
+        | row, and the global unique index is the final guarantee.
         |--------------------------------------------------------------------------
         */
 
-        $last = PickupRequest::query()
-            ->where(
-                'merchant_id',
-                $merchantId
-            )
-            ->latest('id')
-            ->value('request_number');
+        $existingNumbers = PickupRequest::query()
+            ->whereNotNull('request_number')
+            ->pluck('request_number');
 
-        $number = 1;
+        $highest = 0;
 
-        if (
-            is_string($last)
-            &&
-            preg_match(
-                '/(\d+)$/',
-                $last,
-                $matches
-            )
-        ) {
-            $number =
-                ((int) $matches[1]) + 1;
+        foreach ($existingNumbers as $value) {
+            if (
+                is_string($value)
+                && preg_match('/(\d+)$/', $value, $matches)
+            ) {
+                $highest = max(
+                    $highest,
+                    (int) $matches[1]
+                );
+            }
         }
 
-        return 'PR-' . str_pad(
-            (string) $number,
-            3,
-            '0',
-            STR_PAD_LEFT
-        );
+        $number = $highest + 1;
+
+        /*
+        |--------------------------------------------------------------------------
+        | Safety: skip any number that already exists globally. Protects against
+        | manual data edits or legacy rows using a different padding width.
+        |--------------------------------------------------------------------------
+        */
+
+        do {
+            $candidate = 'PR-' . str_pad(
+                (string) $number,
+                6,
+                '0',
+                STR_PAD_LEFT
+            );
+
+            $exists = PickupRequest::query()
+                ->where('request_number', $candidate)
+                ->exists();
+
+            if ($exists) {
+                $number++;
+            }
+        } while ($exists);
+
+        return $candidate;
     }
 
     /*

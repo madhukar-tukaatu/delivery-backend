@@ -4,22 +4,16 @@ declare(strict_types=1);
 
 namespace Modules\Shipment\Services;
 
-use Illuminate\Support\Facades\DB;
-use Illuminate\Validation\ValidationException;
-use Modules\Merchant\Models\Merchant;
-use Modules\Shipment\Models\Shipment;
-use Modules\Support\CourierStatus;
-use Modules\Shipment\Services\MerchantPickupLocationResolver;
-use Modules\Shipment\Services\ShipmentNumberService;
-use Modules\Shipment\Services\BranchAssignmentService;
-use Modules\Pickup\Services\PickupService;
-
 use App\Support\CourierStatus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Modules\Merchant\Models\Merchant;
 use Modules\Pickup\Services\GatewayPickupService;
+use Modules\Pickup\Services\PickupService;
 use Modules\Shipment\Models\Shipment;
+use Modules\Shipment\Services\BranchAssignmentService;
+use Modules\Shipment\Services\MerchantPickupLocationResolver;
+use Modules\Shipment\Services\ShipmentNumberService;
 
 final class ShipmentService
 {

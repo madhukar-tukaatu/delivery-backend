@@ -41,7 +41,12 @@ class RoutePermissionMapper
 
     private static function normalize(string $value): string
     {
-        return str_replace('-', '_', $value);
+        // Convert camelCase (e.g. "startTransit") to snake_case
+        // ("start_transit") and dashes to underscores, so route names
+        // written in any casing map to a single canonical permission key.
+        $value = preg_replace('/([a-z])([A-Z])/', '$1_$2', $value) ?? $value;
+
+        return strtolower(str_replace('-', '_', $value));
     }
 
     private static function mapAction(string $action): string
@@ -79,14 +84,31 @@ class RoutePermissionMapper
 
             'approve' => 'approve',
             'reject' => 'reject',
+
+            // Rider cancels a pickup (missing shipment, cutoff passed, service
+            // not fulfillable) or a pickup is failed. Both map to the existing
+            // "failed" permission.
+            'cancel',
+            'fail' => 'failed',
             'assign' => 'assign',
             'assign_branch' => 'assign_branch',
             'request_more_info' => 'request_more_info',
             'retry' => 'retry',
             'test' => 'test',
+
+            // Resend a pickup lifecycle callback. Managed alongside assign.
+            'resend_callback' => 'assign',
             'export' => 'export',
             'calculate' => 'calculate',
             'collect' => 'collect',
+
+            // Rider closes the collection phase and starts transit to the
+            // origin branch. Reuses the existing "complete" permission since
+            // it is the rider's final collection action.
+            'start_transit',
+            'starttransit',
+            'complete' => 'complete',
+
             'deposit' => 'deposit',
             'confirm' => 'confirm',
             'mark_paid' => 'mark_paid',

@@ -26,11 +26,22 @@ final class PickupStatus
     | ARRIVED
     |   Rider has arrived at merchant pickup location.
     |
-    | COMPLETED
-    |   Pickup is completely collected.
+    | COLLECTED
+    |   Rider has collected all shipments from merchant.
     |
-    | FAILED / CANCELLED
-    |   Terminal states.
+    | ON_WAY_TO_BRANCH
+    |   Rider has started journey to origin branch with shipments.
+    |
+    | COMPLETED
+    |   Branch staff has received and verified all shipments.
+    |   This is the final pickup state. pickup.completed callback fires.
+    |
+    | FAILED
+    |   Pickup failed (shipment missing, service not possible, etc.).
+    |   Rider or staff cancelled the pickup.
+    |
+    | CANCELLED
+    |   Pickup was explicitly cancelled by merchant or system.
     |
     */
 
@@ -43,6 +54,10 @@ final class PickupStatus
     public const STARTED = 'started';
 
     public const ARRIVED = 'arrived';
+
+    public const COLLECTED = 'collected';
+
+    public const ON_WAY_TO_BRANCH = 'on_way_to_branch';
 
     public const COMPLETED = 'completed';
 
@@ -63,6 +78,7 @@ final class PickupStatus
             self::ACCEPTED,
             self::STARTED,
             self::ARRIVED,
+            self::COLLECTED,
         ];
     }
 
@@ -77,6 +93,8 @@ final class PickupStatus
             self::ACCEPTED,
             self::STARTED,
             self::ARRIVED,
+            self::COLLECTED,
+            self::ON_WAY_TO_BRANCH,
         ];
     }
 

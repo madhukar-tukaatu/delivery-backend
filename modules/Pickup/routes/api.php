@@ -344,21 +344,39 @@ Route::prefix('v1/staff')
 
         /*
         |--------------------------------------------------------------------------
-        | COMPLETE PICKUP
+        | START TRANSIT TO BRANCH
         |--------------------------------------------------------------------------
         */
 
         Route::post(
-            'pickups/{pickup}/complete',
+            'pickups/{pickup}/start-transit',
             [
                 PickupController::class,
-                'complete',
+                'startTransit',
             ]
         )
             ->middleware([
                 'route.permission:pickups.complete',
             ])
-            ->name('pickups.complete');
+            ->name('pickups.startTransit');
+
+        /*
+        |--------------------------------------------------------------------------
+        | CANCEL PICKUP
+        |--------------------------------------------------------------------------
+        */
+
+        Route::post(
+            'pickups/{pickup}/cancel',
+            [
+                PickupController::class,
+                'cancel',
+            ]
+        )
+            ->middleware([
+                'route.permission:pickups.view',
+            ])
+            ->name('pickups.cancel');
 
         /*
         |--------------------------------------------------------------------------

@@ -635,6 +635,39 @@ final class PickupRequestService
                     $pickup->picked_up_at ?? now();
 
                 $pickup->picked_up_by = $user->id;
+
+                /*
+                |--------------------------------------------------------------------------
+                | Check if all shipments are now collected. If yes, transition
+                | pickup status to COLLECTED.
+                |--------------------------------------------------------------------------
+                */
+                $pending = $pickup
+                    ->activeShipments()
+                    ->get()
+                    ->filter(
+                        static function (
+                            $s
+                        ): bool {
+                            if (! $s) {
+                                return false;
+                            }
+
+                            return ! in_array(
+                                $s->status,
+                                [
+                                    CourierStatus::PICKED_UP,
+                                    CourierStatus::CANCELLED,
+                                ],
+                                true
+                            );
+                        }
+                    );
+
+                if ($pending->isEmpty()) {
+                    $pickup->status = PickupStatus::COLLECTED;
+                }
+
                 $pickup->save();
 
                 return $item->fresh([
@@ -786,16 +819,112 @@ final class PickupRequestService
             shipment: $result->shipment
         );
 
+        /*
+        |--------------------------------------------------------------------------
+        | Transition pickup to ON_WAY_TO_BRANCH when first shipment is validated
+        | at origin. Fire pickup.completed callback only once per pickup.
+        |--------------------------------------------------------------------------
+        */
+        if (
+            $result->pickupRequest
+            && $result->pickupRequest->status === PickupStatus::ON_WAY_TO_BRANCH
+            && ! $this->pickupCompletedCallbackAlreadyFired(
+                $result->pickupRequest->id
+            )
+        ) {
+            $result->pickupRequest->status = PickupStatus::COMPLETED;
+            $result->pickupRequest->save();
+
+            $this->callbacks->pickupCompleted(
+                $result->pickupRequest
+            );
+        }
+
         return $result;
+    }
+
+    private function pickupCompletedCallbackAlreadyFired(
+        int $pickupId
+    ): bool {
+        return \Modules\Pickup\Models\PickupCallbackLog::query()
+            ->where('pickup_request_id', $pickupId)
+            ->where('event', 'pickup.completed')
+            ->where('status', 'delivered')
+            ->exists();
     }
 
     /*
     |--------------------------------------------------------------------------
-    | Complete
+    | Cancel Pickup
+    |
+    | Rider can cancel if shipment is missing, service cannot be fulfilled,
+    | or cutoff time passed. Status transitions to FAILED.
     |--------------------------------------------------------------------------
     */
 
-    public function complete(
+    public function cancelByRider(
+        PickupRequest $pickup,
+        User $user,
+        string $reason
+    ): PickupRequest {
+        return DB::transaction(
+            function () use (
+                $pickup,
+                $user,
+                $reason
+            ): PickupRequest {
+                $pickup = PickupRequest::query()
+                    ->lockForUpdate()
+                    ->findOrFail($pickup->id);
+
+                $this->ensureAssignedRider(
+                    pickup: $pickup,
+                    user: $user
+                );
+
+                if (
+                    ! in_array(
+                        $pickup->status,
+                        [
+                            PickupStatus::ARRIVED,
+                            PickupStatus::COLLECTED,
+                        ],
+                        true
+                    )
+                ) {
+                    throw ValidationException::withMessages([
+                        'status' => [
+                            'Cannot cancel pickup at current stage.',
+                        ],
+                    ]);
+                }
+
+                $pickup->status = PickupStatus::FAILED;
+                $pickup->failed_at = now();
+                $pickup->failed_reason = $reason;
+                $pickup->save();
+
+                $this->createPickupEvent(
+                    pickup: $pickup,
+                    type: 'cancelled',
+                    description: 'Pickup cancelled by rider: ' . $reason
+                );
+
+                return $this->get($pickup);
+            }
+        );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Start Transit to Branch
+    |
+    | Rider marks all shipments collected and ready to leave for branch.
+    | Status transitions: COLLECTED → ON_WAY_TO_BRANCH
+    |--------------------------------------------------------------------------
+    */
+
+    public function startTransit(
         PickupRequest $pickup,
         User $user
     ): PickupRequest {
@@ -815,61 +944,27 @@ final class PickupRequestService
 
                 if (
                     $pickup->status !==
-                    PickupStatus::ARRIVED
+                    PickupStatus::COLLECTED
                 ) {
                     throw ValidationException::withMessages([
                         'status' => [
-                            'Rider must arrive before completing the pickup.',
+                            'All shipments must be collected before starting transit.',
                         ],
                     ]);
                 }
 
-                $pending = $pickup
-                    ->activeShipments()
-                    ->lockForUpdate()
-                    ->get()
-                    ->filter(
-                        static function (
-                            $shipment
-                        ): bool {
-                            if (! $shipment) {
-                                return false;
-                            }
-
-                            return ! in_array(
-                                $shipment->status,
-                                [
-                                    CourierStatus::PICKED_UP,
-                                    CourierStatus::CANCELLED,
-                                ],
-                                true
-                            );
-                        }
-                    );
-
-                if ($pending->isNotEmpty()) {
-                    throw ValidationException::withMessages([
-                        'shipments' => [
-                            'All shipments must be collected before completing the pickup.',
-                        ],
-                    ]);
-                }
-
-                $pickup->status = PickupStatus::COMPLETED;
-                $pickup->completed_at = now();
+                $pickup->status = PickupStatus::ON_WAY_TO_BRANCH;
                 $pickup->save();
 
                 $this->createPickupEvent(
                     pickup: $pickup,
-                    type: 'completed',
-                    description: 'Pickup completed successfully.'
+                    type: 'started_transit',
+                    description: 'Rider started transit to origin branch.'
                 );
 
                 return $this->get($pickup);
             }
         );
-
-        $this->callbacks->pickupCompleted($fresh);
 
         return $fresh;
     }

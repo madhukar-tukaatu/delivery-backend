@@ -512,12 +512,12 @@ final class PickupController extends Controller
     |--------------------------------------------------------------------------
     */
 
-    public function complete(
+    public function startTransit(
         Request $request,
         PickupRequestModel $pickup,
         PickupRequestService $service
     ) {
-        $pickup = $service->complete(
+        $pickup = $service->startTransit(
             pickup: $pickup,
             user: $request->user()
         );
@@ -525,6 +525,33 @@ final class PickupController extends Controller
         return ApiResponse::success(
             $pickup,
             'Pickup completed successfully.'
+        );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | CANCEL
+    |--------------------------------------------------------------------------
+    */
+
+    public function cancel(
+        Request $request,
+        PickupRequestModel $pickup,
+        PickupRequestService $service
+    ) {
+        $validated = $request->validate([
+            'reason' => 'required|string|max:500',
+        ]);
+
+        $pickup = $service->cancelByRider(
+            pickup: $pickup,
+            user: $request->user(),
+            reason: $validated['reason']
+        );
+
+        return ApiResponse::success(
+            $pickup,
+            'Pickup cancelled successfully.'
         );
     }
 

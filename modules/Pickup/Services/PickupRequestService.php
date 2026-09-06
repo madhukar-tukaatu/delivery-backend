@@ -644,6 +644,12 @@ final class PickupRequestService
             }
         );
 
+        \Illuminate\Support\Facades\Log::warning('collectShipment completed', [
+            'pickup_id' => $result->pickupRequest?->id,
+            'shipment_id' => $result->shipment?->id,
+            'shipment_status' => $result->shipment?->status,
+        ]);
+
         $this->callbacks->shipmentCollected(
             pickup: $result->pickupRequest,
             shipment: $result->shipment

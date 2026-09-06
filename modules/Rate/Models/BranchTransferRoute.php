@@ -18,7 +18,7 @@ final class BranchTransferRoute extends Model
         'service_type',
         'transfer_count',
         'transit_count',
-        'stops',
+        'transit_branch_ids',
         'total_distance_km',
         'total_estimated_hours',
         'priority',
@@ -32,7 +32,7 @@ final class BranchTransferRoute extends Model
         'destination_branch_id' => 'integer',
         'transfer_count'        => 'integer',
         'transit_count'         => 'integer',
-        'stops'                 => 'array',
+        'transit_branch_ids'    => 'array',
         'total_distance_km'     => 'decimal:2',
         'total_estimated_hours' => 'integer',
         'priority'              => 'integer',
@@ -62,5 +62,13 @@ final class BranchTransferRoute extends Model
             BranchRouteRate::class,
             'branch_transfer_route_id'
         );
+    }
+
+    public function lanes(): HasMany
+    {
+        return $this->hasMany(
+            BranchTransferRouteLane::class,
+            'branch_transfer_route_id'
+        )->orderBy('sequence_number');
     }
 }

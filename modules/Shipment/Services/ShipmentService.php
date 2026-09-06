@@ -4,6 +4,16 @@ declare(strict_types=1);
 
 namespace Modules\Shipment\Services;
 
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
+use Modules\Merchant\Models\Merchant;
+use Modules\Shipment\Models\Shipment;
+use Modules\Support\CourierStatus;
+use Modules\Shipment\Services\MerchantPickupLocationResolver;
+use Modules\Shipment\Services\ShipmentNumberService;
+use Modules\Shipment\Services\BranchAssignmentService;
+use Modules\Pickup\Services\PickupService;
+
 use App\Support\CourierStatus;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -18,6 +28,7 @@ final class ShipmentService
         private readonly BranchAssignmentService $branchAssignment,
         private readonly ShipmentNumberService $shipmentNumberService,
         private readonly GatewayPickupService $pickupService,
+        private readonly ShipmentRoutePlannedCallbackService $routePlannedCallback,
     ) {
     }
 
@@ -472,6 +483,18 @@ final class ShipmentService
                     description:
                         'Shipment created successfully. Awaiting pickup.'
                 );
+
+                /*
+                |--------------------------------------------------------------------------
+                | SEND ROUTE PLANNED CALLBACK
+                |--------------------------------------------------------------------------
+                |
+                | Notify merchant about shipment route: origin, transits, destination,
+                | with real distances and estimated hours from transfer lanes.
+                |
+                */
+
+                $this->routePlannedCallback->sendRoutePlanned($shipment);
 
                 /*
                 |--------------------------------------------------------------------------

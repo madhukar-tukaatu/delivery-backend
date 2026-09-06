@@ -174,11 +174,15 @@ class PermissionSeeder extends Seeder
                 'pickups.view'      => 'Pickups View',
                 'pickups.create'    => 'Pickups Create',
                 'pickups.assign'    => 'Pickups Assign',
+                'pickups.assignable_staff' => 'Pickups Assignable Staff',
                 'pickups.status'    => 'Pickups Status',
                 'pickups.accept'    => 'Pickups Accept',
+                'pickups.start'     => 'Pickups Start',
                 'pickups.picked_up' => 'Pickups Picked Up',
                 'pickups.failed'    => 'Pickups Failed',
                 'pickups.reschedule'=> 'Pickups Reschedule',
+                'pickups.receive'   => 'Pickups Receive',
+                'pickups.transfer'  => 'Pickups Transfer',
             ],
 
             'Deliveries' => [

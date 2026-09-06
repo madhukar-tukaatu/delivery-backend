@@ -331,8 +331,8 @@ class RoleSeeder extends Seeder
 
                 'shipments.view',
 
-                'pickups.view', 'pickups.status',
-                'pickups.accept', 'pickups.picked_up', 'pickups.failed',
+                'pickups.view', 'pickups.status', 'pickups.assignable_staff',
+                'pickups.accept', 'pickups.start', 'pickups.picked_up', 'pickups.failed', 'pickups.receive',
 
                 'notifications.view',
             ],
@@ -397,8 +397,8 @@ class RoleSeeder extends Seeder
 
                 'shipments.view',
 
-                'pickups.view', 'pickups.status',
-                'pickups.accept', 'pickups.picked_up', 'pickups.failed',
+                'pickups.view', 'pickups.status', 'pickups.assignable_staff',
+                'pickups.accept', 'pickups.start', 'pickups.picked_up', 'pickups.failed', 'pickups.receive', 'pickups.transfer',
 
                 'deliveries.view', 'deliveries.status', 'deliveries.accept',
                 'deliveries.out_for_delivery', 'deliveries.delivered', 'deliveries.failed',

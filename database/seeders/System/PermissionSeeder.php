@@ -370,6 +370,17 @@ class PermissionSeeder extends Seeder
                 'settings.view'   => 'Settings View',
                 'settings.manage' => 'Settings Manage',
             ],
+
+            // ─────────────────────────────────────────────────────────────
+            // Staff Management
+            // ─────────────────────────────────────────────────────────────
+            'Staff' => [
+                'staff.view'   => 'Staff View',
+                'staff.create' => 'Staff Create',
+                'staff.edit'   => 'Staff Edit',
+                'staff.delete' => 'Staff Delete',
+                'staff.status' => 'Staff Status',
+            ],
         ];
     }
 }

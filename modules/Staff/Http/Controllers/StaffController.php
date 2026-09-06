@@ -29,6 +29,9 @@ final class StaffController extends Controller
     |
     | GET /api/v1/admin/staff
     |
+    | For superadmin: returns staff grouped by branch
+    | For branch manager: returns only their branch staff
+    |
     */
 
     public function index(
@@ -78,6 +81,11 @@ final class StaffController extends Controller
                 ''
             )
         );
+
+        $isSuperAdmin = $user->hasAnyRole([
+            'super_admin',
+            'admin',
+        ]);
 
         $query = $this->staffService
             ->queryForUser($user);
@@ -144,10 +152,72 @@ final class StaffController extends Controller
             $page
         );
 
+        /*
+        |--------------------------------------------------------------------------
+        | Format response for superadmin (group by branch)
+        |--------------------------------------------------------------------------
+        */
+
+        if ($isSuperAdmin) {
+            $grouped = $this->groupStaffByBranch($staff);
+
+            return ApiResponse::success(
+                $grouped,
+                'All staff retrieved successfully (grouped by branch).'
+            );
+        }
+
         return ApiResponse::success(
             $staff,
             'Branch staff retrieved successfully.'
         );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | GROUP STAFF BY BRANCH
+    |--------------------------------------------------------------------------
+    |
+    | Helper method to group paginated staff results by branch for superadmin view
+    |
+    */
+
+    private function groupStaffByBranch($paginatedStaff): array
+    {
+        $grouped = [];
+
+        foreach ($paginatedStaff->items() as $staffMember) {
+            $branchId = $staffMember->branch_id ?? 'unassigned';
+            $branchName = $staffMember->branch?->name ?? 'Unassigned Branch';
+
+            if (!isset($grouped[$branchId])) {
+                $grouped[$branchId] = [
+                    'branch_id' => $branchId,
+                    'branch_name' => $branchName,
+                    'staff' => [],
+                ];
+            }
+
+            $grouped[$branchId]['staff'][] = $staffMember;
+        }
+
+        // Convert to indexed array and sort by branch name
+        $result = array_values($grouped);
+        usort($result, function ($a, $b) {
+            return strcmp($a['branch_name'], $b['branch_name']);
+        });
+
+        return [
+            'data' => $result,
+            'pagination' => [
+                'current_page' => $paginatedStaff->currentPage(),
+                'total' => $paginatedStaff->total(),
+                'per_page' => $paginatedStaff->perPage(),
+                'last_page' => $paginatedStaff->lastPage(),
+                'from' => $paginatedStaff->firstItem(),
+                'to' => $paginatedStaff->lastItem(),
+            ],
+        ];
     }
 
     /*

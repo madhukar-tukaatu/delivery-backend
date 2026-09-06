@@ -777,12 +777,12 @@ final class PickupRequestService
                 if (
                     defined(
                         CourierStatus::class .
-                        '::RECEIVED_AT_ORIGIN'
+                        '::RECEIVED_AT_ORIGIN_BRANCH'
                     )
                 ) {
                     $this->changeShipmentStatus(
                         shipment: $shipment,
-                        status: CourierStatus::RECEIVED_AT_ORIGIN,
+                        status: CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
                         userId: $staff->id,
                         note: 'Shipment received at origin branch.'
                     );
@@ -821,23 +821,27 @@ final class PickupRequestService
 
         /*
         |--------------------------------------------------------------------------
-        | Transition pickup to ON_WAY_TO_BRANCH when first shipment is validated
-        | at origin. Fire pickup.completed callback only once per pickup.
+        | Fire pickup.completed callback when first shipment is validated at origin.
+        | Use PickupCallbackLog to check if already sent (deduplication).
         |--------------------------------------------------------------------------
         */
         if (
             $result->pickupRequest
             && $result->pickupRequest->status === PickupStatus::ON_WAY_TO_BRANCH
-            && ! $this->pickupCompletedCallbackAlreadyFired(
-                $result->pickupRequest->id
-            )
         ) {
-            $result->pickupRequest->status = PickupStatus::COMPLETED;
-            $result->pickupRequest->save();
+            // Check if pickup.completed callback was already sent
+            $completedCallbackSent = \Modules\Pickup\Models\PickupCallbackLog::query()
+                ->where('pickup_request_id', $result->pickupRequest->id)
+                ->where('event', 'pickup.completed')
+                ->where('status', 'delivered')
+                ->exists();
 
-            $this->callbacks->pickupCompleted(
-                $result->pickupRequest
-            );
+            if (!$completedCallbackSent) {
+                $result->pickupRequest->status = PickupStatus::COMPLETED;
+                $result->pickupRequest->save();
+
+                $this->callbacks->pickupCompleted($result->pickupRequest);
+            }
         }
 
         return $result;

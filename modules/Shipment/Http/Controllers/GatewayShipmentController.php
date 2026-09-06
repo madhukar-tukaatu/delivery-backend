@@ -244,6 +244,23 @@ final class GatewayShipmentController extends Controller
             'store_manager';
 
         try {
+            /*
+            |--------------------------------------------------------------------------
+            | Shipment batching logic:
+            |
+            | If merchant has an OPEN pickup (not yet collected):
+            | - New shipments automatically JOIN that pickup (same PR)
+            | - This is handled by PickupWorkflowService::createForShipment()
+            |
+            | If merchant's last pickup is COLLECTED or terminal (COMPLETED/FAILED):
+            | - New shipments will CREATE a NEW pickup request
+            | - This is the normal flow for next batch
+            |
+            | We don't need to block here - just let the system work naturally.
+            | The only time we block is if there's an error condition.
+            |--------------------------------------------------------------------------
+            */
+
             $shipment = $this->shipmentService->createFromGateway(
                 merchantId: $merchantId,
                 data: $data,

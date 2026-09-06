@@ -331,8 +331,16 @@ class RoleSeeder extends Seeder
 
                 'shipments.view',
 
-                'pickups.view', 'pickups.status', 'pickups.assignable_staff',
-                'pickups.accept', 'pickups.start', 'pickups.picked_up', 'pickups.failed', 'pickups.receive',
+                // Pickup workflow - STRICT sequence
+                'pickups.view',                      // View assigned pickups
+                'pickups.accept',                    // Accept assignment
+                'pickups.start',                     // Start pickup
+                'pickups.arrive',                    // Arrive at store
+                'pickups.collect',                   // Collect shipments
+                'pickups.complete',                  // Complete pickup
+                'pickups.receive',                   // Receive at origin
+                'pickups.assignable_staff',          // View assignable staff
+                'pickups.failed',                    // Mark as failed if needed
 
                 'notifications.view',
             ],
@@ -391,18 +399,30 @@ class RoleSeeder extends Seeder
             // ═══════════════════════════════════════════════════════════
             // RIDER — staff portal, pickup + delivery + POD
             // ═══════════════════════════════════════════════════════════
+            // RIDER — staff portal, pickup + delivery + POD
+            // ═══════════════════════════════════════════════════════════
             'rider' => [
                 'staff.dashboard', 'staff.pickups', 'staff.deliveries',
                 'staff.pod', 'staff.rider_location',
 
                 'shipments.view',
 
-                'pickups.view', 'pickups.status', 'pickups.assignable_staff',
-                'pickups.accept', 'pickups.start', 'pickups.picked_up', 'pickups.failed', 'pickups.receive', 'pickups.transfer',
+                // Pickup workflow - STRICT sequence
+                'pickups.view',                      // View assigned pickups
+                'pickups.accept',                    // Accept assignment (ASSIGNED → ACCEPTED)
+                'pickups.start',                     // Start pickup (ACCEPTED → STARTED)
+                'pickups.arrive',                    // Arrive at store (STARTED → ARRIVED)
+                'pickups.collect',                   // Collect shipments (ARRIVED → collect each)
+                'pickups.complete',                  // Complete pickup (ARRIVED → COMPLETED)
+                'pickups.receive',                   // Receive at origin branch
+                'pickups.assignable_staff',          // View assignable staff
+                'pickups.transfer',                  // Transfer to another staff member
 
+                // Delivery workflow
                 'deliveries.view', 'deliveries.status', 'deliveries.accept',
                 'deliveries.out_for_delivery', 'deliveries.delivered', 'deliveries.failed',
 
+                // POD workflow
                 'pod.view', 'pod.collect',
 
                 'notifications.view',

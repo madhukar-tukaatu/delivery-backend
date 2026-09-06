@@ -320,7 +320,7 @@ Route::prefix('v1/staff')
             ]
         )
             ->middleware([
-                'route.permission:pickups.status',
+                'route.permission:pickups.arrive',
             ])
             ->name('pickups.arrive');
 
@@ -338,7 +338,7 @@ Route::prefix('v1/staff')
             ]
         )
             ->middleware([
-                'route.permission:pickups.picked_up',
+                'route.permission:pickups.collect',
             ])
             ->name('pickups.shipments.collect');
 
@@ -356,7 +356,7 @@ Route::prefix('v1/staff')
             ]
         )
             ->middleware([
-                'route.permission:pickups.status',
+                'route.permission:pickups.complete',
             ])
             ->name('pickups.complete');
 
@@ -374,7 +374,7 @@ Route::prefix('v1/staff')
             ]
         )
             ->middleware([
-                'route.permission:pickups.status',
+                'route.permission:pickups.receive',
             ])
             ->name('pickups.shipments.receive');
 

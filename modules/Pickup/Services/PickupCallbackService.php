@@ -39,6 +39,19 @@ final class PickupCallbackService
 
     /*
     |--------------------------------------------------------------------------
+    | pickup.rider_accepted
+    |--------------------------------------------------------------------------
+    */
+    public function riderAccepted(PickupRequest $pickup): void
+    {
+        $this->dispatchPickupEvent(
+            pickup: $pickup,
+            event: 'pickup.rider_accepted',
+        );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
     | pickup.rider_started
     |--------------------------------------------------------------------------
     */

@@ -4,10 +4,16 @@ namespace Modules\Shipment\Services;
 
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Modules\Pickup\Services\PickupRequestService;
 use Modules\Shipment\Models\Shipment;
 
 class PickupWorkflowService
 {
+    public function __construct(
+        private readonly PickupRequestService $pickupService
+    ) {
+    }
+
     public function createForShipment(Shipment $shipment): object
     {
         return Cache::lock("shipment:{$shipment->id}:pickup:create", 10)->block(3, function () use ($shipment) {
@@ -65,16 +71,22 @@ class PickupWorkflowService
         abort_unless($pickup, 404, 'Pickup not found.');
         abort_unless((int) $pickup->assigned_to === (int) $staffId, 403, 'This pickup is not assigned to you.');
 
-        DB::table('pickup_requests')->where('id', $pickupId)->update([
-            'status' => 'picked_up',
-            'picked_up_at' => now(),
-            'updated_at' => now(),
-        ]);
+        /*
+        |--------------------------------------------------------------------------
+        | Use the proper service method to collect the shipment
+        | This ensures the shipment.collected callback is fired
+        |--------------------------------------------------------------------------
+        */
+        $pickupRequest = \Modules\Pickup\Models\PickupRequest::findOrFail($pickupId);
+        $shipment = Shipment::findOrFail($pickup->shipment_id);
+        $user = \App\Models\User::findOrFail($staffId);
 
-        DB::table('shipments')->where('id', $pickup->shipment_id)->update([
-            'status' => 'picked_up',
-            'updated_at' => now(),
-        ]);
+        $this->pickupService->collectShipment(
+            pickup: $pickupRequest,
+            shipment: $shipment,
+            user: $user,
+            remarks: $note
+        );
 
         $this->track($pickup->shipment_id, $staffId, 'picked_up', 'Parcel picked up', $note ?: 'Parcel picked up from merchant.');
 

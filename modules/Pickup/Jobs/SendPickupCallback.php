@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Modules\Merchant\Models\Merchant;
+use Modules\Pickup\Models\PickupCallbackLog;
 use RuntimeException;
 use Throwable;
 
@@ -207,6 +208,13 @@ class SendPickupCallback implements ShouldQueue
             'response_body' => Str::limit(trim($response->body()), 4000),
             'delivered_at' => now(),
         ])->save();
+
+        Log::warning('Pickup callback delivered.', [
+            'merchant_id' => $this->merchantId,
+            'event' => $body['event'] ?? null,
+            'event_id' => $eventId,
+            'response_status' => $response->status(),
+        ]);
     }
 
     public function failed(Throwable $exception): void

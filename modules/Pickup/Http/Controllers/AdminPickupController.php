@@ -157,10 +157,28 @@ final class AdminPickupController extends Controller
         */
 
         if ($status !== '') {
-            $query->where(
-                'status',
-                $status
+            /*
+            |--------------------------------------------------------------------------
+            | Support a single status ("assigned") or a comma-separated group
+            | ("assigned,accepted,started,arrived") so a UI tab can represent a
+            | whole phase of the pickup lifecycle.
+            |--------------------------------------------------------------------------
+            */
+            $statuses = array_values(
+                array_filter(
+                    array_map(
+                        'trim',
+                        explode(',', $status)
+                    ),
+                    static fn (string $value): bool => $value !== ''
+                )
             );
+
+            if (count($statuses) > 1) {
+                $query->whereIn('status', $statuses);
+            } else {
+                $query->where('status', $statuses[0]);
+            }
         }
 
         /*

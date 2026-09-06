@@ -353,6 +353,69 @@ final class PickupRequestService
 
     /*
     |--------------------------------------------------------------------------
+    | Accept
+    |--------------------------------------------------------------------------
+    */
+
+    public function accept(
+        PickupRequest $pickup,
+        User $user
+    ): PickupRequest {
+        $fresh = DB::transaction(
+            function () use (
+                $pickup,
+                $user
+            ): PickupRequest {
+                $pickup = PickupRequest::query()
+                    ->lockForUpdate()
+                    ->findOrFail($pickup->id);
+
+                $this->ensureAssignedRider(
+                    pickup: $pickup,
+                    user: $user
+                );
+
+                if (
+                    $pickup->status !==
+                    PickupStatus::ASSIGNED
+                ) {
+                    throw ValidationException::withMessages([
+                        'status' => [
+                            'Pickup cannot be accepted. Current status: "' . $pickup->status . '". '
+                            . 'Pickup must be ASSIGNED before it can be accepted. '
+                            . 'Was it assigned to you by admin?',
+                        ],
+                    ]);
+                }
+
+                $pickup->status = PickupStatus::ACCEPTED;
+
+                if (
+                    $this->pickupHasColumn('accepted_at')
+                    && $pickup->accepted_at === null
+                ) {
+                    $pickup->accepted_at = now();
+                }
+
+                $pickup->save();
+
+                $this->createPickupEvent(
+                    pickup: $pickup,
+                    type: 'accepted',
+                    description: 'Rider accepted the pickup assignment.'
+                );
+
+                return $this->get($pickup);
+            }
+        );
+
+        $this->callbacks->riderAccepted($fresh);
+
+        return $fresh;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
     | Start
     |--------------------------------------------------------------------------
     */
@@ -377,11 +440,13 @@ final class PickupRequestService
 
                 if (
                     $pickup->status !==
-                    PickupStatus::ASSIGNED
+                    PickupStatus::ACCEPTED
                 ) {
                     throw ValidationException::withMessages([
                         'status' => [
-                            'Pickup must be assigned before it can be started.',
+                            'Pickup cannot be started. Current status: "' . $pickup->status . '". '
+                            . 'Pickup must be ACCEPTED before it can be started. '
+                            . 'Did you call /accept first?',
                         ],
                     ]);
                 }
@@ -389,10 +454,10 @@ final class PickupRequestService
                 $pickup->status = PickupStatus::STARTED;
 
                 if (
-                    $this->pickupHasColumn('accepted_at')
-                    && $pickup->accepted_at === null
+                    $this->pickupHasColumn('started_at')
+                    && $pickup->started_at === null
                 ) {
-                    $pickup->accepted_at = now();
+                    $pickup->started_at = now();
                 }
 
                 $pickup->save();

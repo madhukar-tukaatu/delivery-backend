@@ -413,6 +413,29 @@ final class PickupController extends Controller
 
     /*
     |--------------------------------------------------------------------------
+    | ACCEPT
+    |--------------------------------------------------------------------------
+    */
+
+    public function accept(
+        Request $request,
+        PickupRequestModel $pickup,
+        PickupRequestService $service
+    ) {
+        $pickup = $service->accept(
+            pickup: $pickup,
+            user: $request->user()
+        );
+
+        return ApiResponse::success(
+            $pickup,
+            'Pickup accepted by rider.'
+        );
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
     | START
     |--------------------------------------------------------------------------
     */

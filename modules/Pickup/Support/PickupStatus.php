@@ -17,6 +17,9 @@ final class PickupStatus
     | ASSIGNED
     |   Rider/staff has been assigned.
     |
+    | ACCEPTED
+    |   Rider has accepted the pickup assignment.
+    |
     | STARTED
     |   Rider has started travelling to the merchant.
     |
@@ -34,6 +37,8 @@ final class PickupStatus
     public const REQUESTED = 'requested';
 
     public const ASSIGNED = 'assigned';
+
+    public const ACCEPTED = 'accepted';
 
     public const STARTED = 'started';
 
@@ -55,6 +60,7 @@ final class PickupStatus
         return [
             self::REQUESTED,
             self::ASSIGNED,
+            self::ACCEPTED,
             self::STARTED,
             self::ARRIVED,
         ];
@@ -68,6 +74,7 @@ final class PickupStatus
         return [
             self::REQUESTED,
             self::ASSIGNED,
+            self::ACCEPTED,
             self::STARTED,
             self::ARRIVED,
         ];
@@ -107,10 +114,13 @@ final class PickupStatus
 
     /**
      * Determine whether pickup can start.
+     *
+     * STRICT: Can ONLY start from ACCEPTED state.
+     * Rider must explicitly accept before starting.
      */
     public static function canStart(string $status): bool
     {
-        return $status === self::ASSIGNED;
+        return $status === self::ACCEPTED;
     }
 
     /**

@@ -109,29 +109,25 @@ final class GatewayPickupService
 
                 /*
                 |--------------------------------------------------------------------------
-                | IMPORTANT:
+                | STRICT MODE: If ANY active pickup exists for this merchant/location,
+                | REJECT new pickup request.
                 |
-                | If active pickup exists, NEVER create another pickup.
+                | Merchant must wait for rider to COMPLETE the previous pickup before
+                | requesting a new one.
+                |
+                | This prevents:
+                | - Multiple riders assigned to same merchant
+                | - Shipments getting lost or mixed up
+                | - Consolidation bugs
                 |--------------------------------------------------------------------------
                 */
 
                 if ($pickup) {
-                    $this->attachWaitingShipments(
-                        pickup: $pickup,
-                        merchantId: $merchantId,
-                        pickupLocation: $pickupLocation,
-                    );
-
-                    $this->recalculateParcelQuantity(
-                        $pickup
-                    );
-
-                    return $pickup->fresh([
-                        'merchant',
-                        'pickupLocation',
-                        'pickupBranch',
-                        'pickupSubBranch',
-                        'shipments',
+                    throw ValidationException::withMessages([
+                        'pickup' => [
+                            'An active pickup already exists for this location (Request #' . $pickup->request_number . ', Status: ' . $pickup->status . '). '
+                            . 'Please wait for the rider to complete this pickup before requesting a new one.',
+                        ],
                     ]);
                 }
 
@@ -399,6 +395,22 @@ final class GatewayPickupService
     |--------------------------------------------------------------------------
     */
 
+    /*
+    |--------------------------------------------------------------------------
+    | Find open pickup
+    |--------------------------------------------------------------------------
+    |
+    | Search for an active pickup for this merchant/location that can
+    | receive new shipments.
+    |
+    | IMPORTANT: This must match the logic in consolidation to ensure
+    | new shipments are attached to existing pickups, not create duplicates.
+    |
+    | Active statuses: REQUESTED, ASSIGNED, ACCEPTED, STARTED, ARRIVED
+    | (NOT COMPLETED, FAILED, CANCELLED - those are terminal)
+    |
+    */
+
     public function findOpenPickup(
         int $merchantId,
         int $pickupLocationId,
@@ -424,6 +436,126 @@ final class GatewayPickupService
         }
 
         return $query->first();
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Check for active pickup (STRICT)
+    |--------------------------------------------------------------------------
+    |
+    | STRICT MODE: Reject new shipments if ANY pickup is active.
+    | Rider must COMPLETE previous pickup before new one can be created.
+    |
+    */
+
+    public function getActivePickup(
+        int $merchantId,
+        int $pickupLocationId,
+        bool $lock = false
+    ): ?PickupRequest {
+        $query = PickupRequest::query()
+            ->where(
+                'merchant_id',
+                $merchantId
+            )
+            ->where(
+                'pickup_location_id',
+                $pickupLocationId
+            )
+            ->whereIn(
+                'status',
+                PickupStatus::active()
+            )
+            ->latest('id');
+
+        if ($lock) {
+            $query->lockForUpdate();
+        }
+
+        return $query->first();
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | DEBUG: Consolidation diagnostics
+    |--------------------------------------------------------------------------
+    |
+    | This helps diagnose why new pickups are being created instead of
+    | consolidating with existing ones.
+    |
+    */
+
+    public function diagnoseConsolidation(
+        int $merchantId,
+        int $pickupLocationId
+    ): array {
+        $merchant = Merchant::find($merchantId);
+        $location = MerchantPickupLocation::find(
+            $pickupLocationId
+        );
+
+        $openPickups = PickupRequest::query()
+            ->where('merchant_id', $merchantId)
+            ->where('pickup_location_id', $pickupLocationId)
+            ->whereIn(
+                'status',
+                PickupStatus::acceptingShipments()
+            )
+            ->get();
+
+        $closedPickups = PickupRequest::query()
+            ->where('merchant_id', $merchantId)
+            ->where('pickup_location_id', $pickupLocationId)
+            ->whereIn(
+                'status',
+                PickupStatus::closed()
+            )
+            ->latest('id')
+            ->limit(5)
+            ->get();
+
+        $awaitingShipments =
+            Shipment::query()
+                ->where('merchant_id', $merchantId)
+                ->where(
+                    'pickup_location_id',
+                    $pickupLocationId
+                )
+                ->where(
+                    'status',
+                    CourierStatus::AWAITING_PICKUP
+                )
+                ->where('self_drop', false)
+                ->get();
+
+        return [
+            'merchant' => [
+                'id' => $merchant?->id,
+                'name' => $merchant?->name,
+                'status' => $merchant?->status,
+            ],
+            'location' => [
+                'id' => $location?->id,
+                'name' => $location?->name,
+            ],
+            'openPickups' => $openPickups->map(
+                fn($p) => [
+                    'id' => $p->id,
+                    'request_number' => $p->request_number,
+                    'status' => $p->status,
+                    'shipment_count' => $p->shipments()->count(),
+                ]
+            )->toArray(),
+            'closedPickups' => $closedPickups->map(
+                fn($p) => [
+                    'id' => $p->id,
+                    'request_number' => $p->request_number,
+                    'status' => $p->status,
+                    'completed_at' => $p->completed_at,
+                ]
+            )->toArray(),
+            'awaitingShipments' => $awaitingShipments->count(),
+        ];
     }
 
     /*

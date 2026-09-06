@@ -272,6 +272,24 @@ Route::prefix('v1/staff')
 
         /*
         |--------------------------------------------------------------------------
+        | ACCEPT
+        |--------------------------------------------------------------------------
+        */
+
+        Route::post(
+            'pickups/{pickup}/accept',
+            [
+                PickupController::class,
+                'accept',
+            ]
+        )
+            ->middleware([
+                'route.permission:pickups.accept',
+            ])
+            ->name('pickups.accept');
+
+        /*
+        |--------------------------------------------------------------------------
         | START
         |--------------------------------------------------------------------------
         */
@@ -284,7 +302,7 @@ Route::prefix('v1/staff')
             ]
         )
             ->middleware([
-                'route.permission:pickups.accept',
+                'route.permission:pickups.start',
             ])
             ->name('pickups.start');
 

@@ -821,26 +821,57 @@ final class PickupRequestService
 
         /*
         |--------------------------------------------------------------------------
-        | Fire pickup.completed callback when first shipment is validated at origin.
-        | Use PickupCallbackLog to check if already sent (deduplication).
+        | Complete the pickup ONLY when EVERY collected shipment has been
+        | verified (received) at the origin branch.
+        |
+        | The branch manager validates shipments one by one. The pickup stays
+        | in ON_WAY_TO_BRANCH until the last one is received; only then does it
+        | transition to COMPLETED and fire pickup.completed (once, deduplicated).
         |--------------------------------------------------------------------------
         */
         if (
             $result->pickupRequest
             && $result->pickupRequest->status === PickupStatus::ON_WAY_TO_BRANCH
         ) {
-            // Check if pickup.completed callback was already sent
-            $completedCallbackSent = \Modules\Pickup\Models\PickupCallbackLog::query()
-                ->where('pickup_request_id', $result->pickupRequest->id)
-                ->where('event', 'pickup.completed')
-                ->where('status', 'delivered')
-                ->exists();
+            $pickupRequest = PickupRequest::query()
+                ->with('shipments')
+                ->find($result->pickupRequest->id);
 
-            if (!$completedCallbackSent) {
-                $result->pickupRequest->status = PickupStatus::COMPLETED;
-                $result->pickupRequest->save();
+            $pending = $pickupRequest
+                ? $pickupRequest->shipments
+                    ->filter(function (Shipment $s): bool {
+                        return ! in_array(
+                            $s->status,
+                            [
+                                CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+                                CourierStatus::CANCELLED,
+                            ],
+                            true
+                        );
+                    })
+                : collect();
 
-                $this->callbacks->pickupCompleted($result->pickupRequest);
+            if ($pickupRequest && $pending->isEmpty()) {
+                // Guard against a duplicate pickup.completed callback.
+                $completedCallbackSent = \Modules\Pickup\Models\PickupCallbackLog::query()
+                    ->where('pickup_request_id', $pickupRequest->id)
+                    ->where('event', 'pickup.completed')
+                    ->whereIn('status', ['delivered', 'pending', 'queued'])
+                    ->exists();
+
+                $pickupRequest->status = PickupStatus::COMPLETED;
+
+                if ($this->pickupHasColumn('completed_at')) {
+                    $pickupRequest->completed_at = now();
+                }
+
+                $pickupRequest->save();
+
+                if (! $completedCallbackSent) {
+                    $this->callbacks->pickupCompleted($pickupRequest);
+                }
+
+                $result->setRelation('pickupRequest', $pickupRequest);
             }
         }
 

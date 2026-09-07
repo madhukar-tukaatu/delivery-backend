@@ -56,6 +56,16 @@ final class AdminPickupController extends Controller
             (string) $request->input('status', '')
         );
 
+        $dateFrom = trim(
+            (string) $request->input('date_from', '')
+        );
+
+        $dateTo = trim(
+            (string) $request->input('date_to', '')
+        );
+
+        $merchantId = (int) $request->input('merchant_id', 0);
+
         $query = PickupRequest::query()
             ->with([
                 'merchant:id,name,phone,email',
@@ -179,6 +189,30 @@ final class AdminPickupController extends Controller
             } else {
                 $query->where('status', $statuses[0]);
             }
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Merchant filter
+        |--------------------------------------------------------------------------
+        */
+
+        if ($merchantId > 0) {
+            $query->where('merchant_id', $merchantId);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Date range (inclusive) on created_at
+        |--------------------------------------------------------------------------
+        */
+
+        if ($dateFrom !== '') {
+            $query->whereDate('created_at', '>=', $dateFrom);
+        }
+
+        if ($dateTo !== '') {
+            $query->whereDate('created_at', '<=', $dateTo);
         }
 
         /*
@@ -773,6 +807,135 @@ final class AdminPickupController extends Controller
                 'shipment_id' => $shipmentModel?->id,
             ],
             'Callback re-queued successfully.'
+        );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | SUMMARY / REPORTS
+    |--------------------------------------------------------------------------
+    |
+    | GET /api/v1/admin/pickups/summary
+    |
+    | Optional query params: date_from, date_to, merchant_id.
+    |
+    | Returns:
+    |  - total
+    |  - by_status: { requested: n, assigned: n, ... }
+    |  - by_merchant: [ { merchant_id, merchant_name, total, by_status } ]
+    |--------------------------------------------------------------------------
+    */
+
+    public function summary(
+        Request $request
+    ): JsonResponse {
+        $user = $request->user();
+
+        $dateFrom = trim((string) $request->input('date_from', ''));
+        $dateTo = trim((string) $request->input('date_to', ''));
+        $merchantId = (int) $request->input('merchant_id', 0);
+
+        $base = PickupRequest::query();
+
+        $this->applyBranchScope($base, $user);
+
+        if ($merchantId > 0) {
+            $base->where('merchant_id', $merchantId);
+        }
+
+        if ($dateFrom !== '') {
+            $base->whereDate('created_at', '>=', $dateFrom);
+        }
+
+        if ($dateTo !== '') {
+            $base->whereDate('created_at', '<=', $dateTo);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | Counts by status
+        |--------------------------------------------------------------------------
+        */
+
+        $byStatusRows = (clone $base)
+            ->select('status', DB::raw('COUNT(*) as total'))
+            ->groupBy('status')
+            ->pluck('total', 'status');
+
+        $byStatus = [];
+
+        foreach ($byStatusRows as $statusKey => $count) {
+            $byStatus[(string) $statusKey] = (int) $count;
+        }
+
+        $total = array_sum($byStatus);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Counts by merchant (with per-status breakdown)
+        |--------------------------------------------------------------------------
+        */
+
+        $merchantRows = (clone $base)
+            ->select(
+                'merchant_id',
+                'status',
+                DB::raw('COUNT(*) as total')
+            )
+            ->groupBy('merchant_id', 'status')
+            ->get();
+
+        $merchantMap = [];
+
+        foreach ($merchantRows as $row) {
+            $mid = (int) $row->merchant_id;
+
+            if (! isset($merchantMap[$mid])) {
+                $merchantMap[$mid] = [
+                    'merchant_id' => $mid,
+                    'merchant_name' => null,
+                    'total' => 0,
+                    'by_status' => [],
+                ];
+            }
+
+            $merchantMap[$mid]['by_status'][(string) $row->status] = (int) $row->total;
+            $merchantMap[$mid]['total'] += (int) $row->total;
+        }
+
+        /*
+        | Resolve merchant names in one query.
+        */
+        if (! empty($merchantMap)) {
+            $names = DB::table('merchants')
+                ->whereIn('id', array_keys($merchantMap))
+                ->pluck('name', 'id');
+
+            foreach ($merchantMap as $mid => &$entry) {
+                $entry['merchant_name'] = $names[$mid] ?? ('Merchant #' . $mid);
+            }
+            unset($entry);
+        }
+
+        $byMerchant = array_values($merchantMap);
+
+        usort(
+            $byMerchant,
+            static fn (array $a, array $b): int => $b['total'] <=> $a['total']
+        );
+
+        return ApiResponse::success(
+            [
+                'total' => $total,
+                'by_status' => $byStatus,
+                'by_merchant' => $byMerchant,
+                'filters' => [
+                    'date_from' => $dateFrom ?: null,
+                    'date_to' => $dateTo ?: null,
+                    'merchant_id' => $merchantId ?: null,
+                ],
+            ],
+            'Pickup summary retrieved successfully.'
         );
     }
 

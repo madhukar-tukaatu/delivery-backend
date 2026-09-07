@@ -83,6 +83,28 @@ Route::prefix('v1/admin')
             ])
             ->name('pickups.index');
 
+        /*
+        |--------------------------------------------------------------------------
+        | SUMMARY / REPORTS
+        |--------------------------------------------------------------------------
+        |
+        | MUST be declared before pickups/{pickup} so "summary" is not treated
+        | as a pickup id.
+        |--------------------------------------------------------------------------
+        */
+
+        Route::get(
+            'pickups/summary',
+            [
+                AdminPickupController::class,
+                'summary',
+            ]
+        )
+            ->middleware([
+                'route.permission:pickups.view',
+            ])
+            ->name('pickups.summary');
+
         Route::get(
             'pickups/{pickup}',
             [

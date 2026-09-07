@@ -57,6 +57,7 @@ class RoutePermissionMapper
             'index',
             'show',
             'list',
+            'summary',
             'permissions' => 'view',
 
             'create',

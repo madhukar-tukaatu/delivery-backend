@@ -2,9 +2,9 @@
 
 namespace Modules\Rate\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 
 final class BranchTransferRoute extends Model
 {
@@ -13,14 +13,12 @@ final class BranchTransferRoute extends Model
     protected $fillable = [
         'route_code',
         'name',
-        'origin_branch_id',
-        'destination_branch_id',
+        'branch_transfer_lane_id',
         'service_type',
-        'transfer_count',
-        'transit_count',
-        'transit_branch_ids',
-        'total_distance_km',
-        'total_estimated_hours',
+        'base_rate',
+        'currency',
+        'distance_km',
+        'estimated_hours',
         'priority',
         'is_default',
         'is_active',
@@ -28,47 +26,104 @@ final class BranchTransferRoute extends Model
     ];
 
     protected $casts = [
-        'origin_branch_id'      => 'integer',
-        'destination_branch_id' => 'integer',
-        'transfer_count'        => 'integer',
-        'transit_count'         => 'integer',
-        'transit_branch_ids'    => 'array',
-        'total_distance_km'     => 'decimal:2',
-        'total_estimated_hours' => 'integer',
-        'priority'              => 'integer',
-        'is_default'            => 'boolean',
-        'is_active'             => 'boolean',
+        'branch_transfer_lane_id' => 'integer',
+        'base_rate'               => 'decimal:2',
+        'distance_km'             => 'decimal:2',
+        'estimated_hours'         => 'integer',
+        'priority'                => 'integer',
+        'is_default'              => 'boolean',
+        'is_active'               => 'boolean',
     ];
 
-    public function originBranch(): BelongsTo
+    // Relationships
+    public function lane(): BelongsTo
     {
-        return $this->belongsTo(
-            \Modules\Branch\Models\Branch::class,
-            'origin_branch_id'
-        );
+        return $this->belongsTo(BranchTransferLane::class, 'branch_transfer_lane_id');
     }
 
-    public function destinationBranch(): BelongsTo
+    public function fromBranch()
     {
-        return $this->belongsTo(
-            \Modules\Branch\Models\Branch::class,
-            'destination_branch_id'
-        );
+        return $this->lane->fromBranch ?? null;
     }
 
-    public function routeRates(): HasMany
+    public function toBranch()
     {
-        return $this->hasMany(
-            BranchRouteRate::class,
-            'branch_transfer_route_id'
-        );
+        return $this->lane->toBranch ?? null;
     }
 
-    public function lanes(): HasMany
+    // Scopes
+    public function scopeActive(Builder $query): Builder
     {
-        return $this->hasMany(
-            BranchTransferRouteLane::class,
-            'branch_transfer_route_id'
-        )->orderBy('sequence_number');
+        return $query->where('is_active', true);
+    }
+
+    public function scopeByService(Builder $query, string $service): Builder
+    {
+        return $query->where('service_type', $service);
+    }
+
+    public function scopeByLane(Builder $query, int $laneId): Builder
+    {
+        return $query->where('branch_transfer_lane_id', $laneId);
+    }
+
+    public function scopeStandard(Builder $query): Builder
+    {
+        return $query->where('service_type', 'standard');
+    }
+
+    public function scopeExpress(Builder $query): Builder
+    {
+        return $query->where('service_type', 'express');
+    }
+
+    public function scopeSameDay(Builder $query): Builder
+    {
+        return $query->where('service_type', 'same_day');
+    }
+
+    public function scopeFlight(Builder $query): Builder
+    {
+        return $query->where('service_type', 'flight');
+    }
+
+    // Methods
+    public function getAverageSpeed(): float
+    {
+        return $this->estimated_hours > 0
+            ? $this->distance_km / $this->estimated_hours
+            : 0;
+    }
+
+    public function isExpress(): bool
+    {
+        return $this->service_type === 'express';
+    }
+
+    public function isSameDay(): bool
+    {
+        return $this->service_type === 'same_day';
+    }
+
+    public function isFlight(): bool
+    {
+        return $this->service_type === 'flight';
+    }
+
+    public function isQuick(): bool
+    {
+        return $this->estimated_hours <= 3;
+    }
+
+    public function isMedium(): bool
+    {
+        return $this->estimated_hours > 3 && $this->estimated_hours <= 8;
+    }
+
+    public function isLong(): bool
+    {
+        return $this->estimated_hours > 8;
     }
 }
+
+

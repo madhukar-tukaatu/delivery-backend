@@ -14,10 +14,12 @@ return new class extends Migration
                 $table->id();
 
                 $table->foreignId('from_branch_id')
-                    ->constrained('branches');
+                    ->constrained('coverage_locations', 'id')
+                    ->cascadeOnDelete();
 
                 $table->foreignId('to_branch_id')
-                    ->constrained('branches');
+                    ->constrained('coverage_locations', 'id')
+                    ->cascadeOnDelete();
 
                 $table->string('service_type', 40)
                     ->default('standard');

@@ -103,27 +103,32 @@ final class BranchTransferRouteService
             $totalDistance = array_sum(array_map(static fn ($l) => (float) $l->distance_km, $lanes));
             $totalHours    = array_sum(array_map(static fn ($l) => (float) $l->estimated_hours, $lanes));
 
+            // Build the payload with only columns that exist on this environment,
+            // so a pending migration degrades gracefully instead of a SQL error.
             $routeData = [
-                'route_code'              => $routeCode,
-                'name'                    => $routeName,
-                // Anchor = first lane, kept for backward compatibility.
-                'branch_transfer_lane_id' => $lanes[0]->id,
+                'route_code'      => $routeCode,
+                'name'            => $routeName,
+                'service_type'    => $serviceType,
+                'priority'        => max(1, (int) ($data['priority'] ?? 100)),
+                'is_default'      => $isDefault,
+                'is_active'       => (bool) ($data['is_active'] ?? true),
+                'notes'           => $data['notes'] ?? null,
+            ];
+
+            $optional = [
+                'branch_transfer_lane_id' => $lanes[0]->id,             // anchor = first lane
                 'transit_branch_ids'      => $transitBranchIds ?: null,
-                'service_type'            => $serviceType,
+                'checkpoints'             => $checkpoints ?: null,
                 'base_rate'               => (float) ($data['base_rate'] ?? 0),
                 'currency'                => $data['currency'] ?? 'NPR',
                 'distance_km'             => $totalDistance,
                 'estimated_hours'         => (int) round($totalHours),
-                'priority'                => max(1, (int) ($data['priority'] ?? 100)),
-                'is_default'              => $isDefault,
-                'is_active'               => (bool) ($data['is_active'] ?? true),
-                'notes'                   => $data['notes'] ?? null,
             ];
 
-            // Only write checkpoints if the column exists (migration may be pending
-            // on some environments). Degrades gracefully instead of a SQL error.
-            if (Schema::hasColumn('branch_transfer_routes', 'checkpoints')) {
-                $routeData['checkpoints'] = $checkpoints ?: null;
+            foreach ($optional as $column => $value) {
+                if (Schema::hasColumn('branch_transfer_routes', $column)) {
+                    $routeData[$column] = $value;
+                }
             }
 
             if ($route === null) {

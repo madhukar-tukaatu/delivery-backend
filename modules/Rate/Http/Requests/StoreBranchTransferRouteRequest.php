@@ -24,41 +24,38 @@ class StoreBranchTransferRouteRequest extends FormRequest
 
             'name' => ['required', 'string', 'max:255'],
 
+            // Routes reference coverage_locations (operational hubs), not the branches table.
             'origin_branch_id' => [
                 'required',
                 'integer',
-                'exists:branches,id',
+                'exists:coverage_locations,id',
             ],
 
             'destination_branch_id' => [
                 'required',
                 'integer',
                 'different:origin_branch_id',
-                'exists:branches,id',
+                'exists:coverage_locations,id',
             ],
 
-            /*
-             * 0 stops = direct route (origin → destination)
-             * 1–5 stops = transit hubs in order
-             */
-            'stops'                          => ['nullable', 'array', 'max:5'],
-            'stops.*.branch_id'              => ['required', 'integer', 'exists:branches,id'],
-            'stops.*.distance_km'            => ['nullable', 'numeric', 'min:0'],
-            'stops.*.estimated_hours'        => ['nullable', 'integer', 'min:0'],
-            'stops.*.transport_mode'         => ['nullable', 'string', 'max:50'],
+            // Ordered intermediate hubs (transits). Empty = direct route.
+            'transit_branch_ids'   => ['nullable', 'array', 'max:5'],
+            'transit_branch_ids.*' => ['integer', 'exists:coverage_locations,id'],
 
-            /*
-             * Distance and hours for the final leg (last stop → destination).
-             * Only relevant when stops are provided.
-             */
-            'destination_distance_km'        => ['nullable', 'numeric', 'min:0'],
-            'destination_estimated_hours'    => ['nullable', 'integer', 'min:0'],
-
-            'service_type' => ['required', Rule::in(['standard', 'express', 'same_day'])],
+            'service_type' => ['required', Rule::in(['standard', 'express', 'same_day', 'flight'])],
             'priority'     => ['nullable', 'integer', 'min:1'],
             'is_default'   => ['nullable', 'boolean'],
             'is_active'    => ['nullable', 'boolean'],
             'notes'        => ['nullable', 'string', 'max:2000'],
+        ];
+    }
+
+    public function messages(): array
+    {
+        return [
+            'origin_branch_id.exists'      => 'The selected origin branch does not exist.',
+            'destination_branch_id.exists' => 'The selected destination branch does not exist.',
+            'destination_branch_id.different' => 'Destination must be different from origin.',
         ];
     }
 }

@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Modules\Branch\Models\CoverageLocation;
 
 final class BranchTransferLane extends Model
 {
@@ -34,26 +35,17 @@ final class BranchTransferLane extends Model
     // Relationships
     public function fromBranch(): BelongsTo
     {
-        return $this->belongsTo(
-            \Modules\Setup\Models\CoverageLocation::class,
-            'from_branch_id'
-        );
+        return $this->belongsTo(CoverageLocation::class, 'from_branch_id');
     }
 
     public function toBranch(): BelongsTo
     {
-        return $this->belongsTo(
-            \Modules\Setup\Models\CoverageLocation::class,
-            'to_branch_id'
-        );
+        return $this->belongsTo(CoverageLocation::class, 'to_branch_id');
     }
 
     public function routes(): HasMany
     {
-        return $this->hasMany(
-            BranchTransferRoute::class,
-            'branch_transfer_lane_id'
-        );
+        return $this->hasMany(BranchTransferRoute::class, 'branch_transfer_lane_id');
     }
 
     // Scopes

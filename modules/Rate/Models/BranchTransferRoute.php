@@ -14,6 +14,7 @@ final class BranchTransferRoute extends Model
         'route_code',
         'name',
         'branch_transfer_lane_id',
+        'transit_branch_ids',
         'service_type',
         'base_rate',
         'currency',
@@ -27,6 +28,7 @@ final class BranchTransferRoute extends Model
 
     protected $casts = [
         'branch_transfer_lane_id' => 'integer',
+        'transit_branch_ids'      => 'array',
         'base_rate'               => 'decimal:2',
         'distance_km'             => 'decimal:2',
         'estimated_hours'         => 'integer',
@@ -41,14 +43,14 @@ final class BranchTransferRoute extends Model
         return $this->belongsTo(BranchTransferLane::class, 'branch_transfer_lane_id');
     }
 
-    public function fromBranch()
+    public function originBranch()
     {
-        return $this->lane->fromBranch ?? null;
+        return $this->lane()->first()?->fromBranch;
     }
 
-    public function toBranch()
+    public function destinationBranch()
     {
-        return $this->lane->toBranch ?? null;
+        return $this->lane()->first()?->toBranch;
     }
 
     // Scopes
@@ -123,6 +125,36 @@ final class BranchTransferRoute extends Model
     public function isLong(): bool
     {
         return $this->estimated_hours > 8;
+    }
+
+    // Transit helpers
+    public function getTransitCount(): int
+    {
+        return is_array($this->transit_branch_ids) ? count($this->transit_branch_ids) : 0;
+    }
+
+    public function hasTransits(): bool
+    {
+        return $this->getTransitCount() > 0;
+    }
+
+    /**
+     * Full ordered path of branch IDs: origin -> transits -> destination.
+     */
+    public function getPathBranchIds(): array
+    {
+        $lane = $this->lane;
+        if (!$lane) {
+            return [];
+        }
+
+        $transits = is_array($this->transit_branch_ids) ? $this->transit_branch_ids : [];
+
+        return array_map('intval', [
+            $lane->from_branch_id,
+            ...$transits,
+            $lane->to_branch_id,
+        ]);
     }
 }
 

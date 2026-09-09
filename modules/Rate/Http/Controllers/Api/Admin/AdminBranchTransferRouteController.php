@@ -22,8 +22,7 @@ final class AdminBranchTransferRouteController extends Controller
 
     public function index(Request $request): JsonResponse
     {
-        $query = BranchTransferRoute::query()
-            ->with(['originBranch:id,name,code', 'destinationBranch:id,name,code']);
+        $query = BranchTransferRoute::query();
 
         if ($request->filled('search')) {
             $search = trim((string) $request->input('search'));
@@ -33,10 +32,27 @@ final class AdminBranchTransferRouteController extends Controller
             });
         }
 
-        foreach (['origin_branch_id', 'destination_branch_id', 'service_type'] as $filter) {
-            if ($request->filled($filter)) {
-                $query->where($filter, $request->input($filter));
+        // Filter by service type if provided
+        if ($request->filled('service_type')) {
+            $query->where('service_type', $request->input('service_type'));
+        }
+
+        // Filter by transit branches if provided
+        if ($request->filled('has_transit')) {
+            $hasTransit = $request->boolean('has_transit');
+            if ($hasTransit) {
+                // Only routes with transits (non-empty array)
+                $query->whereRaw('JSON_LENGTH(transit_branch_ids) > 0');
+            } else {
+                // Only direct routes (empty array)
+                $query->whereRaw('JSON_LENGTH(transit_branch_ids) = 0');
             }
+        }
+
+        // Filter by specific transit branch
+        if ($request->filled('transit_branch_id')) {
+            $transitId = (int) $request->input('transit_branch_id');
+            $query->whereRaw("JSON_CONTAINS(transit_branch_ids, ?, '$[*]')", [$transitId]);
         }
 
         if ($request->has('is_active')) {
@@ -44,10 +60,17 @@ final class AdminBranchTransferRouteController extends Controller
         }
 
         $paginator = $query
-            ->orderBy('origin_branch_id')
             ->orderBy('priority')
-            ->orderBy('destination_branch_id')
+            ->orderBy('created_at', 'desc')
             ->paginate(min(max((int) $request->input('per_page', 25), 1), 100));
+
+        // Load relationships after pagination (include coordinates for the map)
+        $paginator->getCollection()->each(function ($route) {
+            $route->load(
+                'lane.fromBranch:id,name,code,latitude,longitude',
+                'lane.toBranch:id,name,code,latitude,longitude'
+            );
+        });
 
         $paginator->getCollection()->transform(
             fn (BranchTransferRoute $route): array => $this->resolver->formatRoute($route)

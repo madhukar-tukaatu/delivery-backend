@@ -5,6 +5,7 @@ namespace Modules\Rate\Models;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Modules\Branch\Models\CoverageLocation;
 
 final class DeliveryZone extends Model
 {
@@ -35,10 +36,7 @@ final class DeliveryZone extends Model
     // Relationships
     public function branch(): BelongsTo
     {
-        return $this->belongsTo(
-            \Modules\Setup\Models\CoverageLocation::class,
-            'branch_id'
-        );
+        return $this->belongsTo(CoverageLocation::class, 'branch_id');
     }
 
     // Scopes

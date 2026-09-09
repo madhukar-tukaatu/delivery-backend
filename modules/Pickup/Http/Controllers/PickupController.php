@@ -12,6 +12,7 @@ use Modules\Pickup\Http\Requests\AddShipmentToPickupRequest;
 use Modules\Pickup\Http\Requests\AssignPickupRequest;
 use Modules\Pickup\Http\Requests\CollectShipmentRequest;
 use Modules\Pickup\Http\Requests\FailPickupRequest;
+use Modules\Pickup\Http\Requests\RejectShipmentRequest;
 use Modules\Pickup\Http\Requests\TransferPickupRequest;
 use Modules\Pickup\Models\PickupRequest as PickupRequestModel;
 use Modules\Pickup\Services\PickupRequestService;
@@ -582,6 +583,38 @@ final class PickupController extends Controller
         return ApiResponse::success(
             $item,
             'Shipment received at origin branch successfully.'
+        );
+    }
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | REJECT (branch verification discrepancy)
+    |--------------------------------------------------------------------------
+    */
+
+    public function rejectShipment(
+        RejectShipmentRequest $request,
+        PickupRequestModel $pickup,
+        Shipment $shipment,
+        PickupRequestService $service
+    ) {
+        $this->authorizePickupView(
+            $request,
+            $pickup
+        );
+
+        $item = $service->rejectShipment(
+            pickup: $pickup,
+            shipment: $shipment,
+            staff: $request->user(),
+            reason: $request->validated('reason'),
+            type: $request->rejectionType()
+        );
+
+        return ApiResponse::success(
+            $item,
+            'Shipment rejected at origin branch.'
         );
     }
 

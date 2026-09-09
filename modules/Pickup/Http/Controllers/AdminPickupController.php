@@ -702,6 +702,81 @@ final class AdminPickupController extends Controller
 
     /*
     |--------------------------------------------------------------------------
+    | REJECT SHIPMENT (branch verification discrepancy)
+    |--------------------------------------------------------------------------
+    */
+
+    public function rejectShipment(
+        Request $request,
+        PickupRequest $pickup,
+        int $shipment
+    ): JsonResponse {
+        $this->authorizePickup(
+            $request,
+            $pickup
+        );
+
+        $validated = $request->validate([
+            'reason' => ['required', 'string', 'max:1000'],
+            'type' => ['nullable', 'string', 'in:missing,damaged,mismatch,other'],
+        ]);
+
+        $shipmentModel = Shipment::query()
+            ->whereKey($shipment)
+            ->first();
+
+        if (! $shipmentModel) {
+            return ApiResponse::error(
+                'Shipment not found.',
+                404
+            );
+        }
+
+        $belongsToPickup =
+            $pickup->activeShipments()
+                ->where(
+                    'shipment_id',
+                    $shipmentModel->id
+                )
+                ->exists();
+
+        if (! $belongsToPickup) {
+            return ApiResponse::error(
+                'Shipment does not belong to this pickup request.',
+                422
+            );
+        }
+
+        $updatedItem =
+            $this->pickupRequestService->rejectShipment(
+                $pickup,
+                $shipmentModel,
+                $request->user(),
+                $validated['reason'],
+                $validated['type'] ?? 'other'
+            );
+
+        $pickup->load([
+            'merchant',
+            'pickupLocation',
+            'assignedStaff',
+            'assignedBy',
+            'pickedUpBy',
+            'shipments',
+        ]);
+
+        return ApiResponse::success(
+            [
+                'pickup' => $pickup,
+                'shipment' => $updatedItem->shipment,
+                'pickup_shipment' => $updatedItem,
+            ],
+            'Shipment rejected at origin branch.'
+        );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
     | RESEND CALLBACK
     |--------------------------------------------------------------------------
     |

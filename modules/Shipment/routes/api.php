@@ -35,65 +35,15 @@ use Modules\Shipment\Http\Controllers\StaffDeliveryLifecycleController;
 |--------------------------------------------------------------------------
 */
 
-Route::prefix('v1/staff')
-    ->name('staff.')
-    ->middleware([
-        'auth:sanctum',
-        'branch.scope',
-    ])
-    ->group(function (): void {
-
-        Route::middleware([
-            'route.permission',
-        ])->group(function (): void {
-
-            /*
-            |--------------------------------------------------------------------------
-            | DELIVERIES
-            |--------------------------------------------------------------------------
-            */
-
-            Route::get(
-                'deliveries',
-                [
-                    StaffDeliveryLifecycleController::class,
-                    'index',
-                ]
-            )->name('deliveries.index');
-
-            Route::post(
-                'deliveries/{delivery}/accept',
-                [
-                    StaffDeliveryLifecycleController::class,
-                    'accept',
-                ]
-            )->name('deliveries.accept');
-
-            Route::post(
-                'deliveries/{delivery}/out-for-delivery',
-                [
-                    StaffDeliveryLifecycleController::class,
-                    'outForDelivery',
-                ]
-            )->name('deliveries.out-for-delivery');
-
-            Route::post(
-                'deliveries/{delivery}/delivered',
-                [
-                    StaffDeliveryLifecycleController::class,
-                    'delivered',
-                ]
-            )->name('deliveries.delivered');
-
-            Route::post(
-                'deliveries/{delivery}/failed',
-                [
-                    StaffDeliveryLifecycleController::class,
-                    'failed',
-                ]
-            )->name('deliveries.failed');
-        });
-    });
+/*
+|--------------------------------------------------------------------------
+| STAFF DELIVERIES
+|--------------------------------------------------------------------------
+| Moved to modules/Delivery/routes/api.php (single source of truth:
+| StaffDeliveryController + DeliveryWorkflowService). Removed here to avoid
+| duplicate v1/staff/deliveries/* URI + route-name registration.
+|--------------------------------------------------------------------------
+*/
 
 /*
 |--------------------------------------------------------------------------

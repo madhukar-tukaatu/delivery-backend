@@ -62,9 +62,10 @@ Route::prefix('v1/staff')
         Route::post('pickups/{pickup}/accept', [StaffPickupLifecycleController::class, 'accept'])->name('pickups.accept');
         Route::post('pickups/{pickup}/picked-up', [StaffPickupLifecycleController::class, 'pickedUp'])->name('pickups.picked-up');
 
-        Route::get('deliveries', [StaffDeliveryLifecycleController::class, 'index'])->name('deliveries.index');
-        Route::post('deliveries/{delivery}/accept', [StaffDeliveryLifecycleController::class, 'accept'])->name('deliveries.accept');
-        Route::post('deliveries/{delivery}/out-for-delivery', [StaffDeliveryLifecycleController::class, 'outForDelivery'])->name('deliveries.out-for-delivery');
-        Route::post('deliveries/{delivery}/delivered', [StaffDeliveryLifecycleController::class, 'delivered'])->name('deliveries.delivered');
-        Route::post('deliveries/{delivery}/failed', [StaffDeliveryLifecycleController::class, 'failed'])->name('deliveries.failed');
+        /*
+        | Staff delivery routes moved to modules/Delivery/routes/api.php
+        | (single source of truth: DeliveryController / StaffDeliveryController
+        | + DeliveryWorkflowService). Kept out of here to avoid duplicate
+        | URI registration for v1/staff/deliveries/*.
+        */
     });

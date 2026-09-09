@@ -22,6 +22,27 @@ final class CourierStatus
     public const RECEIVED_AT_ORIGIN_BRANCH =
         'received_at_origin_branch';
 
+    /*
+    |--------------------------------------------------------------------------
+    | Sort outcome (set at origin branch after receiving)
+    |--------------------------------------------------------------------------
+    |
+    | SORTED_FOR_DELIVERY
+    |   Origin node == destination node. Same-branch last-mile delivery.
+    |   Ready to be assigned to a delivery rider at this branch.
+    |
+    | SORTED_FOR_TRANSFER
+    |   Origin node != destination node. Requires a branch-to-branch transfer.
+    |   Ready to be added to a transfer batch.
+    |
+    */
+
+    public const SORTED_FOR_DELIVERY =
+        'sorted_for_delivery';
+
+    public const SORTED_FOR_TRANSFER =
+        'sorted_for_transfer';
+
     public const IN_TRANSIT =
         'in_transit';
 
@@ -70,6 +91,8 @@ final class CourierStatus
             self::RECEIVED_AT_ORIGIN_BRANCH
                 => 'picked_up',
 
+            self::SORTED_FOR_DELIVERY,
+            self::SORTED_FOR_TRANSFER,
             self::IN_TRANSIT,
             self::RECEIVED_AT_TRANSIT_HUB,
             self::DISPATCHED_TO_DESTINATION_BRANCH,
@@ -96,5 +119,29 @@ final class CourierStatus
             default
                 => 'pending',
         };
+    }
+
+    /**
+     * Statuses set at the origin branch once a received shipment has been
+     * sorted for its next leg. Both are "ready" hand-off states.
+     */
+    public static function sorted(): array
+    {
+        return [
+            self::SORTED_FOR_DELIVERY,
+            self::SORTED_FOR_TRANSFER,
+        ];
+    }
+
+    /**
+     * Whether the shipment has been sorted and is awaiting its next leg.
+     */
+    public static function isSorted(string $status): bool
+    {
+        return in_array(
+            $status,
+            self::sorted(),
+            true
+        );
     }
 }

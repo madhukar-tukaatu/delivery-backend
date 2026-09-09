@@ -178,6 +178,18 @@ Route::prefix('v1/admin')
             ->name('pickups.shipments.receive');
 
         Route::post(
+            'pickups/{pickup}/shipments/{shipment}/reject',
+            [
+                AdminPickupController::class,
+                'rejectShipment',
+            ]
+        )
+            ->middleware([
+                'route.permission:pickups.receive',
+            ])
+            ->name('pickups.shipments.reject');
+
+        Route::post(
             'pickups/{pickup}/resend-callback',
             [
                 AdminPickupController::class,
@@ -417,6 +429,24 @@ Route::prefix('v1/staff')
                 'route.permission:pickups.receive',
             ])
             ->name('pickups.shipments.receive');
+
+        /*
+        |--------------------------------------------------------------------------
+        | REJECT SHIPMENT (branch verification discrepancy)
+        |--------------------------------------------------------------------------
+        */
+
+        Route::post(
+            'pickups/{pickup}/shipments/{shipment}/reject',
+            [
+                PickupController::class,
+                'rejectShipment',
+            ]
+        )
+            ->middleware([
+                'route.permission:pickups.receive',
+            ])
+            ->name('pickups.shipments.reject');
 
         /*
         |--------------------------------------------------------------------------

@@ -2,10 +2,11 @@
 
 use Illuminate\Support\Facades\Route;
 use Modules\Delivery\Http\Controllers\DeliveryController;
+use Modules\Delivery\Http\Controllers\StaffDeliveryController;
 
 /*
 |--------------------------------------------------------------------------
-| Admin Delivery Routes
+| Admin / Branch Delivery Routes
 |--------------------------------------------------------------------------
 */
 
@@ -14,32 +15,34 @@ Route::prefix('v1/admin')
     ->middleware(['auth:sanctum', 'branch.scope'])
     ->group(function () {
 
-        Route::middleware(['route.permission'])->group(function () {
+        Route::get('deliveries', [DeliveryController::class, 'index'])
+            ->middleware(['route.permission:deliveries.view'])
+            ->name('deliveries.index');
 
-            /*
-            |--------------------------------------------------------------------------
-            | Deliveries (Admin)
-            |--------------------------------------------------------------------------
-            | Auto generated permissions:
-            | deliveries.view
-            | deliveries.assign
-            | deliveries.status
-            */
+        Route::get('deliveries/summary', [DeliveryController::class, 'summary'])
+            ->middleware(['route.permission:deliveries.view'])
+            ->name('deliveries.summary');
 
-            Route::get('deliveries', [DeliveryController::class, 'index'])
-                ->name('deliveries.index');
+        Route::post('deliveries/bulk-assign', [DeliveryController::class, 'bulkAssign'])
+            ->middleware(['route.permission:deliveries.assign'])
+            ->name('deliveries.bulk-assign');
 
-            Route::post('shipments/{shipment}/assign-delivery', [DeliveryController::class, 'assign'])
-                ->name('deliveries.assign');
+        Route::get('deliveries/{delivery}/assignable-riders', [DeliveryController::class, 'assignableRiders'])
+            ->middleware(['route.permission:deliveries.assign'])
+            ->name('deliveries.assignable-riders');
 
-            Route::post('deliveries/{assignment}/status', [DeliveryController::class, 'status'])
-                ->name('deliveries.status');
-        });
+        Route::post('deliveries/{delivery}/assign', [DeliveryController::class, 'assign'])
+            ->middleware(['route.permission:deliveries.assign'])
+            ->name('deliveries.assign');
+
+        Route::post('deliveries/{delivery}/failed', [DeliveryController::class, 'failed'])
+            ->middleware(['route.permission:deliveries.failed'])
+            ->name('deliveries.failed');
     });
 
 /*
 |--------------------------------------------------------------------------
-| Staff Delivery Routes
+| Staff / Rider Delivery Routes
 |--------------------------------------------------------------------------
 */
 
@@ -48,20 +51,23 @@ Route::prefix('v1/staff')
     ->middleware(['auth:sanctum', 'branch.scope'])
     ->group(function () {
 
-        Route::middleware(['route.permission'])->group(function () {
+        Route::get('deliveries', [StaffDeliveryController::class, 'index'])
+            ->middleware(['route.permission:deliveries.view'])
+            ->name('deliveries.index');
 
-            /*
-            |--------------------------------------------------------------------------
-            | Deliveries (Staff)
-            |--------------------------------------------------------------------------
-            | Permissions:
-            | staff.deliveries OR deliveries.view
-            */
+        Route::post('deliveries/{delivery}/accept', [StaffDeliveryController::class, 'accept'])
+            ->middleware(['route.permission:deliveries.accept'])
+            ->name('deliveries.accept');
 
-            Route::get('deliveries', [DeliveryController::class, 'index'])
-                ->name('deliveries.index');
+        Route::post('deliveries/{delivery}/out-for-delivery', [StaffDeliveryController::class, 'outForDelivery'])
+            ->middleware(['route.permission:deliveries.out_for_delivery'])
+            ->name('deliveries.out-for-delivery');
 
-            Route::post('deliveries/{assignment}/status', [DeliveryController::class, 'status'])
-                ->name('deliveries.status');
-        });
+        Route::post('deliveries/{delivery}/delivered', [StaffDeliveryController::class, 'delivered'])
+            ->middleware(['route.permission:deliveries.delivered'])
+            ->name('deliveries.delivered');
+
+        Route::post('deliveries/{delivery}/failed', [StaffDeliveryController::class, 'failed'])
+            ->middleware(['route.permission:deliveries.failed'])
+            ->name('deliveries.failed');
     });

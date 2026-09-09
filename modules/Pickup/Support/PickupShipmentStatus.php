@@ -40,6 +40,34 @@ final class PickupShipmentStatus
         ];
     }
 
+    /**
+     * Terminal per-shipment outcomes at the branch.
+     *
+     * A shipment is "resolved" once the branch has either received it
+     * (RECEIVED) or rejected/removed it (FAILED / REMOVED). Once every
+     * shipment in a pickup is resolved, the pickup can complete.
+     */
+    public static function resolved(): array
+    {
+        return [
+            self::RECEIVED,
+            self::FAILED,
+            self::REMOVED,
+        ];
+    }
+
+    /**
+     * Whether a per-shipment status is a terminal branch outcome.
+     */
+    public static function isResolved(string $status): bool
+    {
+        return in_array(
+            $status,
+            self::resolved(),
+            true
+        );
+    }
+
     public static function canCollect(string $status): bool
     {
         return $status === self::PENDING;

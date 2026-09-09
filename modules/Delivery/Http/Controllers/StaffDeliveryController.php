@@ -10,49 +10,71 @@ use Modules\Delivery\Services\DeliveryWorkflowService;
 
 class StaffDeliveryController extends Controller
 {
+    public function __construct(
+        private readonly DeliveryWorkflowService $service,
+    ) {}
+
     public function index(Request $request)
     {
         $user = $request->user();
 
         $query = DeliveryAssignment::query()
-            ->with(['shipment.merchant', 'rider'])
-            ->whereIn('status', ['assigned', 'out_for_delivery']);
+            ->with([
+                'shipment.merchant',
+                'shipment.destinationBranch',
+            ])
+            ->where('rider_id', $user->id);
 
-        if ($user->isSuperAdmin() || $user->hasRole('main_admin')) {
-            // all
-        } elseif ($user->hasRole('branch_manager') || $user->hasRole('sub_branch_manager')) {
-            $query->where(function ($q) use ($user) {
-                $q->where('branch_id', $user->branch_id)
-                    ->orWhere('sub_branch_id', $user->branch_id);
-            });
+        if ($request->filled('status')) {
+            $query->where('status', $request->string('status')->toString());
         } else {
-            $query->where('rider_id', $user->id);
+            $query->whereIn('status', ['assigned', 'accepted', 'out_for_delivery']);
         }
 
-        return ApiResponse::success($query->latest()->paginate((int) $request->get('per_page', 20)));
+        $perPage = min(max((int) $request->input('per_page', 20), 1), 100);
+
+        return ApiResponse::success($query->latest('id')->paginate($perPage));
     }
 
-    public function outForDelivery(Request $request, DeliveryAssignment $delivery, DeliveryWorkflowService $service)
+    public function accept(Request $request, DeliveryAssignment $delivery)
     {
-        return ApiResponse::success($service->outForDelivery($delivery, $request->user()), 'Marked out for delivery.');
+        return ApiResponse::success(
+            $this->service->accept($delivery, $request->user()),
+            'Delivery accepted.'
+        );
     }
 
-    public function delivered(Request $request, DeliveryAssignment $delivery, DeliveryWorkflowService $service)
+    public function outForDelivery(Request $request, DeliveryAssignment $delivery)
+    {
+        return ApiResponse::success(
+            $this->service->outForDelivery($delivery, $request->user()),
+            'Marked out for delivery.'
+        );
+    }
+
+    public function delivered(Request $request, DeliveryAssignment $delivery)
     {
         $data = $request->validate([
+            'payment_method' => ['nullable', 'string', 'in:cash,qr,card,wallet'],
             'pod_collected_amount' => ['nullable', 'numeric', 'min:0'],
             'remarks' => ['nullable', 'string', 'max:500'],
         ]);
 
-        return ApiResponse::success($service->delivered($delivery, $request->user(), $data), 'Shipment delivered.');
+        return ApiResponse::success(
+            $this->service->delivered($delivery, $request->user(), $data),
+            'Shipment delivered.'
+        );
     }
 
-    public function failed(Request $request, DeliveryAssignment $delivery, DeliveryWorkflowService $service)
+    public function failed(Request $request, DeliveryAssignment $delivery)
     {
         $data = $request->validate([
             'reason' => ['required', 'string', 'max:500'],
         ]);
 
-        return ApiResponse::success($service->failed($delivery, $request->user(), $data['reason']), 'Delivery marked as failed.');
+        return ApiResponse::success(
+            $this->service->failed($delivery, $request->user(), $data['reason']),
+            'Delivery marked as failed.'
+        );
     }
 }

@@ -10,13 +10,16 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Modules\Pickup\Models\PickupRequest;
 use Modules\Pickup\Models\PickupRequestShipment;
+use Modules\Pickup\Support\PickupShipmentStatus;
 use Modules\Pickup\Support\PickupStatus;
 use Modules\Shipment\Models\Shipment;
+use Modules\Shipment\Services\ShipmentSortingService;
 
 final class PickupRequestService
 {
     public function __construct(
         private readonly PickupCallbackService $callbacks,
+        private readonly ShipmentSortingService $sorting,
     ) {
     }
 
@@ -786,6 +789,35 @@ final class PickupRequestService
                         userId: $staff->id,
                         note: 'Shipment received at origin branch.'
                     );
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Sort the received shipment
+                    |--------------------------------------------------------------------------
+                    |
+                    | As soon as the branch receives a shipment it is sorted into
+                    | its next leg:
+                    |   - same branch  => SORTED_FOR_DELIVERY (last-mile)
+                    |   - other branch => SORTED_FOR_TRANSFER
+                    |
+                    | Done inside the same transaction so a received shipment is
+                    | never left un-sorted.
+                    |--------------------------------------------------------------------------
+                    */
+                    $shipment = $this->sorting->sort(
+                        shipment: $shipment,
+                        actorId: $staff->id
+                    );
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | Stamp the pivot as verified/received by the branch.
+                    |--------------------------------------------------------------------------
+                    */
+                    $this->markPivotReceived(
+                        item: $item,
+                        staffId: $staff->id
+                    );
                 } else {
                     $shipment->save();
 
@@ -821,61 +853,265 @@ final class PickupRequestService
 
         /*
         |--------------------------------------------------------------------------
-        | Complete the pickup ONLY when EVERY collected shipment has been
-        | verified (received) at the origin branch.
-        |
-        | The branch manager validates shipments one by one. The pickup stays
-        | in ON_WAY_TO_BRANCH until the last one is received; only then does it
-        | transition to COMPLETED and fire pickup.completed (once, deduplicated).
+        | Complete the pickup when EVERY shipment has been resolved at the
+        | origin branch (received/sorted OR rejected).
         |--------------------------------------------------------------------------
         */
-        if (
+        $completed = $this->finalizePickupIfResolved(
             $result->pickupRequest
-            && $result->pickupRequest->status === PickupStatus::ON_WAY_TO_BRANCH
-        ) {
-            $pickupRequest = PickupRequest::query()
-                ->with('shipments')
-                ->find($result->pickupRequest->id);
+        );
 
-            $pending = $pickupRequest
-                ? $pickupRequest->shipments
-                    ->filter(function (Shipment $s): bool {
-                        return ! in_array(
-                            $s->status,
-                            [
-                                CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
-                                CourierStatus::CANCELLED,
-                            ],
-                            true
-                        );
-                    })
-                : collect();
-
-            if ($pickupRequest && $pending->isEmpty()) {
-                // Guard against a duplicate pickup.completed callback.
-                $completedCallbackSent = \Modules\Pickup\Models\PickupCallbackLog::query()
-                    ->where('pickup_request_id', $pickupRequest->id)
-                    ->where('event', 'pickup.completed')
-                    ->whereIn('status', ['delivered', 'pending', 'queued'])
-                    ->exists();
-
-                $pickupRequest->status = PickupStatus::COMPLETED;
-
-                if ($this->pickupHasColumn('completed_at')) {
-                    $pickupRequest->completed_at = now();
-                }
-
-                $pickupRequest->save();
-
-                if (! $completedCallbackSent) {
-                    $this->callbacks->pickupCompleted($pickupRequest);
-                }
-
-                $result->setRelation('pickupRequest', $pickupRequest);
-            }
+        if ($completed) {
+            $result->setRelation('pickupRequest', $completed);
         }
 
         return $result;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Reject shipment at origin (branch verification discrepancy)
+    |
+    | The branch manager could not accept a collected shipment: it is missing,
+    | damaged, or does not match the manifest. The shipment is pulled out of the
+    | forward flow and flagged for follow-up, while the rest of the pickup can
+    | still be received and completed.
+    |--------------------------------------------------------------------------
+    */
+
+    public function rejectShipment(
+        PickupRequest $pickup,
+        Shipment $shipment,
+        User $staff,
+        string $reason,
+        string $type = 'other'
+    ): PickupRequestShipment {
+        $result = DB::transaction(
+            function () use (
+                $pickup,
+                $shipment,
+                $staff,
+                $reason,
+                $type
+            ): PickupRequestShipment {
+                $pickup = PickupRequest::query()
+                    ->lockForUpdate()
+                    ->findOrFail($pickup->id);
+
+                $item = PickupRequestShipment::query()
+                    ->where(
+                        'pickup_request_id',
+                        $pickup->id
+                    )
+                    ->where(
+                        'shipment_id',
+                        $shipment->id
+                    )
+                    ->whereNull('removed_at')
+                    ->lockForUpdate()
+                    ->first();
+
+                if (! $item) {
+                    throw ValidationException::withMessages([
+                        'shipment' => [
+                            'Shipment does not belong to this pickup request.',
+                        ],
+                    ]);
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | Only a shipment that reached the branch (picked up but not yet
+                | received/sorted) can be rejected during verification.
+                |--------------------------------------------------------------------------
+                */
+                if (
+                    $shipment->status !==
+                    CourierStatus::PICKED_UP
+                ) {
+                    throw ValidationException::withMessages([
+                        'shipment' => [
+                            'Only a picked-up shipment can be rejected at the branch.',
+                        ],
+                    ]);
+                }
+
+                $note = sprintf(
+                    'Rejected at origin branch (%s): %s',
+                    $type,
+                    $reason
+                );
+
+                $this->changeShipmentStatus(
+                    shipment: $shipment,
+                    status: CourierStatus::PICKUP_FAILED,
+                    userId: $staff->id,
+                    note: $note
+                );
+
+                $this->markPivotRejected(
+                    item: $item,
+                    staffId: $staff->id,
+                    reason: $reason,
+                    type: $type
+                );
+
+                return $item->fresh([
+                    'pickupRequest',
+                    'shipment',
+                ]);
+            }
+        );
+
+        $completed = $this->finalizePickupIfResolved(
+            $result->pickupRequest
+        );
+
+        if ($completed) {
+            $result->setRelation('pickupRequest', $completed);
+        }
+
+        return $result;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Complete the pickup once every shipment is resolved
+    |
+    | A shipment is resolved when it has been received/sorted at the branch, or
+    | rejected (pickup_failed), or cancelled. The pickup stays in
+    | ON_WAY_TO_BRANCH until the last shipment is resolved; only then does it
+    | transition to COMPLETED and fire pickup.completed (once, deduplicated).
+    |
+    | Returns the completed PickupRequest, or null if not yet complete.
+    |--------------------------------------------------------------------------
+    */
+
+    private function finalizePickupIfResolved(
+        ?PickupRequest $pickup
+    ): ?PickupRequest {
+        if (
+            ! $pickup
+            || $pickup->status !== PickupStatus::ON_WAY_TO_BRANCH
+        ) {
+            return null;
+        }
+
+        $pickupRequest = PickupRequest::query()
+            ->with('shipments')
+            ->find($pickup->id);
+
+        if (! $pickupRequest) {
+            return null;
+        }
+
+        $unresolved = $pickupRequest->shipments
+            ->filter(function (Shipment $s): bool {
+                return ! in_array(
+                    $s->status,
+                    [
+                        CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+                        CourierStatus::SORTED_FOR_DELIVERY,
+                        CourierStatus::SORTED_FOR_TRANSFER,
+                        CourierStatus::PICKUP_FAILED,
+                        CourierStatus::CANCELLED,
+                    ],
+                    true
+                );
+            });
+
+        if ($unresolved->isNotEmpty()) {
+            return null;
+        }
+
+        // Guard against a duplicate pickup.completed callback.
+        $completedCallbackSent = \Modules\Pickup\Models\PickupCallbackLog::query()
+            ->where('pickup_request_id', $pickupRequest->id)
+            ->where('event', 'pickup.completed')
+            ->whereIn('status', ['delivered', 'pending', 'queued'])
+            ->exists();
+
+        $pickupRequest->status = PickupStatus::COMPLETED;
+
+        if ($this->pickupHasColumn('completed_at')) {
+            $pickupRequest->completed_at = now();
+        }
+
+        $pickupRequest->save();
+
+        if (! $completedCallbackSent) {
+            $this->callbacks->pickupCompleted($pickupRequest);
+        }
+
+        return $pickupRequest;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Pivot stamps (schema-safe)
+    |--------------------------------------------------------------------------
+    */
+
+    private function markPivotReceived(
+        PickupRequestShipment $item,
+        int $staffId
+    ): void {
+        $item->status = PickupShipmentStatus::RECEIVED;
+
+        if ($this->pivotHasColumn('collection_status')) {
+            $item->collection_status = PickupShipmentStatus::RECEIVED;
+        }
+
+        if ($this->pivotHasColumn('collected_by')) {
+            $item->collected_by = $item->collected_by ?? $staffId;
+        }
+
+        if (
+            $this->pivotHasColumn('collected_at')
+            && $item->collected_at === null
+        ) {
+            $item->collected_at = now();
+        }
+
+        $item->save();
+    }
+
+    private function markPivotRejected(
+        PickupRequestShipment $item,
+        int $staffId,
+        string $reason,
+        string $type
+    ): void {
+        $item->status = PickupShipmentStatus::FAILED;
+
+        if ($this->pivotHasColumn('collection_status')) {
+            $item->collection_status = PickupShipmentStatus::FAILED;
+        }
+
+        $item->remarks = trim(
+            sprintf('[%s] %s', $type, $reason)
+        );
+
+        if ($this->pivotHasColumn('removed_by')) {
+            $item->removed_by = $staffId;
+        }
+
+        if ($this->pivotHasColumn('removed_at')) {
+            $item->removed_at = now();
+        }
+
+        $item->save();
+    }
+
+    private function pivotHasColumn(
+        string $column
+    ): bool {
+        return in_array(
+            $column,
+            DB::getSchemaBuilder()
+                ->getColumnListing('pickup_request_shipments'),
+            true
+        );
     }
 
     private function pickupCompletedCallbackAlreadyFired(

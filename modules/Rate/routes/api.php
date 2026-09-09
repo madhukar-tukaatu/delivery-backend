@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use Modules\Rate\Http\Controllers\Api\Admin\AdminBranchRouteRateController;
+use Modules\Rate\Http\Controllers\Api\Admin\AdminBranchTransferLaneController;
 use Modules\Rate\Http\Controllers\Api\Admin\AdminBranchTransferRouteController;
 use Modules\Rate\Http\Controllers\Api\Admin\AdminPricingDefaultsController;
 use Modules\Rate\Http\Controllers\Api\Admin\AdminPricingQuoteController;
@@ -69,6 +70,7 @@ Route::middleware('auth:sanctum')
             '/branch-transfer-routes/{transferRoute}',
             [AdminBranchTransferRouteController::class, 'update']
         )
+            ->whereNumber('transferRoute')
             ->middleware('permission:pricing.transfer_routes.update')
             ->name('admin.pricing.transfer-routes.update');
 
@@ -76,6 +78,7 @@ Route::middleware('auth:sanctum')
             '/branch-transfer-routes/{transferRoute}/status',
             [AdminBranchTransferRouteController::class, 'updateStatus']
         )
+            ->whereNumber('transferRoute')
             ->middleware('permission:pricing.transfer_routes.status')
             ->name('admin.pricing.transfer-routes.status');
 
@@ -83,8 +86,61 @@ Route::middleware('auth:sanctum')
             '/branch-transfer-routes/{transferRoute}',
             [AdminBranchTransferRouteController::class, 'destroy']
         )
+            ->whereNumber('transferRoute')
             ->middleware('permission:pricing.transfer_routes.delete')
             ->name('admin.pricing.transfer-routes.destroy');
+    });
+
+/*
+|--------------------------------------------------------------------------
+| Transfer lanes CRUD
+|--------------------------------------------------------------------------
+|
+| Direct physical connections between branches. Frontend calls these under
+| /v1/admin/branch-transfer-lanes (no /rate segment).
+|
+*/
+
+Route::middleware('auth:sanctum')
+    ->prefix('v1/admin')
+    ->group(function (): void {
+        Route::get(
+            '/branch-transfer-lanes',
+            [AdminBranchTransferLaneController::class, 'index']
+        )->name('admin.pricing.transfer-lanes.index');
+
+        Route::post(
+            '/branch-transfer-lanes',
+            [AdminBranchTransferLaneController::class, 'store']
+        )->name('admin.pricing.transfer-lanes.store');
+
+        Route::get(
+            '/branch-transfer-lanes/{transferLane}',
+            [AdminBranchTransferLaneController::class, 'show']
+        )
+            ->whereNumber('transferLane')
+            ->name('admin.pricing.transfer-lanes.show');
+
+        Route::put(
+            '/branch-transfer-lanes/{transferLane}',
+            [AdminBranchTransferLaneController::class, 'update']
+        )
+            ->whereNumber('transferLane')
+            ->name('admin.pricing.transfer-lanes.update');
+
+        Route::patch(
+            '/branch-transfer-lanes/{transferLane}/status',
+            [AdminBranchTransferLaneController::class, 'updateStatus']
+        )
+            ->whereNumber('transferLane')
+            ->name('admin.pricing.transfer-lanes.status');
+
+        Route::delete(
+            '/branch-transfer-lanes/{transferLane}',
+            [AdminBranchTransferLaneController::class, 'destroy']
+        )
+            ->whereNumber('transferLane')
+            ->name('admin.pricing.transfer-lanes.destroy');
     });
 
 Route::prefix('v1/admin')

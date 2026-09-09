@@ -219,32 +219,64 @@ final class BranchPricingRouteService
         string $serviceType,
         array $baseRoute
     ): BranchTransferRoute {
-        $routeCode = $this->generateRouteCode(
-            $pickupBranchId,
-            $deliveryBranchId,
-            $serviceType
-        );
+        // In the ordered-lanes model, routes are authored via BranchTransferRouteService
+        // (ordered lane_ids). Pricing does NOT create routes; it resolves the existing
+        // one that ConfiguredTransferRouteService already matched for this pair.
+        //
+        // $baseRoute is the resolver output and carries the route_id.
+        $routeId = (int) ($baseRoute['route_id'] ?? 0);
 
-        return BranchTransferRoute::firstOrCreate(
-            [
-                'origin_branch_id' => $pickupBranchId,
-                'destination_branch_id' => $deliveryBranchId,
-                'service_type' => $serviceType,
-            ],
-            [
-                'route_code' => $routeCode,
-                'name' => $this->generateRouteName($pickupBranchId, $deliveryBranchId, $serviceType),
-                'service_type' => $serviceType,
-                'transfer_count' => (int) ($baseRoute['transfer_count'] ?? 0),
-                'transit_count' => (int) ($baseRoute['transit_count'] ?? 0),
-                'transit_branch_ids' => json_encode($baseRoute['transit_branches'] ?? []),
-                'total_distance_km' => (float) ($baseRoute['total_distance_km'] ?? 0),
-                'total_estimated_hours' => $this->getEstimatedHours($serviceType, $baseRoute),
-                'priority' => $this->getPriority($serviceType),
-                'is_default' => $serviceType === 'standard',
-                'is_active' => true,
-            ]
-        );
+        if ($routeId > 0) {
+            $route = BranchTransferRoute::query()->find($routeId);
+            if ($route) {
+                return $route;
+            }
+        }
+
+        // Fallback: match by the resolved lane chain endpoints (origin -> destination).
+        $route = $this->findRouteForPair($pickupBranchId, $deliveryBranchId, $serviceType);
+
+        if (!$route) {
+            throw ValidationException::withMessages([
+                'transfer_route' => [
+                    sprintf(
+                        'No transfer route is configured for branch %d -> %d (%s). '
+                        . 'Create the route (via Transfer Routes) before pricing it.',
+                        $pickupBranchId,
+                        $deliveryBranchId,
+                        strtoupper($serviceType)
+                    ),
+                ],
+            ]);
+        }
+
+        return $route;
+    }
+
+    /**
+     * Find the best active route whose ordered lane chain runs origin -> destination.
+     */
+    private function findRouteForPair(int $originId, int $destinationId, string $serviceType): ?BranchTransferRoute
+    {
+        $candidates = BranchTransferRoute::query()
+            ->where('service_type', $serviceType)
+            ->with(['routeLanes.lane', 'lane'])
+            ->orderByDesc('is_default')
+            ->orderBy('priority')
+            ->orderBy('id')
+            ->get();
+
+        foreach ($candidates as $route) {
+            $path = $route->getPathBranchIds();
+            if ($path === []) {
+                continue;
+            }
+            if ((int) $path[0] === $originId && (int) end($path) === $destinationId) {
+                return $route;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -287,7 +319,10 @@ final class BranchPricingRouteService
             default => 'Standard',
         };
 
-        return "{$pickupBranch?->name ?? 'Unknown'} to {$deliveryBranch?->name ?? 'Unknown'} ({$serviceLabel})";
+        $pickupName   = $pickupBranch?->name ?? 'Unknown';
+        $deliveryName = $deliveryBranch?->name ?? 'Unknown';
+
+        return "{$pickupName} to {$deliveryName} ({$serviceLabel})";
     }
 
     /**

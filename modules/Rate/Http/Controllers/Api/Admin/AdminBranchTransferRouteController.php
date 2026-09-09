@@ -37,22 +37,30 @@ final class AdminBranchTransferRouteController extends Controller
             $query->where('service_type', $request->input('service_type'));
         }
 
-        // Filter by transit branches if provided
+        // Filter by whether the route has transit branches (2+ lanes) or is direct
+        // (1 lane). A route with more than one ordered lane has transit branches.
         if ($request->filled('has_transit')) {
             $hasTransit = $request->boolean('has_transit');
+            $subQuery = \Modules\Rate\Models\BranchTransferRouteLane::query()
+                ->select('branch_transfer_route_id')
+                ->groupBy('branch_transfer_route_id')
+                ->havingRaw('COUNT(*) > 1');
+
             if ($hasTransit) {
-                // Only routes with transits (non-empty array)
-                $query->whereRaw('JSON_LENGTH(transit_branch_ids) > 0');
+                $query->whereIn('id', $subQuery);
             } else {
-                // Only direct routes (empty array)
-                $query->whereRaw('JSON_LENGTH(transit_branch_ids) = 0');
+                $query->whereNotIn('id', $subQuery);
             }
         }
 
-        // Filter by specific transit branch
+        // Filter by a specific transit branch: a route passes through it if any of
+        // its lanes ends there but it is not the final destination.
         if ($request->filled('transit_branch_id')) {
             $transitId = (int) $request->input('transit_branch_id');
-            $query->whereRaw("JSON_CONTAINS(transit_branch_ids, ?, '$[*]')", [$transitId]);
+            $query->whereHas('routeLanes.lane', function ($q) use ($transitId): void {
+                $q->where('from_branch_id', $transitId)
+                  ->orWhere('to_branch_id', $transitId);
+            });
         }
 
         if ($request->has('is_active')) {
@@ -64,9 +72,11 @@ final class AdminBranchTransferRouteController extends Controller
             ->orderBy('created_at', 'desc')
             ->paginate(min(max((int) $request->input('per_page', 25), 1), 100));
 
-        // Load relationships after pagination (include coordinates for the map)
+        // Load ordered lanes with branch coordinates for the map + legacy anchor lane.
         $paginator->getCollection()->each(function ($route) {
             $route->load(
+                'routeLanes.lane.fromBranch:id,name,code,latitude,longitude',
+                'routeLanes.lane.toBranch:id,name,code,latitude,longitude',
                 'lane.fromBranch:id,name,code,latitude,longitude',
                 'lane.toBranch:id,name,code,latitude,longitude'
             );
@@ -88,6 +98,89 @@ final class AdminBranchTransferRouteController extends Controller
             'message' => 'Transfer route created successfully.',
             'data'    => $this->resolver->formatRoute($route),
         ], 201);
+    }
+
+    /**
+     * Preview a route (ordered lanes + checkpoints) without persisting it.
+     * Validates connectivity and returns the derived path/distance/ETA.
+     */
+    public function preview(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'lane_ids'   => ['required', 'array', 'min:1'],
+            'lane_ids.*' => ['integer', 'exists:branch_transfer_lanes,id'],
+            'service_type' => ['nullable', \Illuminate\Validation\Rule::in(['standard', 'express', 'same_day', 'flight'])],
+        ]);
+
+        $serviceType = strtolower((string) ($validated['service_type'] ?? 'standard'));
+
+        $lanes = \Modules\Rate\Models\BranchTransferLane::query()
+            ->with(['fromBranch', 'toBranch'])
+            ->whereIn('id', $validated['lane_ids'])
+            ->get()
+            ->keyBy('id');
+
+        $ordered = [];
+        foreach ($validated['lane_ids'] as $id) {
+            $lane = $lanes->get($id);
+            if (!$lane) {
+                continue;
+            }
+            $ordered[] = $lane;
+        }
+
+        // Validate connectivity.
+        $errors = [];
+        for ($i = 0; $i < count($ordered); $i++) {
+            $lane = $ordered[$i];
+            if (strtolower((string) $lane->service_type) !== $serviceType) {
+                $errors[] = sprintf(
+                    'Lane %s → %s is %s, not %s.',
+                    $lane->fromBranch?->name ?? $lane->from_branch_id,
+                    $lane->toBranch?->name ?? $lane->to_branch_id,
+                    strtoupper((string) $lane->service_type),
+                    strtoupper($serviceType)
+                );
+            }
+            if ($i > 0 && (int) $ordered[$i - 1]->to_branch_id !== (int) $lane->from_branch_id) {
+                $errors[] = 'Lanes are not connected end-to-end.';
+            }
+        }
+
+        $path = [];
+        if ($ordered !== []) {
+            $first = $ordered[0];
+            $path[] = [
+                'id'        => (int) $first->from_branch_id,
+                'name'      => $first->fromBranch?->name,
+                'latitude'  => $first->fromBranch?->latitude,
+                'longitude' => $first->fromBranch?->longitude,
+            ];
+            foreach ($ordered as $lane) {
+                $path[] = [
+                    'id'        => (int) $lane->to_branch_id,
+                    'name'      => $lane->toBranch?->name,
+                    'latitude'  => $lane->toBranch?->latitude,
+                    'longitude' => $lane->toBranch?->longitude,
+                ];
+            }
+        }
+
+        return response()->json([
+            'success' => $errors === [],
+            'data'    => [
+                'valid'                 => $errors === [],
+                'errors'                => $errors,
+                'origin_branch_id'      => $ordered ? (int) $ordered[0]->from_branch_id : null,
+                'destination_branch_id' => $ordered ? (int) $ordered[count($ordered) - 1]->to_branch_id : null,
+                'transfer_count'        => count($ordered),
+                'transit_count'         => max(0, count($ordered) - 1),
+                'total_distance_km'     => array_sum(array_map(static fn ($l) => (float) $l->distance_km, $ordered)),
+                'total_estimated_hours' => (int) round(array_sum(array_map(static fn ($l) => (float) $l->estimated_hours, $ordered))),
+                'path'                  => $path,
+                'path_text'             => implode(' → ', array_filter(array_column($path, 'name'))),
+            ],
+        ]);
     }
 
     public function show(BranchTransferRoute $transferRoute): JsonResponse

@@ -5,22 +5,37 @@ declare(strict_types=1);
 namespace Modules\Rate\Services;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
 use Modules\Rate\Models\BranchTransferLane;
 use Modules\Rate\Models\BranchTransferRoute;
+use Modules\Rate\Models\BranchTransferRouteLane;
 
 /**
- * Manages transfer routes on the 2-table design:
- *   - branch_transfer_lanes  = physical connection (from -> to) with distance/ETA
- *   - branch_transfer_routes = named, service-specific route wrapping ONE lane,
- *     plus an optional ordered list of transit hubs (transit_branch_ids JSON).
+ * Manages transfer routes on the "ordered lanes + checkpoints" design.
  *
- * Route code + name are generated from origin, transits, destination and service.
+ * Concepts:
+ *   - LANE  = a direct physical connection between two BRANCHES (from -> to) with
+ *             distance/ETA. Stored once, reusable.
+ *   - ROUTE = a named, service-specific PATH from an origin branch to a destination
+ *             branch, built from an ORDERED LIST OF LANES:
+ *               * 1 lane  => direct route (e.g. KTM -> PKR)
+ *               * 2+ lanes => route via transit BRANCHES (e.g. KTM -> Bardibas -> Itahari)
+ *             The transit branches are DERIVED from the lane boundaries; a direct
+ *             origin->destination lane is NOT required for a multi-lane route.
+ *   - CHECKPOINTS = map-picked ROAD WAYPOINTS (name/city/landmark + coordinates),
+ *             NOT branches. They describe the road a route drives (e.g. via Mugling
+ *             vs via Gorkha) and let two routes share the same lane(s) yet differ.
+ *
+ * Multiple routes may exist for the same origin/destination/service = ALTERNATIVES,
+ * selected at resolve time by is_default, then priority, among is_active routes
+ * (so a blocked road = deactivate that route and fall back to the next).
+ *
+ * Distance/ETA are summed from the lanes. Customer price is NOT set here; it lives
+ * in branch pricing. base_rate on the route is operational metadata only.
  */
 final class BranchTransferRouteService
 {
-    private const MAX_TRANSITS = 5;
-
     public function __construct(
         private readonly BranchTransferRouteCodeGenerator $codeGenerator
     ) {}
@@ -38,33 +53,25 @@ final class BranchTransferRouteService
     private function save(array $data, ?BranchTransferRoute $route): BranchTransferRoute
     {
         return DB::transaction(function () use ($data, $route): BranchTransferRoute {
-            $originBranchId      = (int) $data['origin_branch_id'];
-            $destinationBranchId = (int) $data['destination_branch_id'];
-            $serviceType         = strtolower(trim((string) ($data['service_type'] ?? 'standard')));
+            $serviceType = strtolower(trim((string) ($data['service_type'] ?? 'standard')));
 
-            // Clean transit hubs (unique, integer, not origin/destination).
-            $transitBranchIds = $this->normalizeTransits(
-                (array) ($data['transit_branch_ids'] ?? []),
-                $originBranchId,
-                $destinationBranchId
-            );
+            // 1. Load the ordered lanes exactly as given.
+            $laneIds = array_values(array_map('intval', (array) ($data['lane_ids'] ?? [])));
+            $lanes   = $this->loadOrderedLanes($laneIds);
 
-            // Find the physical lane for origin -> destination + service.
-            $lane = BranchTransferLane::query()
-                ->where('from_branch_id', $originBranchId)
-                ->where('to_branch_id', $destinationBranchId)
-                ->where('service_type', $serviceType)
-                ->first();
+            // 2. Validate connectivity and service consistency across the chain.
+            $this->assertChainIsValid($lanes, $serviceType);
 
-            if (!$lane) {
-                throw ValidationException::withMessages([
-                    'origin_branch_id' => [
-                        $this->buildMissingLaneMessage($originBranchId, $destinationBranchId, $serviceType),
-                    ],
-                ]);
-            }
+            // 3. Derive endpoints from the chain.
+            $originBranchId      = (int) $lanes[0]->from_branch_id;
+            $destinationBranchId = (int) $lanes[count($lanes) - 1]->to_branch_id;
 
-            // Generate code and name (respect what the client sent, else auto-build).
+            // 4. Normalize checkpoints (road waypoints, not branches).
+            $checkpoints = $this->normalizeCheckpoints((array) ($data['checkpoints'] ?? []));
+
+            // 5. Code + name (respect client input, else auto-build from endpoints/transits).
+            $transitBranchIds = $this->deriveTransitBranchIds($lanes);
+
             $routeCode = !empty($data['route_code'])
                 ? strtoupper(trim((string) $data['route_code']))
                 : $this->codeGenerator->generate($originBranchId, $destinationBranchId, $serviceType, $transitBranchIds);
@@ -73,7 +80,7 @@ final class BranchTransferRouteService
                 ? trim((string) $data['name'])
                 : $this->codeGenerator->generateName($originBranchId, $destinationBranchId, $transitBranchIds);
 
-            // Enforce unique route code (ignore self on update).
+            // 6. Unique route code (ignore self on update).
             $codeExists = BranchTransferRoute::query()
                 ->where('route_code', $routeCode)
                 ->when($route !== null, static fn ($q) => $q->where('id', '!=', $route->id))
@@ -87,30 +94,37 @@ final class BranchTransferRouteService
 
             $isDefault = (bool) ($data['is_default'] ?? false);
 
-            // Only one default per lane + service.
+            // 7. Only one default per origin+destination+service (across alternatives).
             if ($isDefault) {
-                BranchTransferRoute::query()
-                    ->where('branch_transfer_lane_id', $lane->id)
-                    ->where('service_type', $serviceType)
-                    ->when($route !== null, static fn ($q) => $q->where('id', '!=', $route->id))
-                    ->update(['is_default' => false, 'updated_at' => now()]);
+                $this->clearOtherDefaults($originBranchId, $destinationBranchId, $serviceType, $route);
             }
+
+            // 8. Aggregate distance/ETA from the lane segments (single source of truth).
+            $totalDistance = array_sum(array_map(static fn ($l) => (float) $l->distance_km, $lanes));
+            $totalHours    = array_sum(array_map(static fn ($l) => (float) $l->estimated_hours, $lanes));
 
             $routeData = [
                 'route_code'              => $routeCode,
                 'name'                    => $routeName,
-                'branch_transfer_lane_id' => $lane->id,
+                // Anchor = first lane, kept for backward compatibility.
+                'branch_transfer_lane_id' => $lanes[0]->id,
                 'transit_branch_ids'      => $transitBranchIds ?: null,
                 'service_type'            => $serviceType,
                 'base_rate'               => (float) ($data['base_rate'] ?? 0),
                 'currency'                => $data['currency'] ?? 'NPR',
-                'distance_km'             => $lane->distance_km,
-                'estimated_hours'         => $lane->estimated_hours,
+                'distance_km'             => $totalDistance,
+                'estimated_hours'         => (int) round($totalHours),
                 'priority'                => max(1, (int) ($data['priority'] ?? 100)),
                 'is_default'              => $isDefault,
                 'is_active'               => (bool) ($data['is_active'] ?? true),
                 'notes'                   => $data['notes'] ?? null,
             ];
+
+            // Only write checkpoints if the column exists (migration may be pending
+            // on some environments). Degrades gracefully instead of a SQL error.
+            if (Schema::hasColumn('branch_transfer_routes', 'checkpoints')) {
+                $routeData['checkpoints'] = $checkpoints ?: null;
+            }
 
             if ($route === null) {
                 $route = BranchTransferRoute::query()->create($routeData);
@@ -118,89 +132,231 @@ final class BranchTransferRouteService
                 $route->update($routeData);
             }
 
-            return $route->fresh(['lane.fromBranch', 'lane.toBranch']);
+            // 9. Replace ordered lane segments.
+            $this->syncRouteLanes($route, $lanes);
+
+            return $route->fresh(['routeLanes.lane.fromBranch', 'routeLanes.lane.toBranch']);
         }, 3);
     }
 
     /**
-     * Build a precise, actionable message explaining why the lane could not be found.
-     * Names the branches and detects whether the lane exists for another service,
-     * is inactive, or is completely missing (including the reverse direction).
-     */
-    private function buildMissingLaneMessage(int $originId, int $destinationId, string $serviceType): string
-    {
-        $branches = \Modules\Branch\Models\CoverageLocation::query()
-            ->whereIn('id', [$originId, $destinationId])
-            ->pluck('name', 'id');
-
-        $originName      = $branches->get($originId) ?? "Branch #{$originId}";
-        $destinationName = $branches->get($destinationId) ?? "Branch #{$destinationId}";
-        $service         = strtoupper($serviceType);
-        $pair            = "{$originName} → {$destinationName}";
-
-        // Any lane between these two branches, regardless of service or status?
-        $sameDirection = BranchTransferLane::query()
-            ->where('from_branch_id', $originId)
-            ->where('to_branch_id', $destinationId)
-            ->get();
-
-        // Lane exists for this service but is inactive.
-        $inactiveSameService = $sameDirection->firstWhere(
-            fn ($lane) => strtolower($lane->service_type) === $serviceType && !$lane->is_active
-        );
-        if ($inactiveSameService) {
-            return "The lane {$pair} for {$service} service exists but is inactive. Activate it in Transfer Lanes before creating this route.";
-        }
-
-        // Lane exists between these branches, but only for other service types.
-        if ($sameDirection->isNotEmpty()) {
-            $available = $sameDirection
-                ->pluck('service_type')
-                ->map(fn ($s) => strtoupper($s))
-                ->unique()
-                ->implode(', ');
-
-            return "A lane for {$pair} exists but not for {$service} service (available: {$available}). Add a {$service} lane in Transfer Lanes first.";
-        }
-
-        // Only the reverse direction exists.
-        $reverseExists = BranchTransferLane::query()
-            ->where('from_branch_id', $destinationId)
-            ->where('to_branch_id', $originId)
-            ->exists();
-        if ($reverseExists) {
-            return "Only the reverse lane ({$destinationName} → {$originName}) exists. Create the {$service} lane {$pair} in Transfer Lanes, or use 'Create reverse route'.";
-        }
-
-        // Completely missing.
-        return "No transfer lane exists for {$pair} ({$service} service). Create this lane in Transfer Lanes first.";
-    }
-
-    /**
-     * Clean transit IDs: unique, positive integers, never origin/destination, capped.
+     * Load lanes in the exact order of the given IDs.
      *
-     * @return int[]
+     * @param int[] $laneIds
+     * @return BranchTransferLane[]
      */
-    private function normalizeTransits(array $transits, int $originBranchId, int $destinationBranchId): array
+    private function loadOrderedLanes(array $laneIds): array
     {
-        $clean = [];
-
-        foreach ($transits as $id) {
-            $id = (int) $id;
-            if ($id <= 0 || $id === $originBranchId || $id === $destinationBranchId) {
-                continue;
-            }
-            if (!in_array($id, $clean, true)) {
-                $clean[] = $id;
-            }
-        }
-
-        if (count($clean) > self::MAX_TRANSITS) {
+        if ($laneIds === []) {
             throw ValidationException::withMessages([
-                'transit_branch_ids' => ['A route can have a maximum of ' . self::MAX_TRANSITS . ' transit hubs.'],
+                'lane_ids' => ['A route must include at least one lane.'],
             ]);
         }
 
+        $found = BranchTransferLane::query()
+            ->whereIn('id', $laneIds)
+            ->get()
+            ->keyBy('id');
+
+        $ordered = [];
+        foreach ($laneIds as $id) {
+            $lane = $found->get($id);
+            if (!$lane) {
+                throw ValidationException::withMessages([
+                    'lane_ids' => ["Lane #{$id} does not exist."],
+                ]);
+            }
+            $ordered[] = $lane;
+        }
+
+        return $ordered;
+    }
+
+    /**
+     * Validate that the lanes form a connected chain for the given service:
+     *   - every lane is active and matches the route's service_type
+     *   - each lane's to_branch equals the next lane's from_branch
+     *   - the path does not revisit a branch (no loops)
+     *
+     * @param BranchTransferLane[] $lanes
+     */
+    private function assertChainIsValid(array $lanes, string $serviceType): void
+    {
+        $count = count($lanes);
+        $seenBranches = [];
+
+        for ($i = 0; $i < $count; $i++) {
+            $lane = $lanes[$i];
+
+            if (strtolower((string) $lane->service_type) !== $serviceType) {
+                throw ValidationException::withMessages([
+                    'lane_ids' => [
+                        sprintf(
+                            'Lane %s → %s is for %s service, but this route is %s.',
+                            $this->branchName((int) $lane->from_branch_id),
+                            $this->branchName((int) $lane->to_branch_id),
+                            strtoupper((string) $lane->service_type),
+                            strtoupper($serviceType)
+                        ),
+                    ],
+                ]);
+            }
+
+            if (!$lane->is_active) {
+                throw ValidationException::withMessages([
+                    'lane_ids' => [
+                        sprintf(
+                            'Lane %s → %s is inactive. Activate it before using it in a route.',
+                            $this->branchName((int) $lane->from_branch_id),
+                            $this->branchName((int) $lane->to_branch_id)
+                        ),
+                    ],
+                ]);
+            }
+
+            // Connectivity: this lane's "from" must equal the previous lane's "to".
+            if ($i > 0) {
+                $prev = $lanes[$i - 1];
+                if ((int) $prev->to_branch_id !== (int) $lane->from_branch_id) {
+                    throw ValidationException::withMessages([
+                        'lane_ids' => [
+                            sprintf(
+                                'Lanes are not connected: %s → %s cannot be followed by %s → %s. '
+                                . 'Each lane must start where the previous one ends.',
+                                $this->branchName((int) $prev->from_branch_id),
+                                $this->branchName((int) $prev->to_branch_id),
+                                $this->branchName((int) $lane->from_branch_id),
+                                $this->branchName((int) $lane->to_branch_id)
+                            ),
+                        ],
+                    ]);
+                }
+            }
+
+            // Loop detection on branch path.
+            $from = (int) $lane->from_branch_id;
+            if ($i === 0) {
+                $seenBranches[$from] = true;
+            }
+            $to = (int) $lane->to_branch_id;
+            if (isset($seenBranches[$to])) {
+                throw ValidationException::withMessages([
+                    'lane_ids' => ['The route path revisits a branch (loop). Each branch may appear once.'],
+                ]);
+            }
+            $seenBranches[$to] = true;
+        }
+    }
+
+    /**
+     * Transit branches derived from the lane chain: the "to" of every lane except
+     * the last (equivalently the "from" of every lane except the first).
+     *
+     * @param BranchTransferLane[] $lanes
+     * @return int[]
+     */
+    private function deriveTransitBranchIds(array $lanes): array
+    {
+        $count = count($lanes);
+        if ($count < 2) {
+            return [];
+        }
+
+        $transits = [];
+        for ($i = 0; $i < $count - 1; $i++) {
+            $transits[] = (int) $lanes[$i]->to_branch_id;
+        }
+
+        return $transits;
+    }
+
+    /**
+     * Persist the ordered lane segments for a route, replacing any existing ones.
+     *
+     * @param BranchTransferLane[] $lanes
+     */
+    private function syncRouteLanes(BranchTransferRoute $route, array $lanes): void
+    {
+        BranchTransferRouteLane::query()
+            ->where('branch_transfer_route_id', $route->id)
+            ->delete();
+
+        $sequence = 1;
+        foreach ($lanes as $lane) {
+            BranchTransferRouteLane::query()->create([
+                'branch_transfer_route_id' => $route->id,
+                'branch_transfer_lane_id'  => $lane->id,
+                'sequence_number'          => $sequence++,
+            ]);
+        }
+    }
+
+    /**
+     * Clear the default flag on other routes for the same origin/destination/service.
+     * Origin/destination are derived from each route's ordered lanes.
+     */
+    private function clearOtherDefaults(int $originBranchId, int $destinationBranchId, string $serviceType, ?BranchTransferRoute $current): void
+    {
+        BranchTransferRoute::query()
+            ->where('service_type', $serviceType)
+            ->where('is_default', true)
+            ->when($current !== null, static fn ($q) => $q->where('id', '!=', $current->id))
+            ->get()
+            ->each(function (BranchTransferRoute $other) use ($originBranchId, $destinationBranchId): void {
+                $path = $other->getPathBranchIds();
+                if ($path === []) {
+                    return;
+                }
+                if ((int) $path[0] === $originBranchId
+                    && (int) end($path) === $destinationBranchId) {
+                    $other->update(['is_default' => false]);
+                }
+            });
+    }
+
+    /**
+     * Clean checkpoints: keep only entries with a usable name or coordinates.
+     *
+     * @return array<int, array{name:?string, city:?string, landmark:?string, latitude:?float, longitude:?float}>
+     */
+    private function normalizeCheckpoints(array $checkpoints): array
+    {
+        $clean = [];
+
+        foreach ($checkpoints as $cp) {
+            if (!is_array($cp)) {
+                continue;
+            }
+
+            $name      = isset($cp['name']) ? trim((string) $cp['name']) : '';
+            $city      = isset($cp['city']) ? trim((string) $cp['city']) : null;
+            $landmark  = isset($cp['landmark']) ? trim((string) $cp['landmark']) : null;
+            $latitude  = isset($cp['latitude']) && $cp['latitude'] !== '' ? (float) $cp['latitude'] : null;
+            $longitude = isset($cp['longitude']) && $cp['longitude'] !== '' ? (float) $cp['longitude'] : null;
+
+            // Skip empty rows (no name and no coordinates).
+            if ($name === '' && $latitude === null && $longitude === null) {
+                continue;
+            }
+
+            $clean[] = [
+                'name'      => $name !== '' ? $name : null,
+                'city'      => $city !== '' ? $city : null,
+                'landmark'  => $landmark !== '' ? $landmark : null,
+                'latitude'  => $latitude,
+                'longitude' => $longitude,
+            ];
+        }
+
         return $clean;
+    }
+
+    private function branchName(int $id): string
+    {
+        $name = \Modules\Branch\Models\CoverageLocation::query()
+            ->whereKey($id)
+            ->value('name');
+
+        return $name ?: "Branch #{$id}";
     }
 }

@@ -36,16 +36,11 @@ final class DefaultPricingImporter
                 $directLane = null;
 
                 if ($source && $destination && $source->id !== $destination->id) {
-                    $existingRoute = BranchTransferRoute::query()
-                        ->where('origin_branch_id', $source->id)
-                        ->where('destination_branch_id', $destination->id)
-                        ->where(
-                            'service_type',
-                            (string) config('pricing_defaults.service_type', 'standard')
-                        )
-                        ->orderByDesc('is_default')
-                        ->orderBy('priority')
-                        ->first();
+                    $existingRoute = $this->findRouteForPair(
+                        (int) $source->id,
+                        (int) $destination->id,
+                        (string) config('pricing_defaults.service_type', 'standard')
+                    );
 
                     $directLane = BranchTransferLane::query()
                         ->where('from_branch_id', $source->id)
@@ -178,13 +173,11 @@ final class DefaultPricingImporter
 
                 $serviceType = (string) ($config['service_type'] ?? 'standard');
 
-                $route = BranchTransferRoute::query()
-                    ->where('origin_branch_id', $source->id)
-                    ->where('destination_branch_id', $destination->id)
-                    ->where('service_type', $serviceType)
-                    ->orderByDesc('is_default')
-                    ->orderBy('priority')
-                    ->first();
+                $route = $this->findRouteForPair(
+                    (int) $source->id,
+                    (int) $destination->id,
+                    $serviceType
+                );
 
                 if ($route) {
                     $route->update([
@@ -241,15 +234,14 @@ final class DefaultPricingImporter
                         $serviceType
                     ),
                     'name' => "{$source->name} to {$destination->name}",
-                    'origin_branch_id' => $source->id,
-                    'destination_branch_id' => $destination->id,
+                    // Anchor lane; origin/destination are derived from the lane chain.
+                    'branch_transfer_lane_id' => $lane->id,
+                    'transit_branch_ids' => null,
                     'service_type' => $serviceType,
                     'base_rate' => $baseRate,
                     'currency' => (string) ($config['currency'] ?? 'NPR'),
-                    'transfer_count' => 1,
-                    'transit_count' => 0,
-                    'total_distance_km' => $lane->distance_km,
-                    'total_estimated_hours' => $lane->estimated_hours,
+                    'distance_km' => $lane->distance_km,
+                    'estimated_hours' => (int) round((float) $lane->estimated_hours),
                     'priority' => 100,
                     'is_default' => true,
                     'is_active' => true,
@@ -346,6 +338,34 @@ final class DefaultPricingImporter
         }
 
         return count($rules);
+    }
+
+    /**
+     * Find the best active route whose ordered lane chain runs origin -> destination
+     * for the given service. Replaces the old origin_branch_id/destination_branch_id
+     * column lookup (those columns no longer exist).
+     */
+    private function findRouteForPair(int $originId, int $destinationId, string $serviceType): ?BranchTransferRoute
+    {
+        $candidates = BranchTransferRoute::query()
+            ->where('service_type', $serviceType)
+            ->with(['routeLanes.lane', 'lane'])
+            ->orderByDesc('is_default')
+            ->orderBy('priority')
+            ->orderBy('id')
+            ->get();
+
+        foreach ($candidates as $route) {
+            $path = $route->getPathBranchIds();
+            if ($path === []) {
+                continue;
+            }
+            if ((int) $path[0] === $originId && (int) end($path) === $destinationId) {
+                return $route;
+            }
+        }
+
+        return null;
     }
 
     private function resolveBranch(

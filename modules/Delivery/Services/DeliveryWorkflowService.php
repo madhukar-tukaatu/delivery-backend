@@ -296,31 +296,60 @@ class DeliveryWorkflowService
     }
 
     /**
+     * Riders that can be assigned to this delivery.
+     *
+     * Prefers riders at the delivery's destination branch, but falls back to
+     * all active riders/staff if none match — so the manager is never left
+     * with an empty list.
+     *
      * @return \Illuminate\Support\Collection<int, User>
      */
-    public function assignableRiders(Shipment $shipment)
+    public function assignableRiders(Shipment $shipment, ?int $deliveryBranchId = null)
     {
-        return $this->riderQuery($shipment)->limit(50)->get();
+        $scoped = $this->riderQuery($shipment, $deliveryBranchId)->limit(100)->get();
+
+        if ($scoped->isNotEmpty()) {
+            return $scoped;
+        }
+
+        // Fallback: any active rider/staff (branch fields may be unset or the
+        // shipment routed to a node the rider isn't tagged to).
+        return $this->baseRiderQuery()->limit(100)->get();
     }
 
-    private function riderQuery(Shipment $shipment)
+    private function riderQuery(Shipment $shipment, ?int $deliveryBranchId = null)
     {
         $branchIds = array_values(array_filter([
+            $deliveryBranchId,
             $shipment->destination_sub_branch_id,
             $shipment->destination_branch_id,
+            $shipment->current_sub_branch_id,
             $shipment->current_branch_id,
         ]));
 
+        return $this->baseRiderQuery()
+            ->when(! empty($branchIds), fn ($q) => $q->whereIn('branch_id', $branchIds));
+    }
+
+    private function baseRiderQuery()
+    {
         return User::query()
             ->where('is_active', true)
-            ->when(! empty($branchIds), fn ($q) => $q->whereIn('branch_id', $branchIds))
             ->whereHas('roles', function ($q) {
-                $q->whereIn('name', ['rider', 'delivery_staff', 'sub_branch_manager', 'branch_manager']);
+                $q->whereIn('name', [
+                    'rider',
+                    'pickup_rider',
+                    'delivery_staff',
+                    'staff',
+                    'sub_branch_manager',
+                    'branch_manager',
+                ]);
             })
             ->withCount(['deliveryAssignments as active_deliveries_count' => function ($q) {
                 $q->whereIn('status', ['assigned', 'accepted', 'out_for_delivery']);
             }])
-            ->orderBy('active_deliveries_count');
+            ->orderBy('active_deliveries_count')
+            ->orderBy('name');
     }
 
     private function isPod(Shipment $shipment): bool

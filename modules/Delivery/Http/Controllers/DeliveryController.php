@@ -116,7 +116,10 @@ class DeliveryController extends Controller
      */
     public function assignableRiders(Request $request, DeliveryAssignment $delivery)
     {
-        $riders = $this->service->assignableRiders($delivery->shipment);
+        $riders = $this->service->assignableRiders(
+            $delivery->shipment,
+            $delivery->branch_id ?? $delivery->sub_branch_id
+        );
 
         return ApiResponse::success(
             $riders->map(fn (User $u) => [

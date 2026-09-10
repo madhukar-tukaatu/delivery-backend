@@ -34,9 +34,23 @@ class RoutePermissionMapper
         // - staff.orders.items.store -> orders.create (not orders.items)
 
         $module = self::normalize($module);
+        $module = self::mapModule($module);
         $action = self::mapAction($action);
 
         return "{$module}.{$action}";
+    }
+
+    /**
+     * Map a route module segment to the permission group that owns it.
+     * Lets differently-named routes share an existing permission set.
+     */
+    private static function mapModule(string $module): string
+    {
+        return match ($module) {
+            // Branch-to-branch transfers reuse the dispatch permissions.
+            'transfers' => 'dispatches',
+            default => $module,
+        };
     }
 
     private static function normalize(string $value): string

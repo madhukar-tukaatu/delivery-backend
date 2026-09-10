@@ -68,25 +68,27 @@ Route::prefix('v1/admin')
             |--------------------------------------------------------------------------
             | TRANSFERS (branch-to-branch)
             |--------------------------------------------------------------------------
-            | Route names use the "dispatches" module so route.permission maps
-            | to existing permissions:
-            |   dispatches.index / summary -> dispatches.view
-            |   dispatches.dispatch        -> dispatches.dispatch
-            |   dispatches.receive         -> dispatches.receive
+            | Route names use a unique "transfers" module (RoutePermissionMapper
+            | aliases transfers -> dispatches) so they don't collide with the
+            | Dispatch module's dispatches.* route names, while still mapping to
+            | existing permissions:
+            |   transfers.index / summary -> dispatches.view
+            |   transfers.dispatch        -> dispatches.dispatch
+            |   transfers.receive         -> dispatches.receive
             |--------------------------------------------------------------------------
             */
 
             Route::get('transfers', [TransferController::class, 'index'])
-                ->name('dispatches.index');
+                ->name('transfers.index');
 
             Route::get('transfers/summary', [TransferController::class, 'summary'])
-                ->name('dispatches.summary');
+                ->name('transfers.summary');
 
             Route::post('transfers/dispatch', [TransferController::class, 'dispatch'])
-                ->name('dispatches.dispatch');
+                ->name('transfers.dispatch');
 
             Route::post('transfers/{shipment}/receive', [TransferController::class, 'receive'])
-                ->name('dispatches.receive');
+                ->name('transfers.receive');
 
             /*
             |--------------------------------------------------------------------------

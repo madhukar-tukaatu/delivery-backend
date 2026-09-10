@@ -91,7 +91,9 @@ class RoutePermissionMapper
             // "failed" permission.
             'cancel',
             'fail' => 'failed',
-            'assign' => 'assign',
+            'assign',
+            'bulk_assign',
+            'assignable_riders' => 'assign',
             'assign_branch' => 'assign_branch',
             'request_more_info' => 'request_more_info',
             'retry' => 'retry',

@@ -345,7 +345,7 @@ class DeliveryWorkflowService
                     'branch_manager',
                 ]);
             })
-            ->withCount(['deliveryAssignments as active_deliveries_count' => function ($q) {
+            ->withCount(['assignedDeliveries as active_deliveries_count' => function ($q) {
                 $q->whereIn('status', ['assigned', 'accepted', 'out_for_delivery']);
             }])
             ->orderBy('active_deliveries_count')

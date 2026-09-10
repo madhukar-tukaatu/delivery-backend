@@ -63,6 +63,7 @@ class MenuSeeder extends Seeder
             ['section'=>'admin','label'=>'Shipment Tasks',         'route'=>'/admin/shipment-tasks',       'icon'=>'checklist',   'permission'=>'shipment_tasks.view',               'sort_order'=>41],
             ['section'=>'admin','label'=>'Pickups',                'route'=>'/admin/pickups',              'icon'=>'pickups',     'permission'=>'pickups.view',                      'sort_order'=>50],
             ['section'=>'admin','label'=>'Deliveries',             'route'=>'/admin/deliveries',           'icon'=>'deliveries',  'permission'=>'deliveries.view',                   'sort_order'=>60],
+            ['section'=>'admin','label'=>'Transfers',              'route'=>'/admin/transfers',            'icon'=>'dispatches',  'permission'=>'dispatches.view',                   'sort_order'=>65],
             ['section'=>'admin','label'=>'Dispatches',             'route'=>'/admin/dispatches',           'icon'=>'dispatches',  'permission'=>'dispatches.view',                   'sort_order'=>70],
             ['section'=>'admin','label'=>'POD',                    'route'=>'/admin/pod',                  'icon'=>'pod',         'permission'=>'pod.view',                          'sort_order'=>80],
 

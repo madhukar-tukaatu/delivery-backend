@@ -10,6 +10,7 @@ use Modules\Shipment\Http\Controllers\Api\MerchantShipmentController;
 use Modules\Shipment\Http\Controllers\GatewayShipmentController;
 use Modules\Shipment\Http\Controllers\ShipmentController;
 use Modules\Shipment\Http\Controllers\StaffDeliveryLifecycleController;
+use Modules\Shipment\Http\Controllers\TransferController;
 
 /*
 |--------------------------------------------------------------------------
@@ -62,6 +63,30 @@ Route::prefix('v1/admin')
         Route::middleware([
             'route.permission',
         ])->group(function (): void {
+
+            /*
+            |--------------------------------------------------------------------------
+            | TRANSFERS (branch-to-branch)
+            |--------------------------------------------------------------------------
+            | Route names use the "dispatches" module so route.permission maps
+            | to existing permissions:
+            |   dispatches.index / summary -> dispatches.view
+            |   dispatches.dispatch        -> dispatches.dispatch
+            |   dispatches.receive         -> dispatches.receive
+            |--------------------------------------------------------------------------
+            */
+
+            Route::get('transfers', [TransferController::class, 'index'])
+                ->name('dispatches.index');
+
+            Route::get('transfers/summary', [TransferController::class, 'summary'])
+                ->name('dispatches.summary');
+
+            Route::post('transfers/dispatch', [TransferController::class, 'dispatch'])
+                ->name('dispatches.dispatch');
+
+            Route::post('transfers/{shipment}/receive', [TransferController::class, 'receive'])
+                ->name('dispatches.receive');
 
             /*
             |--------------------------------------------------------------------------

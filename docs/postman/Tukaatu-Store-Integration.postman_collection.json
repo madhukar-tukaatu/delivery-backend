@@ -1,0 +1,237 @@
+{
+  "info": {
+    "name": "Express — Store Integration API",
+    "_postman_id": "b1e6c0a0-0000-4000-8000-tukaatustore01",
+    "description": "Store-facing gateway API for Tukaatu Express partners.\n\nAUTH: every request sends X-Tukaatu-Key and X-Tukaatu-Secret (issued to your store on approval).\n\nSet collection variables base_url, tukaatu_key, tukaatu_secret. Then use the requests below. The 'Create shipment' request saves the returned tracking_number into a variable for the follow-up Get/Cancel calls.\n\nTukaatu also POSTs signed lifecycle callbacks to your configured callback URL — see the 'Callbacks (reference)' folder for payload samples and signature verification.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "https://tukaatuexpress.com/api", "type": "string" },
+    { "key": "tukaatu_key", "value": "REPLACE_WITH_YOUR_X_TUKAATU_KEY", "type": "string" },
+    { "key": "tukaatu_secret", "value": "REPLACE_WITH_YOUR_X_TUKAATU_SECRET", "type": "string" },
+    { "key": "pickup_location_id", "value": "1", "type": "string" },
+    { "key": "tracking_number", "value": "", "type": "string" },
+    { "key": "pickup_request_number", "value": "", "type": "string" }
+  ],
+  "auth": {
+    "type": "apikey",
+    "apikey": [
+      { "key": "in", "value": "header", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "Shipments",
+      "item": [
+        {
+          "name": "Create shipment (POD)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "const d = b.data || b;",
+                  "if (d && d.tracking_number) pm.collectionVariables.set('tracking_number', d.tracking_number);",
+                  "pm.test('created', () => pm.expect(pm.response.code).to.be.oneOf([200,201]));"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Tukaatu-Key", "value": "{{tukaatu_key}}" },
+              { "key": "X-Tukaatu-Secret", "value": "{{tukaatu_secret}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/gateway/shipments", "host": ["{{base_url}}"], "path": ["v1", "gateway", "shipments"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchant_order_id\": \"ORD-10231\",\n  \"pickup_location_id\": {{pickup_location_id}},\n\n  \"receiver_name\": \"Sita Sharma\",\n  \"receiver_phone\": \"9800000000\",\n  \"receiver_email\": \"sita@example.com\",\n  \"delivery_address\": \"Lakeside-6, Pokhara\",\n  \"delivery_city\": \"Pokhara\",\n  \"delivery_area\": \"Lakeside\",\n  \"delivery_lat\": 28.2096,\n  \"delivery_lng\": 83.9856,\n\n  \"service_type\": \"standard\",\n\n  \"packet\": {\n    \"description\": \"1 x Cotton Kurta\",\n    \"quantity\": 1,\n    \"weight\": 1.5,\n    \"declared_value\": 2500,\n    \"parcel_type\": \"non_fragile\",\n    \"fragile\": false,\n    \"products\": [\n      {\n        \"product_id\": \"SKU-001\",\n        \"name\": \"Cotton Kurta\",\n        \"quantity\": 1,\n        \"unit_price\": 2500,\n        \"unit_weight\": 1.5,\n        \"parcel_type\": \"non_fragile\"\n      }\n    ]\n  },\n\n  \"payment_type\": \"pod\",\n  \"delivery_charge_paid_by\": \"merchant\",\n\n  \"self_drop\": false,\n  \"special_instructions\": \"Call before delivery\",\n  \"remarks\": \"Handle with care\"\n}"
+            },
+            "description": "Create a pay-on-delivery shipment.\n\nNotes:\n- merchant_order_id: your unique order id.\n- pickup_location_id: your registered pickup location (required).\n- payment_type: 'pod' or 'prepaid'.\n- For POD, the amount to collect is taken from packet.declared_value (or the sum of product unit_price x quantity) unless you send an explicit pod_amount.\n- delivery_charge_paid_by: 'merchant' (you are billed the delivery charge at settlement) or 'customer' (delivery charge added to what the rider collects).\n- packet.products is optional but recommended for itemized parcels."
+          }
+        },
+        {
+          "name": "Create shipment (Prepaid)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Tukaatu-Key", "value": "{{tukaatu_key}}" },
+              { "key": "X-Tukaatu-Secret", "value": "{{tukaatu_secret}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/gateway/shipments", "host": ["{{base_url}}"], "path": ["v1", "gateway", "shipments"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"merchant_order_id\": \"ORD-10232\",\n  \"pickup_location_id\": {{pickup_location_id}},\n\n  \"receiver_name\": \"Hari Karki\",\n  \"receiver_phone\": \"9811111111\",\n  \"delivery_address\": \"Kupondole, Lalitpur\",\n  \"delivery_city\": \"Lalitpur\",\n  \"delivery_area\": \"Kupondole\",\n  \"delivery_lat\": 27.6822,\n  \"delivery_lng\": 85.3170,\n\n  \"service_type\": \"express\",\n\n  \"packet\": {\n    \"description\": \"Prepaid parcel\",\n    \"quantity\": 1,\n    \"weight\": 0.8,\n    \"declared_value\": 1200,\n    \"parcel_type\": \"non_fragile\",\n    \"fragile\": false\n  },\n\n  \"payment_type\": \"prepaid\",\n  \"delivery_charge_paid_by\": \"merchant\",\n  \"self_drop\": false\n}"
+            },
+            "description": "Prepaid shipment: nothing is collected from the customer on delivery."
+          }
+        },
+        {
+          "name": "Get shipment (by tracking number)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "X-Tukaatu-Key", "value": "{{tukaatu_key}}" },
+              { "key": "X-Tukaatu-Secret", "value": "{{tukaatu_secret}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/gateway/shipments/{{tracking_number}}", "host": ["{{base_url}}"], "path": ["v1", "gateway", "shipments", "{{tracking_number}}"] }
+          }
+        },
+        {
+          "name": "Cancel shipment",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Tukaatu-Key", "value": "{{tukaatu_key}}" },
+              { "key": "X-Tukaatu-Secret", "value": "{{tukaatu_secret}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/gateway/shipments/{{tracking_number}}/cancel", "host": ["{{base_url}}"], "path": ["v1", "gateway", "shipments", "{{tracking_number}}", "cancel"] },
+            "body": { "mode": "raw", "raw": "{\n  \"reason\": \"Customer cancelled the order\"\n}" },
+            "description": "Cancels a shipment that has not progressed past a cancellable state."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Pickups (optional)",
+      "item": [
+        {
+          "name": "Request pickup",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const b = pm.response.json();",
+                  "const d = b.data || b;",
+                  "if (d && d.request_number) pm.collectionVariables.set('pickup_request_number', d.request_number);"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Tukaatu-Key", "value": "{{tukaatu_key}}" },
+              { "key": "X-Tukaatu-Secret", "value": "{{tukaatu_secret}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/gateway/pickups", "host": ["{{base_url}}"], "path": ["v1", "gateway", "pickups"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pickup_location_id\": {{pickup_location_id}},\n  \"store_reference\": \"PICKUP-88\",\n  \"preferred_pickup_at\": \"2026-09-12T10:00:00+05:45\",\n  \"remarks\": \"3 parcels ready\"\n}"
+            },
+            "description": "Optional: explicitly request a pickup. Shipments you create for the same pickup location are automatically batched into the open pickup, so an explicit request is only needed if you want to schedule one."
+          }
+        },
+        {
+          "name": "Get pickup (by request number)",
+          "request": {
+            "method": "GET",
+            "header": [
+              { "key": "Accept", "value": "application/json" },
+              { "key": "X-Tukaatu-Key", "value": "{{tukaatu_key}}" },
+              { "key": "X-Tukaatu-Secret", "value": "{{tukaatu_secret}}" }
+            ],
+            "url": { "raw": "{{base_url}}/v1/gateway/pickups/{{pickup_request_number}}", "host": ["{{base_url}}"], "path": ["v1", "gateway", "pickups", "{{pickup_request_number}}"] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Callbacks (reference)",
+      "description": "Tukaatu POSTs signed lifecycle callbacks to your configured callback URL. These are REFERENCE examples of what your endpoint receives — they are not requests you send. Point the URL at your own receiver (e.g. a webhook.site URL) to inspect live callbacks.\n\nSignature headers on every callback:\n- X-Tukaatu-Event-ID\n- X-Tukaatu-Timestamp\n- X-Tukaatu-Signature = HMAC-SHA256(timestamp + '.' + rawBody, your_callback_secret)\n\nVerify using the RAW body (do not re-serialize the parsed JSON).",
+      "item": [
+        {
+          "name": "SAMPLE — pickup.rider_assigned",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "X-Tukaatu-Event-ID", "value": "evt_pickup_rider_assigned_sample" },
+              { "key": "X-Tukaatu-Timestamp", "value": "1757000000" },
+              { "key": "X-Tukaatu-Signature", "value": "<hmac_sha256(timestamp.rawBody, secret)>" }
+            ],
+            "url": { "raw": "https://your-store.example.com/webhooks/tukaatu", "protocol": "https", "host": ["your-store", "example", "com"], "path": ["webhooks", "tukaatu"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"application_number\": \"APP-000123\",\n  \"merchant_reference\": \"STORE-CODE\",\n  \"event\": \"pickup.rider_assigned\",\n  \"event_id\": \"evt_pickup_rider_assigned_ab12\",\n  \"occurred_at\": \"2026-09-10T09:00:00+05:45\",\n  \"merchant_id\": 41,\n  \"pickup\": {\n    \"id\": 63,\n    \"request_number\": \"PR-000006\",\n    \"store_reference\": \"PICKUP-88\",\n    \"status\": \"assigned\",\n    \"pickup_location_id\": 12,\n    \"rider\": { \"id\": 175, \"name\": \"Ram Thapa\", \"phone\": \"9840000000\" }\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "SAMPLE — shipment.collected",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "https://your-store.example.com/webhooks/tukaatu", "protocol": "https", "host": ["your-store", "example", "com"], "path": ["webhooks", "tukaatu"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"application_number\": \"APP-000123\",\n  \"merchant_reference\": \"STORE-CODE\",\n  \"event\": \"shipment.collected\",\n  \"event_id\": \"evt_shipment_collected_cd34\",\n  \"occurred_at\": \"2026-09-10T09:12:00+05:45\",\n  \"merchant_id\": 41,\n  \"pickup\": { \"request_number\": \"PR-000006\", \"status\": \"collected\" },\n  \"shipment\": {\n    \"id\": 104,\n    \"tracking_number\": \"TEX-20260910-445323\",\n    \"merchant_order_id\": \"ORD-10231\",\n    \"status\": \"picked_up\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "SAMPLE — shipment.sorted_for_transfer",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "https://your-store.example.com/webhooks/tukaatu", "protocol": "https", "host": ["your-store", "example", "com"], "path": ["webhooks", "tukaatu"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"application_number\": \"APP-000123\",\n  \"merchant_reference\": \"STORE-CODE\",\n  \"event\": \"shipment.sorted_for_transfer\",\n  \"event_id\": \"evt_shipment_sorted_for_transfer_ef56\",\n  \"occurred_at\": \"2026-09-10T10:05:00+05:45\",\n  \"merchant_id\": 41,\n  \"shipment\": {\n    \"id\": 104,\n    \"tracking_number\": \"TEX-20260910-445323\",\n    \"merchant_order_id\": \"ORD-10231\",\n    \"status\": \"sorted_for_transfer\",\n    \"merchant_status\": \"in_transit\",\n    \"origin_branch_id\": 19,\n    \"destination_branch_id\": 20,\n    \"current_branch_id\": 19,\n    \"payment_type\": \"pod\",\n    \"pod_amount\": 2500,\n    \"delivery_charge\": 80,\n    \"total_collectable_amount\": 2500\n  },\n  \"data\": {}\n}"
+            }
+          }
+        },
+        {
+          "name": "SAMPLE — delivery.assigned",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "https://your-store.example.com/webhooks/tukaatu", "protocol": "https", "host": ["your-store", "example", "com"], "path": ["webhooks", "tukaatu"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"application_number\": \"APP-000123\",\n  \"merchant_reference\": \"STORE-CODE\",\n  \"event\": \"delivery.assigned\",\n  \"event_id\": \"evt_delivery_assigned_gh78\",\n  \"occurred_at\": \"2026-09-10T11:00:00+05:45\",\n  \"merchant_id\": 41,\n  \"shipment\": {\n    \"id\": 104,\n    \"tracking_number\": \"TEX-20260910-445323\",\n    \"merchant_order_id\": \"ORD-10231\",\n    \"status\": \"assigned_to_rider\",\n    \"merchant_status\": \"out_for_delivery\",\n    \"origin_branch_id\": 19,\n    \"destination_branch_id\": 20,\n    \"current_branch_id\": 20,\n    \"payment_type\": \"pod\",\n    \"pod_amount\": 2500,\n    \"delivery_charge\": 80,\n    \"total_collectable_amount\": 2500\n  },\n  \"data\": { \"rider\": { \"id\": 190, \"name\": \"Gita Rai\", \"phone\": \"9845555555\" } }\n}"
+            }
+          }
+        },
+        {
+          "name": "SAMPLE — delivery.delivered",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "https://your-store.example.com/webhooks/tukaatu", "protocol": "https", "host": ["your-store", "example", "com"], "path": ["webhooks", "tukaatu"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"application_number\": \"APP-000123\",\n  \"merchant_reference\": \"STORE-CODE\",\n  \"event\": \"delivery.delivered\",\n  \"event_id\": \"evt_delivery_delivered_ij90\",\n  \"occurred_at\": \"2026-09-10T12:30:00+05:45\",\n  \"merchant_id\": 41,\n  \"shipment\": {\n    \"id\": 104,\n    \"tracking_number\": \"TEX-20260910-445323\",\n    \"merchant_order_id\": \"ORD-10231\",\n    \"status\": \"delivered\",\n    \"merchant_status\": \"delivered\",\n    \"origin_branch_id\": 19,\n    \"destination_branch_id\": 20,\n    \"current_branch_id\": 20,\n    \"payment_type\": \"pod\",\n    \"pod_amount\": 2500,\n    \"delivery_charge\": 80,\n    \"total_collectable_amount\": 2500\n  },\n  \"data\": { \"payment_method\": \"cash\", \"pod_collected_amount\": 2500, \"remarks\": \"Delivered to customer\" }\n}"
+            }
+          }
+        },
+        {
+          "name": "SAMPLE — delivery.failed",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "https://your-store.example.com/webhooks/tukaatu", "protocol": "https", "host": ["your-store", "example", "com"], "path": ["webhooks", "tukaatu"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"application_number\": \"APP-000123\",\n  \"merchant_reference\": \"STORE-CODE\",\n  \"event\": \"delivery.failed\",\n  \"event_id\": \"evt_delivery_failed_kl12\",\n  \"occurred_at\": \"2026-09-10T12:35:00+05:45\",\n  \"merchant_id\": 41,\n  \"shipment\": {\n    \"id\": 104,\n    \"tracking_number\": \"TEX-20260910-445323\",\n    \"merchant_order_id\": \"ORD-10231\",\n    \"status\": \"delivery_failed\",\n    \"merchant_status\": \"failed\"\n  },\n  \"data\": { \"reason\": \"Customer unreachable\" }\n}"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

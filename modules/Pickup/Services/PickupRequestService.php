@@ -691,6 +691,19 @@ final class PickupRequestService
             shipment: $result->shipment
         );
 
+        /*
+        |--------------------------------------------------------------------------
+        | When this collection completes the pickup (all shipments collected),
+        | fire the pickup-level pickup.collected callback once.
+        |--------------------------------------------------------------------------
+        */
+        if (
+            $result->pickupRequest
+            && $result->pickupRequest->status === PickupStatus::COLLECTED
+        ) {
+            $this->callbacks->pickupCollected($result->pickupRequest);
+        }
+
         return $result;
     }
 
@@ -1305,6 +1318,8 @@ final class PickupRequestService
                 return $this->get($pickup);
             }
         );
+
+        $this->callbacks->pickupOnWayToBranch($fresh);
 
         return $fresh;
     }

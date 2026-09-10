@@ -861,11 +861,19 @@ final class ShipmentService
         $podAmount = 0.0;
 
         if ($type === 'pod') {
-            $podAmount = round((float) (
-                $data['pod_amount']
+            // Prefer an explicit pod_amount; otherwise fall back to the
+            // packet's collectable value: declared_value, else the sum of
+            // product (unit_price x quantity). Ensures a POD order always
+            // stores a non-zero amount to collect.
+            $explicit = $data['pod_amount']
                 ?? data_get($data, 'payment.pod_amount')
-                ?? 0
-            ), 2);
+                ?? data_get($data, 'packet.pod_amount');
+
+            if ($explicit !== null) {
+                $podAmount = round((float) $explicit, 2);
+            } else {
+                $podAmount = round((float) $this->packetCollectableValue($data), 2);
+            }
         }
 
         $deliveryCharge = round((float) (
@@ -883,6 +891,39 @@ final class ShipmentService
             'delivery_charge' => $deliveryCharge,
             'total_collectable_amount' => round($totalCollectable, 2),
         ];
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Collectable value of the packet.
+    |
+    | Uses packet.declared_value when present, otherwise the sum of
+    | product (unit_price x quantity). Used as the POD amount fallback.
+    |--------------------------------------------------------------------------
+    */
+    private function packetCollectableValue(array $data): float
+    {
+        $declared = data_get($data, 'packet.declared_value');
+
+        if ($declared !== null && (float) $declared > 0) {
+            return (float) $declared;
+        }
+
+        $products = data_get($data, 'packet.products', []);
+
+        if (! is_array($products)) {
+            return 0.0;
+        }
+
+        $sum = 0.0;
+
+        foreach ($products as $product) {
+            $price = (float) ($product['unit_price'] ?? 0);
+            $qty = (int) ($product['quantity'] ?? 1);
+            $sum += $price * max($qty, 1);
+        }
+
+        return $sum;
     }
 
     private function shipmentColumns(): array

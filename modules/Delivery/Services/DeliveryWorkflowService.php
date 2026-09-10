@@ -9,6 +9,7 @@ use Illuminate\Validation\ValidationException;
 use Modules\Delivery\Models\DeliveryAssignment;
 use Modules\POD\Services\PODWorkflowService;
 use Modules\Shipment\Models\Shipment;
+use Modules\Shipment\Services\ShipmentCallbackService;
 use Modules\Tracking\Services\TrackingService;
 use Modules\Webhook\Services\WebhookService;
 
@@ -28,6 +29,7 @@ class DeliveryWorkflowService
     public function __construct(
         private TrackingService $trackingService,
         private WebhookService $webhookService,
+        private ShipmentCallbackService $callbacks,
     ) {}
 
     /**
@@ -93,6 +95,9 @@ class DeliveryWorkflowService
 
             $this->trackingService->record($shipment->fresh(), CourierStatus::ASSIGNED_TO_RIDER, 'Assigned to delivery rider ' . $rider->name . '.', $actor->id);
             $this->webhookService->queueShipmentEvent($shipment->fresh(), 'delivery.assigned');
+            $this->callbacks->deliveryAssigned($shipment->fresh(), [
+                'rider' => ['id' => $rider->id, 'name' => $rider->name, 'phone' => $rider->phone],
+            ]);
 
             return $delivery->fresh(['shipment', 'rider']);
         });
@@ -158,6 +163,9 @@ class DeliveryWorkflowService
             ]);
 
             $this->trackingService->record($delivery->shipment, CourierStatus::ASSIGNED_TO_RIDER, 'Rider accepted the delivery.', $user->id);
+            $this->callbacks->deliveryAccepted($delivery->shipment->fresh(), [
+                'rider' => ['id' => $user->id, 'name' => $user->name],
+            ]);
 
             return $delivery->fresh(['shipment', 'rider']);
         });
@@ -190,6 +198,7 @@ class DeliveryWorkflowService
 
             $this->trackingService->record($shipment->fresh(), CourierStatus::OUT_FOR_DELIVERY, 'Out for delivery.', $user->id);
             $this->webhookService->queueShipmentEvent($shipment->fresh(), 'delivery.out_for_delivery');
+            $this->callbacks->deliveryOutForDelivery($shipment->fresh());
 
             return $shipment->fresh();
         });
@@ -254,6 +263,11 @@ class DeliveryWorkflowService
 
             $this->trackingService->record($shipment->fresh(), CourierStatus::DELIVERED, $data['remarks'] ?? 'Delivered successfully.', $user->id);
             $this->webhookService->queueShipmentEvent($shipment->fresh(), 'delivery.delivered');
+            $this->callbacks->deliveryDelivered($shipment->fresh(), [
+                'payment_method' => $data['payment_method'] ?? null,
+                'pod_collected_amount' => $isPod ? (float) ($data['pod_collected_amount'] ?? $collectable) : 0,
+                'remarks' => $data['remarks'] ?? null,
+            ]);
 
             return $shipment->fresh();
         });
@@ -282,6 +296,7 @@ class DeliveryWorkflowService
 
             $this->trackingService->record($shipment->fresh(), CourierStatus::DELIVERY_FAILED, $reason, $user->id);
             $this->webhookService->queueShipmentEvent($shipment->fresh(), 'delivery.failed');
+            $this->callbacks->deliveryFailed($shipment->fresh(), ['reason' => $reason]);
 
             return $shipment->fresh();
         });

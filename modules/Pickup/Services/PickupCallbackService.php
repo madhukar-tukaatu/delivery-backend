@@ -162,6 +162,38 @@ final class PickupCallbackService
 
     /*
     |--------------------------------------------------------------------------
+    | pickup.collected
+    |
+    | Fired once, when every shipment in the pickup has been collected from the
+    | merchant and the pickup transitions to COLLECTED.
+    |--------------------------------------------------------------------------
+    */
+    public function pickupCollected(PickupRequest $pickup): void
+    {
+        $this->dispatchPickupEvent(
+            pickup: $pickup,
+            event: 'pickup.collected',
+        );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | pickup.on_way_to_branch
+    |
+    | Fired when the rider leaves the merchant with the collected shipments and
+    | starts transit to the origin branch.
+    |--------------------------------------------------------------------------
+    */
+    public function pickupOnWayToBranch(PickupRequest $pickup): void
+    {
+        $this->dispatchPickupEvent(
+            pickup: $pickup,
+            event: 'pickup.on_way_to_branch',
+        );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
     | shipment.received_at_origin
     |--------------------------------------------------------------------------
     */
@@ -218,6 +250,8 @@ final class PickupCallbackService
         'pickup.rider_assigned',
         'pickup.rider_started',
         'pickup.rider_arrived',
+        'pickup.collected',
+        'pickup.on_way_to_branch',
         'pickup.completed',
         'shipment.collected',
         'shipment.received_at_origin',
@@ -239,6 +273,14 @@ final class PickupCallbackService
 
             case 'pickup.rider_arrived':
                 $this->riderArrived($pickup);
+                break;
+
+            case 'pickup.collected':
+                $this->pickupCollected($pickup);
+                break;
+
+            case 'pickup.on_way_to_branch':
+                $this->pickupOnWayToBranch($pickup);
                 break;
 
             case 'pickup.completed':

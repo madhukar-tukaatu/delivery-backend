@@ -62,10 +62,13 @@ final class TransferService
 
             $this->track($shipment, $old, CourierStatus::IN_TRANSIT, 'Dispatched on transfer to destination branch.', $actorId);
 
+            $fresh = $shipment->fresh();
             app(\Modules\Webhook\Services\WebhookService::class)
-                ->queueShipmentEvent($shipment->fresh(), 'shipment.in_transit');
+                ->queueShipmentEvent($fresh, 'shipment.in_transit');
+            app(\Modules\Shipment\Services\ShipmentCallbackService::class)
+                ->inTransit($fresh);
 
-            return $shipment->fresh();
+            return $fresh;
         });
     }
 
@@ -130,6 +133,10 @@ final class TransferService
             return $shipment->fresh();
         });
 
+        // Notify the store the parcel reached its destination branch.
+        app(\Modules\Shipment\Services\ShipmentCallbackService::class)
+            ->receivedAtDestination($received);
+
         // At the destination the parcel is now a local last-mile job. Move it
         // to sorted_for_delivery and open a pending delivery so it lands on the
         // destination branch's deliveries board.
@@ -163,13 +170,17 @@ final class TransferService
 
             $this->track($shipment, $old, CourierStatus::SORTED_FOR_DELIVERY, 'Sorted for last-mile delivery at destination branch.', $actorId);
 
+            $fresh = $shipment->fresh();
+
             app(\Modules\Delivery\Services\DeliveryWorkflowService::class)
-                ->createPendingForShipment($shipment->fresh(), $actorId);
+                ->createPendingForShipment($fresh, $actorId);
 
             app(\Modules\Webhook\Services\WebhookService::class)
-                ->queueShipmentEvent($shipment->fresh(), 'shipment.sorted_for_delivery');
+                ->queueShipmentEvent($fresh, 'shipment.sorted_for_delivery');
+            app(\Modules\Shipment\Services\ShipmentCallbackService::class)
+                ->sortedForDelivery($fresh);
 
-            return $shipment->fresh();
+            return $fresh;
         });
     }
 

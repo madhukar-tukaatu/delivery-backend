@@ -114,15 +114,25 @@ final class ShipmentSortingService
                 | either ready for last-mile delivery or queued for transfer.
                 |--------------------------------------------------------------------------
                 */
+                $fresh = $shipment->fresh();
+
                 app(\Modules\Webhook\Services\WebhookService::class)
                     ->queueShipmentEvent(
-                        $shipment->fresh(),
+                        $fresh,
                         $mode === self::MODE_LAST_MILE
                             ? 'shipment.sorted_for_delivery'
                             : 'shipment.sorted_for_transfer'
                     );
 
-                return $shipment->fresh();
+                // Store-integration callback (integration_callback_url).
+                $callbacks = app(\Modules\Shipment\Services\ShipmentCallbackService::class);
+                if ($mode === self::MODE_LAST_MILE) {
+                    $callbacks->sortedForDelivery($fresh);
+                } else {
+                    $callbacks->sortedForTransfer($fresh);
+                }
+
+                return $fresh;
             }
         );
     }

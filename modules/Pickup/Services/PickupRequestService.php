@@ -1037,6 +1037,21 @@ final class PickupRequestService
             $pickupRequest->completed_at = now();
         }
 
+        /*
+        |--------------------------------------------------------------------------
+        | Bulk pickup discount (store-configurable)
+        |
+        | If the store has configured a bulk discount and this pickup's received
+        | packet count meets the threshold, record the flat discount on the
+        | pickup. Settlement subtracts it from the store's delivery-charge bill.
+        | Counted once per pickup, locked in at completion.
+        |--------------------------------------------------------------------------
+        */
+        $this->applyBulkPickupDiscount(
+            $pickupRequest,
+            $pickupRequest->shipments
+        );
+
         $pickupRequest->save();
 
         if (! $completedCallbackSent) {
@@ -1044,6 +1059,60 @@ final class PickupRequestService
         }
 
         return $pickupRequest;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Bulk pickup discount
+    |--------------------------------------------------------------------------
+    |
+    | Reads the store's configured threshold + amount and, if the number of
+    | successfully received (non-rejected) shipments in this pickup meets the
+    | threshold, sets pickup.delivery_discount to the flat amount.
+    |--------------------------------------------------------------------------
+    */
+    private function applyBulkPickupDiscount(
+        PickupRequest $pickup,
+        $shipments
+    ): void {
+        if (! $this->pickupHasColumn('delivery_discount')) {
+            return;
+        }
+
+        $merchant = $pickup->merchant
+            ?? ($pickup->merchant_id
+                ? \Modules\Merchant\Models\Merchant::query()->find($pickup->merchant_id)
+                : null);
+
+        if (! $merchant) {
+            return;
+        }
+
+        $threshold = (int) ($merchant->bulk_pickup_discount_threshold ?? 0);
+        $amount = (float) ($merchant->bulk_pickup_discount_amount ?? 0);
+
+        if ($threshold <= 0 || $amount <= 0) {
+            return;
+        }
+
+        // Count only shipments that actually arrived at the branch.
+        $receivedCount = $shipments
+            ->filter(function (Shipment $s): bool {
+                return in_array(
+                    $s->status,
+                    [
+                        CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+                        CourierStatus::SORTED_FOR_DELIVERY,
+                        CourierStatus::SORTED_FOR_TRANSFER,
+                    ],
+                    true
+                );
+            })
+            ->count();
+
+        $pickup->delivery_discount = $receivedCount >= $threshold
+            ? round($amount, 2)
+            : 0;
     }
 
     /*

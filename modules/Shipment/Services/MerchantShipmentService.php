@@ -160,9 +160,12 @@ final class MerchantShipmentService
             | 9. Create Shipment
             |--------------------------------------------------------------------------
             |
-            | NO PRICE CALCULATION HERE.
+            | NO PRICE CALCULATION HERE — charges are taken from the payload
+            | (pod_amount / delivery_charge). total_collectable is derived.
             |
             */
+
+            $charges = $this->resolveCharges($data);
 
             $shipment = Shipment::create([
 
@@ -311,8 +314,17 @@ final class MerchantShipmentService
                 'payment_type' =>
                     $data['payment_type'],
 
+                'pod_amount' =>
+                    $charges['pod_amount'],
+
+                'delivery_charge' =>
+                    $charges['delivery_charge'],
+
+                'total_collectable_amount' =>
+                    $charges['total_collectable_amount'],
+
                 'delivery_charge_paid_by' =>
-                    $data['delivery_charge_paid_by'],
+                    $data['delivery_charge_paid_by'] ?? 'merchant',
 
                 /*
                 |--------------------------------------------------------------------------
@@ -409,5 +421,48 @@ final class MerchantShipmentService
                 'destinationSubBranch',
             ]);
         });
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Resolve charges (pod amount, delivery charge, total collectable).
+    |
+    | pod_amount:                goods value collected on delivery (0 prepaid).
+    | delivery_charge:           shipping fee from payload, else config default.
+    | total_collectable_amount:  pod_amount + delivery_charge (only when the
+    |                            customer pays the delivery charge).
+    |
+    | @return array{pod_amount: float, delivery_charge: float, total_collectable_amount: float}
+    |--------------------------------------------------------------------------
+    */
+    private function resolveCharges(array $data): array
+    {
+        $type = strtolower((string) ($data['payment_type'] ?? 'prepaid'));
+
+        $podAmount = 0.0;
+
+        if ($type === 'pod') {
+            $podAmount = round((float) (
+                $data['pod_amount']
+                ?? data_get($data, 'payment.pod_amount')
+                ?? 0
+            ), 2);
+        }
+
+        $deliveryCharge = round((float) (
+            $data['delivery_charge']
+            ?? config('delivery_workflow.pricing.base_fee', 0)
+        ), 2);
+
+        $paidBy = strtolower((string) ($data['delivery_charge_paid_by'] ?? 'merchant'));
+
+        $totalCollectable = $podAmount
+            + ($paidBy === 'customer' ? $deliveryCharge : 0.0);
+
+        return [
+            'pod_amount' => $podAmount,
+            'delivery_charge' => $deliveryCharge,
+            'total_collectable_amount' => round($totalCollectable, 2),
+        ];
     }
 }

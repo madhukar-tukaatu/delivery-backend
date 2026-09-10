@@ -251,6 +251,15 @@ class MerchantController extends Controller
             'default_branch_id'     => ['nullable', 'exists:branches,id'],
             'default_sub_branch_id' => ['nullable', 'exists:branches,id'],
             'status'                => ['nullable', 'in:pending,active,suspended,rejected'],
+
+            /*
+            | Bulk pickup discount (per store partner).
+            | threshold = min packets in one pickup to trigger the discount.
+            | amount    = flat amount off that pickup's delivery charge.
+            | Send null/0 to disable.
+            */
+            'bulk_pickup_discount_threshold' => ['nullable', 'integer', 'min:0', 'max:1000'],
+            'bulk_pickup_discount_amount'    => ['nullable', 'numeric', 'min:0'],
         ]);
         $merchant->update($data);
         return ApiResponse::success($merchant->fresh(), 'Merchant updated.');

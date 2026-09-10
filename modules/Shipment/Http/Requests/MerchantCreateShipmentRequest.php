@@ -168,6 +168,36 @@ class MerchantCreateShipmentRequest extends FormRequest
                 'boolean',
             ],
 
+            /*
+            |--------------------------------------------------------------------------
+            | Payment
+            |--------------------------------------------------------------------------
+            */
+
+            'payment_type'             => [
+                'required',
+                'in:prepaid,pod',
+            ],
+
+            'pod_amount'               => [
+                // Required (and greater than zero) for pay-on-delivery orders.
+                'required_if:payment_type,pod',
+                'nullable',
+                'numeric',
+                'gt:0',
+            ],
+
+            'delivery_charge'          => [
+                'nullable',
+                'numeric',
+                'min:0',
+            ],
+
+            'delivery_charge_paid_by'  => [
+                'nullable',
+                'in:merchant,customer',
+            ],
+
             'remarks'                  => [
                 'nullable',
                 'string',

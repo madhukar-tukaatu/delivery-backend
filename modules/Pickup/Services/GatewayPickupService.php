@@ -751,8 +751,14 @@ final class GatewayPickupService
             'merchant_id' =>
                 $merchantId,
 
+            /*
+            | The store's own reference. When the store does not send one,
+            | fall back to our request number so this is never empty.
+            */
             'store_reference' =>
-                $data['store_reference'] ?? null,
+                $data['store_reference']
+                    ?? $data['store_ref']
+                    ?? $requestNumber,
 
             'pickup_location_id' =>
                 $pickupLocation->id,

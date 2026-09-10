@@ -164,14 +164,17 @@ class StoreShipmentRequest extends FormRequest
                 'required',
                 Rule::in([
                     'prepaid',
-                    'cod',
+                    'pod',
                 ]),
             ],
 
-            'cod_amount' => [
+            'pod_amount' => [
+                // Required (and greater than zero) for pay-on-delivery orders —
+                // otherwise there is nothing to collect from the customer.
+                'required_if:payment_type,pod',
                 'nullable',
                 'numeric',
-                'gte:0',
+                'gt:0',
             ],
 
             'remarks' => [

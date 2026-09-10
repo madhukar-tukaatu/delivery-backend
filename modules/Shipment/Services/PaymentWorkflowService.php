@@ -49,11 +49,33 @@ class PaymentWorkflowService
 
         $codTotal = (float) $rows->sum('pod_amount');
         $deliveryChargeTotal = (float) $rows->sum('delivery_charge');
-        $payable = max($codTotal - $deliveryChargeTotal, 0);
+
+        /*
+        |--------------------------------------------------------------------------
+        | Bulk pickup discount
+        |
+        | Sum the delivery_discount from the store's pickups completed in the
+        | period. It reduces the delivery charge we bill the store, so the
+        | store's net delivery charge (and thus what we deduct from their POD)
+        | goes down — i.e. we pay the store more.
+        |--------------------------------------------------------------------------
+        */
+        $bulkDiscountTotal = 0.0;
+
+        if (\Illuminate\Support\Facades\Schema::hasColumn('pickup_requests', 'delivery_discount')) {
+            $bulkDiscountTotal = (float) DB::table('pickup_requests')
+                ->where('merchant_id', $merchantId)
+                ->where('status', 'completed')
+                ->whereBetween(DB::raw('DATE(completed_at)'), [$from, $to])
+                ->sum('delivery_discount');
+        }
+
+        $netDeliveryCharge = max($deliveryChargeTotal - $bulkDiscountTotal, 0);
+        $payable = max($codTotal - $netDeliveryCharge, 0);
 
         $number = app(TrackingNumberService::class)->settlementNumber();
 
-        $id = DB::table('merchant_settlements')->insertGetId([
+        $insert = [
             'settlement_number' => $number,
             'merchant_id' => $merchantId,
             'period_from' => $from,
@@ -61,13 +83,20 @@ class PaymentWorkflowService
             'shipment_count' => $rows->count(),
             'pod_total' => $codTotal,
             'delivery_charge_total' => $deliveryChargeTotal,
+            'bulk_discount_total' => $bulkDiscountTotal,
             'return_fee_total' => 0,
             'payable_amount' => $payable,
             'status' => 'pending',
             'created_by' => $actorId,
             'created_at' => now(),
             'updated_at' => now(),
-        ]);
+        ];
+
+        // Only persist columns that exist (bulk_discount_total may be absent).
+        $columns = \Illuminate\Support\Facades\Schema::getColumnListing('merchant_settlements');
+        $insert = array_intersect_key($insert, array_flip($columns));
+
+        $id = DB::table('merchant_settlements')->insertGetId($insert);
 
         return DB::table('merchant_settlements')->where('id', $id)->first();
     }

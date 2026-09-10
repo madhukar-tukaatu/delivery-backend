@@ -301,6 +301,14 @@ final class ShipmentService
 
                 /*
                 |--------------------------------------------------------------------------
+                | CHARGES (pod amount, delivery charge, total collectable)
+                |--------------------------------------------------------------------------
+                */
+
+                $charges = $this->resolveCharges($data);
+
+                /*
+                |--------------------------------------------------------------------------
                 | SHIPMENT DATA
                 |--------------------------------------------------------------------------
                 */
@@ -392,6 +400,28 @@ final class ShipmentService
 
                     'payment_type' =>
                         $data['payment_type'],
+
+                    /*
+                    |--------------------------------------------------------------------------
+                    | POD amount + delivery charge + total collectable
+                    |--------------------------------------------------------------------------
+                    |
+                    | pod_amount: the goods value collected on delivery (0 for
+                    |   prepaid).
+                    | delivery_charge: the shipping fee.
+                    | total_collectable_amount: what the rider physically collects
+                    |   from the customer = pod_amount + (delivery_charge only when
+                    |   the customer pays the delivery charge).
+                    |--------------------------------------------------------------------------
+                    */
+                    'pod_amount' =>
+                        $charges['pod_amount'],
+
+                    'delivery_charge' =>
+                        $charges['delivery_charge'],
+
+                    'total_collectable_amount' =>
+                        $charges['total_collectable_amount'],
 
                     'delivery_charge_paid_by' =>
                         $data['delivery_charge_paid_by'],
@@ -804,6 +834,56 @@ final class ShipmentService
     | SHIPMENT COLUMNS
     |--------------------------------------------------------------------------
     */
+
+    /*
+    |--------------------------------------------------------------------------
+    | Resolve charges for a shipment.
+    |
+    | pod_amount:
+    |   Goods value collected on delivery. 0 for prepaid. For POD it is read
+    |   from pod_amount (or the nested payment.pod_amount shape).
+    |
+    | delivery_charge:
+    |   The shipping fee. Taken from the request if supplied, otherwise the
+    |   configured flat default.
+    |
+    | total_collectable_amount:
+    |   What the rider physically collects from the customer =
+    |     pod_amount + (delivery_charge only when the customer pays it).
+    |
+    | @return array{pod_amount: float, delivery_charge: float, total_collectable_amount: float}
+    |--------------------------------------------------------------------------
+    */
+    private function resolveCharges(array $data): array
+    {
+        $type = strtolower((string) ($data['payment_type'] ?? 'prepaid'));
+
+        $podAmount = 0.0;
+
+        if ($type === 'pod') {
+            $podAmount = round((float) (
+                $data['pod_amount']
+                ?? data_get($data, 'payment.pod_amount')
+                ?? 0
+            ), 2);
+        }
+
+        $deliveryCharge = round((float) (
+            $data['delivery_charge']
+            ?? config('delivery_workflow.pricing.base_fee', 0)
+        ), 2);
+
+        $paidBy = strtolower((string) ($data['delivery_charge_paid_by'] ?? 'merchant'));
+
+        $totalCollectable = $podAmount
+            + ($paidBy === 'customer' ? $deliveryCharge : 0.0);
+
+        return [
+            'pod_amount' => $podAmount,
+            'delivery_charge' => $deliveryCharge,
+            'total_collectable_amount' => round($totalCollectable, 2),
+        ];
+    }
 
     private function shipmentColumns(): array
     {

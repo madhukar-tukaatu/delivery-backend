@@ -19,7 +19,6 @@ final class BranchTransferRoute extends Model
         'origin_branch_id',
         'destination_branch_id',
         'transit_branch_ids',
-        'checkpoints',
         'service_type',
         'base_rate',
         'currency',
@@ -296,30 +295,31 @@ final class BranchTransferRoute extends Model
     }
 
     /**
-     * Normalized road checkpoints (map-picked waypoints; NOT branches).
+     * Get normalized checkpoints from the route's lanes.
+     * Checkpoints come from the lane(s) this route uses.
      *
      * @return array<int, array{name:?string, city:?string, landmark:?string, latitude:?float, longitude:?float}>
      */
     public function getCheckpoints(): array
     {
-        $raw = is_array($this->checkpoints) ? $this->checkpoints : [];
+        $lanes = $this->orderedLanes();
 
-        $normalized = [];
-        foreach ($raw as $cp) {
-            if (!is_array($cp)) {
-                continue;
-            }
-
-            $normalized[] = [
-                'name'      => isset($cp['name']) ? (string) $cp['name'] : null,
-                'city'      => isset($cp['city']) ? (string) $cp['city'] : null,
-                'landmark'  => isset($cp['landmark']) ? (string) $cp['landmark'] : null,
-                'latitude'  => isset($cp['latitude']) ? (float) $cp['latitude'] : null,
-                'longitude' => isset($cp['longitude']) ? (float) $cp['longitude'] : null,
-            ];
+        if ($lanes->isEmpty()) {
+            return [];
         }
 
-        return $normalized;
+        // For single-lane routes, return the lane's checkpoints
+        if ($lanes->count() === 1) {
+            return $lanes->first()->getCheckpoints();
+        }
+
+        // For multi-lane routes, combine checkpoints from all lanes
+        $combined = [];
+        foreach ($lanes as $lane) {
+            $combined = array_merge($combined, $lane->getCheckpoints());
+        }
+
+        return $combined;
     }
 }
 

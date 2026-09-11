@@ -21,6 +21,8 @@ final class BranchTransferLane extends Model
         'estimated_hours',
         'priority',
         'is_active',
+        'checkpoints',
+        'variant_name',
     ];
 
     protected $casts = [
@@ -30,6 +32,7 @@ final class BranchTransferLane extends Model
         'estimated_hours'  => 'decimal:2',
         'priority'         => 'integer',
         'is_active'        => 'boolean',
+        'checkpoints'      => 'array',
     ];
 
     // Relationships
@@ -91,6 +94,49 @@ final class BranchTransferLane extends Model
         return $this->estimated_hours > 0 
             ? $this->distance_km / $this->estimated_hours 
             : 0;
+    }
+
+    /**
+     * Get normalized checkpoints for this lane.
+     * Checkpoints are road waypoints that describe the physical path this lane takes.
+     */
+    public function getCheckpoints(): array
+    {
+        $raw = is_array($this->checkpoints) ? $this->checkpoints : [];
+        $normalized = [];
+
+        foreach ($raw as $cp) {
+            if (!is_array($cp)) {
+                continue;
+            }
+
+            $name      = isset($cp['name']) ? trim((string) $cp['name']) : '';
+            $latitude  = isset($cp['latitude']) ? (float) $cp['latitude'] : null;
+            $longitude = isset($cp['longitude']) ? (float) $cp['longitude'] : null;
+
+            // Skip empty checkpoints
+            if ($name === '' && $latitude === null && $longitude === null) {
+                continue;
+            }
+
+            $normalized[] = [
+                'name'      => $name ?: null,
+                'city'      => isset($cp['city']) ? (string) $cp['city'] : null,
+                'landmark'  => isset($cp['landmark']) ? (string) $cp['landmark'] : null,
+                'latitude'  => $latitude,
+                'longitude' => $longitude,
+            ];
+        }
+
+        return $normalized;
+    }
+
+    public function getDisplayName(): string
+    {
+        if ($this->variant_name) {
+            return "{$this->variant_name}";
+        }
+        return "Direct";
     }
 
     public function isQuick(): bool

@@ -94,6 +94,8 @@ final class ConfiguredTransferRouteService
                     'from_branch_id' => (int) $lane->from_branch_id,
                     'to_branch_id'   => (int) $lane->to_branch_id,
                     'service_type'   => $lane->service_type,
+                    'variant_name'   => $lane->variant_name,
+                    'checkpoints'    => $lane->getCheckpoints(),
                 ],
             ];
         }
@@ -133,7 +135,11 @@ final class ConfiguredTransferRouteService
             ];
         }
 
-        $checkpoints = $route->getCheckpoints();
+        // Combine checkpoints from all lanes
+        $checkpoints = [];
+        foreach ($lanes as $lane) {
+            $checkpoints = array_merge($checkpoints, $lane->getCheckpoints());
+        }
 
         $pathText = implode(' → ', array_filter(array_column($path, 'name')));
 
@@ -196,7 +202,8 @@ final class ConfiguredTransferRouteService
             'total_estimated_hours' => (int) ($route->estimated_hours ?? 0),
             'base_rate'             => (float) ($route->base_rate ?? 0),
             'currency'              => (string) ($route->currency ?? 'NPR'),
-            'checkpoints'           => $route->getCheckpoints(),
+            'checkpoints'           => [],
+            'lanes'                 => [],
             'path'                  => [],
             'path_text'             => '',
             'is_active'             => (bool) $route->is_active,

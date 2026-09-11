@@ -66,8 +66,7 @@ final class BranchTransferRouteService
             $originBranchId      = (int) $lanes[0]->from_branch_id;
             $destinationBranchId = (int) $lanes[count($lanes) - 1]->to_branch_id;
 
-            // 4. Normalize checkpoints (road waypoints, not branches).
-            $checkpoints = $this->normalizeCheckpoints((array) ($data['checkpoints'] ?? []));
+            // 4. Checkpoints now live on lanes, not routes. Skip processing here.
 
             // 5. Code + name (respect client input, else auto-build from endpoints/transits).
             $transitBranchIds = $this->deriveTransitBranchIds($lanes);
@@ -120,7 +119,6 @@ final class BranchTransferRouteService
                 'origin_branch_id'        => $originBranchId,           // origin endpoint
                 'destination_branch_id'   => $destinationBranchId,      // destination endpoint
                 'transit_branch_ids'      => $transitBranchIds ?: null,
-                'checkpoints'             => $checkpoints ?: null,
                 'base_rate'               => (float) ($data['base_rate'] ?? 0),
                 'currency'                => $data['currency'] ?? 'NPR',
                 'distance_km'             => $totalDistance,
@@ -319,43 +317,6 @@ final class BranchTransferRouteService
                     $other->update(['is_default' => false]);
                 }
             });
-    }
-
-    /**
-     * Clean checkpoints: keep only entries with a usable name or coordinates.
-     *
-     * @return array<int, array{name:?string, city:?string, landmark:?string, latitude:?float, longitude:?float}>
-     */
-    private function normalizeCheckpoints(array $checkpoints): array
-    {
-        $clean = [];
-
-        foreach ($checkpoints as $cp) {
-            if (!is_array($cp)) {
-                continue;
-            }
-
-            $name      = isset($cp['name']) ? trim((string) $cp['name']) : '';
-            $city      = isset($cp['city']) ? trim((string) $cp['city']) : null;
-            $landmark  = isset($cp['landmark']) ? trim((string) $cp['landmark']) : null;
-            $latitude  = isset($cp['latitude']) && $cp['latitude'] !== '' ? (float) $cp['latitude'] : null;
-            $longitude = isset($cp['longitude']) && $cp['longitude'] !== '' ? (float) $cp['longitude'] : null;
-
-            // Skip empty rows (no name and no coordinates).
-            if ($name === '' && $latitude === null && $longitude === null) {
-                continue;
-            }
-
-            $clean[] = [
-                'name'      => $name !== '' ? $name : null,
-                'city'      => $city !== '' ? $city : null,
-                'landmark'  => $landmark !== '' ? $landmark : null,
-                'latitude'  => $latitude,
-                'longitude' => $longitude,
-            ];
-        }
-
-        return $clean;
     }
 
     private function branchName(int $id): string

@@ -16,6 +16,7 @@ final class BranchTransferRoute extends Model
         'route_code',
         'name',
         'branch_transfer_lane_id',
+        'origin_branch_id',
         'transit_branch_ids',
         'checkpoints',
         'service_type',
@@ -31,6 +32,7 @@ final class BranchTransferRoute extends Model
 
     protected $casts = [
         'branch_transfer_lane_id' => 'integer',
+        'origin_branch_id'        => 'integer',
         'transit_branch_ids'      => 'array',
         'checkpoints'             => 'array',
         'base_rate'               => 'decimal:2',
@@ -42,6 +44,14 @@ final class BranchTransferRoute extends Model
     ];
 
     // Relationships
+
+    /**
+     * The origin branch of this transfer route.
+     */
+    public function originBranch(): BelongsTo
+    {
+        return $this->belongsTo(\Modules\Geo\Models\CoverageLocation::class, 'origin_branch_id');
+    }
 
     /**
      * Backward-compat anchor lane (first lane of the path). Nullable now that a

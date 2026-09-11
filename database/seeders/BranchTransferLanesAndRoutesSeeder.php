@@ -162,6 +162,7 @@ class BranchTransferLanesAndRoutesSeeder extends Seeder
                     'route_code' => $routeCode,
                     'name' => $routeName,
                     'branch_transfer_lane_id' => $laneRecord->id,
+                    'origin_branch_id' => $laneRecord->from_branch_id,
                     'service_type' => $laneRecord->service_type,
                     'transit_branch_ids' => json_encode([]), // Direct route - no transits
                     'priority' => $priority,
@@ -271,6 +272,7 @@ class BranchTransferLanesAndRoutesSeeder extends Seeder
                         'route_code' => $routeCode,
                         'name' => $routeName,
                         'branch_transfer_lane_id' => $lane->id,
+                        'origin_branch_id' => $from,
                         'service_type' => $service,
                         'transit_branch_ids' => json_encode($transitIds),
                         'priority' => max(1, $priority - 500), // Lower priority for transit routes, but stay >= 1

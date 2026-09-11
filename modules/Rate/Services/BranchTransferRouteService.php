@@ -117,6 +117,7 @@ final class BranchTransferRouteService
 
             $optional = [
                 'branch_transfer_lane_id' => $lanes[0]->id,             // anchor = first lane
+                'origin_branch_id'        => $originBranchId,           // origin endpoint
                 'transit_branch_ids'      => $transitBranchIds ?: null,
                 'checkpoints'             => $checkpoints ?: null,
                 'base_rate'               => (float) ($data['base_rate'] ?? 0),

@@ -24,7 +24,7 @@ return new class extends Migration
             && !$this->foreignKeyExists('branch_transfer_routes', 'origin_branch_id')) {
             Schema::table('branch_transfer_routes', function (Blueprint $table) {
                 $table->foreign('origin_branch_id')
-                    ->references('id')->on('branches')
+                    ->references('id')->on('coverage_locations')
                     ->cascadeOnDelete();
             });
         }

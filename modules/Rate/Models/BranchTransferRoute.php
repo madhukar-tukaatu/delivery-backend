@@ -48,19 +48,19 @@ final class BranchTransferRoute extends Model
     // Relationships
 
     /**
-     * The origin branch of this transfer route.
+     * The origin branch (coverage location) of this transfer route.
      */
     public function originBranch(): BelongsTo
     {
-        return $this->belongsTo(\Modules\Branch\Models\Branch::class, 'origin_branch_id');
+        return $this->belongsTo(\Modules\Geo\Models\CoverageLocation::class, 'origin_branch_id');
     }
 
     /**
-     * The destination branch of this transfer route.
+     * The destination branch (coverage location) of this transfer route.
      */
     public function destinationBranch(): BelongsTo
     {
-        return $this->belongsTo(\Modules\Branch\Models\Branch::class, 'destination_branch_id');
+        return $this->belongsTo(\Modules\Geo\Models\CoverageLocation::class, 'destination_branch_id');
     }
 
     /**

@@ -93,9 +93,6 @@ class MenuSeeder extends Seeder
             ['section'=>'admin','label'=>'Reports',                'route'=>'/admin/reports',              'icon'=>'reports',     'permission'=>'reports.view',                      'sort_order'=>125],
             ['section'=>'admin','label'=>'Support',                'route'=>'/admin/support-tickets',      'icon'=>'support',     'permission'=>'support.view',                      'sort_order'=>130],
 
-            // ── Staff Management ─────────────────────────────────────
-            ['section'=>'admin','label'=>'Staff',                  'route'=>'/admin/staff',                'icon'=>'users',       'permission'=>'staff.view',                        'sort_order'=>135],
-
             // ── System Admin ──────────────────────────────────────────
             ['section'=>'admin','label'=>'Users',                  'route'=>'/admin/users',                'icon'=>'users',       'permission'=>'users.view',                        'sort_order'=>140],
             ['section'=>'admin','label'=>'Roles',                  'route'=>'/admin/roles',                'icon'=>'roles',       'permission'=>'roles.view',                        'sort_order'=>150],

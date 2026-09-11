@@ -52,7 +52,7 @@ final class BranchTransferRoute extends Model
      */
     public function originBranch(): BelongsTo
     {
-        return $this->belongsTo(\Modules\Geo\Models\CoverageLocation::class, 'origin_branch_id');
+        return $this->belongsTo(\Modules\Branch\Models\Branch::class, 'origin_branch_id');
     }
 
     /**
@@ -60,7 +60,7 @@ final class BranchTransferRoute extends Model
      */
     public function destinationBranch(): BelongsTo
     {
-        return $this->belongsTo(\Modules\Geo\Models\CoverageLocation::class, 'destination_branch_id');
+        return $this->belongsTo(\Modules\Branch\Models\Branch::class, 'destination_branch_id');
     }
 
     /**

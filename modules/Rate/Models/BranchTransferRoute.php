@@ -93,12 +93,12 @@ final class BranchTransferRoute extends Model
         return $lanes;
     }
 
-    public function originBranch()
+    public function originBranchFromLanes()
     {
         return $this->orderedLanes()->first()?->fromBranch;
     }
 
-    public function destinationBranch()
+    public function destinationBranchFromLanes()
     {
         return $this->orderedLanes()->last()?->toBranch;
     }

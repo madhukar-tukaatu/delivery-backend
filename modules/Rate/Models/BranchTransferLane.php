@@ -153,4 +153,24 @@ final class BranchTransferLane extends Model
     {
         return $this->estimated_hours > 8;
     }
+
+    /**
+     * Check if this lane has a corresponding direct route.
+     */
+    public function hasDirectRoute(): bool
+    {
+        return $this->routes()
+            ->where('service_type', $this->service_type)
+            ->exists();
+    }
+
+    /**
+     * Get the direct route for this lane if it exists.
+     */
+    public function getDirectRoute(): ?BranchTransferRoute
+    {
+        return $this->routes()
+            ->where('service_type', $this->service_type)
+            ->first();
+    }
 }

@@ -70,6 +70,15 @@ final class AdminBranchTransferLaneController extends Controller
 
         $lane = BranchTransferLane::query()->create($data);
 
+        // Auto-create a direct route ONLY for direct lanes (single-hop, no transits)
+        // Routes with transits must be created manually in the routes page.
+        try {
+            $this->createDirectRoute($lane);
+        } catch (\Throwable $e) {
+            // Log but don't fail the lane creation if route auto-creation fails
+            \Log::warning('Failed to auto-create route for lane ' . $lane->id . ': ' . $e->getMessage());
+        }
+
         return response()->json([
             'success' => true,
             'message' => 'Transfer lane created.',
@@ -137,6 +146,64 @@ final class AdminBranchTransferLaneController extends Controller
     }
 
     /**
+     * Manually create a direct route for a lane if one doesn't already exist.
+     * Useful for lanes where auto-creation may have failed or for manual trigger.
+     */
+    public function createRoute(BranchTransferLane $transferLane): JsonResponse
+    {
+        if ($transferLane->hasDirectRoute()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'A route already exists for this lane.',
+            ], 422);
+        }
+
+        try {
+            $route = $this->createDirectRoute($transferLane);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Route created successfully for this lane.',
+                'data'    => [
+                    'id'   => (int) $route->id,
+                    'name' => $route->name,
+                    'code' => $route->route_code,
+                ],
+            ], 201);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Failed to create route: ' . $e->getMessage(),
+            ], 422);
+        }
+    }
+
+    /**
+     * Helper: create a direct route for a lane.
+     * Used by both auto-creation in store() and manual creation via createRoute().
+     */
+    private function createDirectRoute(BranchTransferLane $lane): BranchTransferRoute
+    {
+        // Check if route already exists
+        if ($lane->hasDirectRoute()) {
+            return $lane->getDirectRoute();
+        }
+
+        // Use the BranchTransferRouteService to create the route properly
+        $service = app(\Modules\Rate\Services\BranchTransferRouteService::class);
+
+        $route = $service->create([
+            'lane_ids'      => [$lane->id],
+            'service_type'  => $lane->service_type,
+            'is_active'     => $lane->is_active,
+            'is_default'    => true, // First route for this path is default
+            'priority'      => $lane->priority,
+        ]);
+
+        return $route;
+    }
+
+    /**
      * Validate and normalize the create/update payload. On update, the
      * from/to/service uniqueness ignores the current lane.
      */
@@ -199,6 +266,14 @@ final class AdminBranchTransferLaneController extends Controller
             'estimated_hours' => (float) $lane->estimated_hours,
             'priority'        => (int) $lane->priority,
             'is_active'       => (bool) $lane->is_active,
+            'variant_name'    => $lane->variant_name,
+            'checkpoints'     => $lane->getCheckpoints(),
+            'route_exists'    => $lane->hasDirectRoute(),
+            'route'           => $lane->hasDirectRoute() ? [
+                'id'   => (int) $lane->getDirectRoute()->id,
+                'name' => $lane->getDirectRoute()->name,
+                'code' => $lane->getDirectRoute()->route_code,
+            ] : null,
         ];
     }
 }

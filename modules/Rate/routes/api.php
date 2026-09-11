@@ -135,6 +135,13 @@ Route::middleware('auth:sanctum')
             ->whereNumber('transferLane')
             ->name('admin.pricing.transfer-lanes.status');
 
+        Route::post(
+            '/branch-transfer-lanes/{transferLane}/create-route',
+            [AdminBranchTransferLaneController::class, 'createRoute']
+        )
+            ->whereNumber('transferLane')
+            ->name('admin.pricing.transfer-lanes.create-route');
+
         Route::delete(
             '/branch-transfer-lanes/{transferLane}',
             [AdminBranchTransferLaneController::class, 'destroy']

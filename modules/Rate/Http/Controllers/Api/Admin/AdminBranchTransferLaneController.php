@@ -9,6 +9,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Modules\Rate\Models\BranchTransferLane;
+use Modules\Rate\Models\BranchTransferRoute;
 
 /**
  * CRUD for branch transfer lanes (direct physical connections between branches).

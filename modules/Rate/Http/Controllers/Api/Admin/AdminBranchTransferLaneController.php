@@ -25,6 +25,17 @@ final class AdminBranchTransferLaneController extends Controller
             ->with([
                 'fromBranch:id,name,code,latitude,longitude',
                 'toBranch:id,name,code,latitude,longitude',
+            ])
+            // Compute whether a matching direct route exists (same lane + same
+            // service_type) as a single EXISTS subquery so the list matches the
+            // detail endpoint without N+1 queries.
+            ->withExists([
+                'routes as route_exists' => function ($q): void {
+                    $q->whereColumn(
+                        'branch_transfer_routes.service_type',
+                        'branch_transfer_lanes.service_type',
+                    );
+                },
             ]);
 
         if ($request->filled('search')) {
@@ -58,9 +69,33 @@ final class AdminBranchTransferLaneController extends Controller
             $query->where('is_active', $request->boolean('is_active'));
         }
 
+        // Filter by route status: "missing" = no direct route, "active" = has route.
+        $routeStatus = strtolower(trim((string) $request->input('route_status', '')));
+        if ($routeStatus === 'missing' || $routeStatus === 'without') {
+            $query->whereDoesntHave('routes', function ($q): void {
+                $q->whereColumn(
+                    'branch_transfer_routes.service_type',
+                    'branch_transfer_lanes.service_type',
+                );
+            });
+        } elseif ($routeStatus === 'active' || $routeStatus === 'with') {
+            $query->whereHas('routes', function ($q): void {
+                $q->whereColumn(
+                    'branch_transfer_routes.service_type',
+                    'branch_transfer_lanes.service_type',
+                );
+            });
+        }
+
         $paginator = $query
             ->orderByDesc('id')
             ->paginate(min(max((int) $request->input('per_page', 25), 1), 500));
+
+        // Normalize each row into the same shape as present() so the list and
+        // detail endpoints agree on route_exists.
+        $paginator->getCollection()->transform(
+            fn (BranchTransferLane $lane): array => $this->present($lane),
+        );
 
         return response()->json(['success' => true, 'data' => $paginator]);
     }
@@ -255,6 +290,25 @@ final class AdminBranchTransferLaneController extends Controller
             'toBranch:id,name,code,latitude,longitude',
         ]);
 
+        // Prefer the pre-computed `route_exists` attribute set by the list
+        // query's withExists() (avoids N+1). Fall back to a live check for the
+        // single-record endpoints (show/store/update) where it isn't loaded.
+        $routeExists = array_key_exists('route_exists', $lane->getAttributes())
+            ? (bool) $lane->getAttribute('route_exists')
+            : $lane->hasDirectRoute();
+
+        $route = null;
+        if ($routeExists) {
+            $direct = $lane->getDirectRoute();
+            if ($direct) {
+                $route = [
+                    'id'   => (int) $direct->id,
+                    'name' => $direct->name,
+                    'code' => $direct->route_code,
+                ];
+            }
+        }
+
         return [
             'id'              => (int) $lane->id,
             'from_branch_id'  => (int) $lane->from_branch_id,
@@ -269,12 +323,8 @@ final class AdminBranchTransferLaneController extends Controller
             'is_active'       => (bool) $lane->is_active,
             'variant_name'    => $lane->variant_name,
             'checkpoints'     => $lane->getCheckpoints(),
-            'route_exists'    => $lane->hasDirectRoute(),
-            'route'           => $lane->hasDirectRoute() ? [
-                'id'   => (int) $lane->getDirectRoute()->id,
-                'name' => $lane->getDirectRoute()->name,
-                'code' => $lane->getDirectRoute()->route_code,
-            ] : null,
+            'route_exists'    => $routeExists,
+            'route'           => $route,
         ];
     }
 }

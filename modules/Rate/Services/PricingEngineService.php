@@ -95,7 +95,9 @@ final class PricingEngineService
 
             $routeRate = $this->routeBaseRate(
                 $pickupBranchId,
-                $deliveryBranchId
+                $deliveryBranchId,
+                $pickupLocation->name ?? null,
+                $deliveryLocation->name ?? null
             );
 
             $baseRate = max(
@@ -810,7 +812,9 @@ final class PricingEngineService
      */
     private function routeBaseRate(
         int $pickupLocationId,
-        int $deliveryLocationId
+        int $deliveryLocationId,
+        ?string $pickupBranchName = null,
+        ?string $deliveryBranchName = null
     ): object {
         $rule = DB::table('branch_route_rates')
             ->where('pickup_coverage_location_id', $pickupLocationId)
@@ -829,9 +833,15 @@ final class PricingEngineService
         }
 
         if (!$rule) {
+            $message = 'Base rate is not configured for the selected coverage route.';
+            
+            if ($pickupBranchName && $deliveryBranchName) {
+                $message = "Delivery service is not available for {$pickupBranchName} to {$deliveryBranchName}.";
+            }
+            
             throw ValidationException::withMessages([
                 'delivery_address' => [
-                    'Base rate is not configured for the selected coverage route.',
+                    $message,
                 ],
             ]);
         }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Drop the (from_branch_id, to_branch_id, service_type) unique constraint so
@@ -21,35 +22,49 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::table('branch_transfer_lanes', function (Blueprint $table): void {
-            // Drop the old triplet unique constraint if it exists.
-            try {
-                $table->dropUnique('transfer_lane_direction_service_unique');
-            } catch (\Throwable) {
-                // Already dropped or never existed on this DB — safe to continue.
-            }
+        // Disable foreign key checks temporarily to allow index modification
+        DB::statement('SET FOREIGN_KEY_CHECKS=0');
 
-            // Add new unique index scoped to (from, to, service_type, variant_name)
-            // so two lanes with the same path but different variant names are allowed,
-            // but true duplicates (same path + same variant) are still blocked.
-            $table->unique(
-                ['from_branch_id', 'to_branch_id', 'service_type', 'variant_name'],
-                'transfer_lane_variant_unique'
-            );
-        });
+        try {
+            Schema::table('branch_transfer_lanes', function (Blueprint $table): void {
+                // Drop the old triplet unique constraint if it exists.
+                try {
+                    $table->dropUnique('transfer_lane_direction_service_unique');
+                } catch (\Throwable) {
+                    // Already dropped or never existed on this DB — safe to continue.
+                }
+
+                // Add new unique index scoped to (from, to, service_type, variant_name)
+                // so two lanes with the same path but different variant names are allowed,
+                // but true duplicates (same path + same variant) are still blocked.
+                $table->unique(
+                    ['from_branch_id', 'to_branch_id', 'service_type', 'variant_name'],
+                    'transfer_lane_variant_unique'
+                );
+            });
+        } finally {
+            // Re-enable foreign key checks
+            DB::statement('SET FOREIGN_KEY_CHECKS=1');
+        }
     }
 
     public function down(): void
     {
-        Schema::table('branch_transfer_lanes', function (Blueprint $table): void {
-            try {
-                $table->dropUnique('transfer_lane_variant_unique');
-            } catch (\Throwable) {}
+        DB::statement('SET FOREIGN_KEY_CHECKS=0');
 
-            $table->unique(
-                ['from_branch_id', 'to_branch_id', 'service_type'],
-                'transfer_lane_direction_service_unique'
-            );
-        });
+        try {
+            Schema::table('branch_transfer_lanes', function (Blueprint $table): void {
+                try {
+                    $table->dropUnique('transfer_lane_variant_unique');
+                } catch (\Throwable) {}
+
+                $table->unique(
+                    ['from_branch_id', 'to_branch_id', 'service_type'],
+                    'transfer_lane_direction_service_unique'
+                );
+            });
+        } finally {
+            DB::statement('SET FOREIGN_KEY_CHECKS=1');
+        }
     }
 };

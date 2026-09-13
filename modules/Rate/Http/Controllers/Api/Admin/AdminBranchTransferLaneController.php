@@ -240,46 +240,70 @@ final class AdminBranchTransferLaneController extends Controller
     }
 
     /**
-     * Validate and normalize the create/update payload. On update, the
-     * from/to/service uniqueness ignores the current lane.
+     * Validate and normalize the create/update payload. Alternative lanes are
+     * identified by their ordered checkpoint coordinates, not by their label.
      */
     private function validatePayload(Request $request, ?BranchTransferLane $current = null): array
     {
-        $uniqueRule = Rule::unique('branch_transfer_lanes')
+        $serviceType = strtolower(trim((string) $request->input('service_type', 'standard')));
+        $transportMode = strtolower(trim((string) $request->input('transport_mode', 'road')));
+        $transportMode = $transportMode !== '' ? $transportMode : 'road';
+        $checkpoints = BranchTransferLane::normalizeCheckpoints(
+            $request->input('checkpoints', []),
+        );
+        $pathSignature = BranchTransferLane::checkpointSignature($checkpoints);
+
+        $uniqueRule = Rule::unique('branch_transfer_lanes', 'path_signature')
             ->where(fn ($q) => $q
                 ->where('from_branch_id', $request->integer('from_branch_id'))
                 ->where('to_branch_id', $request->integer('to_branch_id'))
-                ->where('service_type', $request->input('service_type')));
+                ->where('service_type', $serviceType)
+                ->where('transport_mode', $transportMode)
+                ->where('path_signature', $pathSignature));
 
         if ($current !== null) {
             $uniqueRule = $uniqueRule->ignore($current->id);
         }
 
         $validated = $request->validate([
-            'from_branch_id'  => ['required', 'integer', 'different:to_branch_id', 'exists:coverage_locations,id'],
-            'to_branch_id'    => ['required', 'integer', 'exists:coverage_locations,id', $uniqueRule],
-            'service_type'    => ['required', Rule::in(['standard', 'express', 'same_day', 'flight'])],
-            'transport_mode'  => ['nullable', 'string', 'max:50'],
-            'distance_km'     => ['nullable', 'numeric', 'min:0'],
-            'estimated_hours' => ['nullable', 'numeric', 'min:0'],
-            'priority'        => ['nullable', 'integer', 'min:1'],
-            'is_active'       => ['nullable', 'boolean'],
+            'from_branch_id'       => ['required', 'integer', 'different:to_branch_id', 'exists:coverage_locations,id'],
+            'to_branch_id'         => ['required', 'integer', 'exists:coverage_locations,id', $uniqueRule],
+            'service_type'         => ['required', Rule::in(['standard', 'express', 'same_day', 'flight'])],
+            'transport_mode'       => ['nullable', 'string', 'max:50'],
+            'distance_km'          => ['nullable', 'numeric', 'min:0'],
+            'estimated_hours'      => ['nullable', 'numeric', 'min:0'],
+            'priority'             => ['nullable', 'integer', 'min:1'],
+            'is_active'            => ['nullable', 'boolean'],
+            'variant_name'         => ['nullable', 'string', 'max:100'],
+            'checkpoints'         => ['nullable', 'array', 'max:20'],
+            'checkpoints.*'        => ['array'],
+            'checkpoints.*.name'   => ['nullable', 'string', 'max:255'],
+            'checkpoints.*.label'  => ['nullable', 'string', 'max:255'],
+            'checkpoints.*.city'   => ['nullable', 'string', 'max:255'],
+            'checkpoints.*.landmark' => ['nullable', 'string', 'max:255'],
+            'checkpoints.*.latitude' => ['nullable', 'numeric', 'between:-90,90'],
+            'checkpoints.*.longitude' => ['nullable', 'numeric', 'between:-180,180'],
         ], [
-            'to_branch_id.unique'       => 'A lane for this from/to branch and service already exists.',
-            'from_branch_id.different'  => 'From and To branches must be different.',
+            'to_branch_id.unique'      => 'A lane with this origin, destination, service, transport mode, and checkpoint path already exists.',
+            'from_branch_id.different' => 'From and To branches must be different.',
         ]);
 
         return [
             'from_branch_id'  => (int) $validated['from_branch_id'],
             'to_branch_id'    => (int) $validated['to_branch_id'],
             'service_type'    => strtolower($validated['service_type']),
-            'transport_mode'  => $validated['transport_mode'] ?? 'road',
+            'transport_mode'  => $transportMode,
             'distance_km'     => $validated['distance_km'] ?? 0,
             'estimated_hours' => $validated['estimated_hours'] ?? 1,
             'priority'        => $validated['priority'] ?? 100,
             'is_active'       => array_key_exists('is_active', $validated)
                 ? (bool) $validated['is_active']
                 : true,
+            'variant_name'    => isset($validated['variant_name'])
+                ? trim((string) $validated['variant_name']) ?: null
+                : null,
+            'checkpoints'     => $checkpoints,
+            'path_signature'  => $pathSignature,
         ];
     }
 

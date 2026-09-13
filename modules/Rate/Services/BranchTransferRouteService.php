@@ -71,13 +71,35 @@ final class BranchTransferRouteService
             // 5. Code + name (respect client input, else auto-build from endpoints/transits).
             $transitBranchIds = $this->deriveTransitBranchIds($lanes);
 
-            $routeCode = !empty($data['route_code'])
+            $hasClientRouteCode = !empty($data['route_code']);
+            $routeCode = $hasClientRouteCode
                 ? strtoupper(trim((string) $data['route_code']))
-                : $this->codeGenerator->generate($originBranchId, $destinationBranchId, $serviceType, $transitBranchIds);
+                : $this->codeGenerator->generate(
+                    $originBranchId,
+                    $destinationBranchId,
+                    $serviceType,
+                    $transitBranchIds,
+                );
+
+            // The generated endpoint/service code is shared by alternative
+            // direct lanes. Keep the first route's readable code, then add a
+            // deterministic lane-path suffix for later alternatives.
+            if (!$hasClientRouteCode
+                && BranchTransferRoute::query()
+                    ->where('route_code', $routeCode)
+                    ->exists()) {
+                $routeCode = substr($routeCode, 0, 91)
+                    . '-'
+                    . strtoupper(substr(hash('sha256', implode(',', $laneIds)), 0, 8));
+            }
 
             $routeName = !empty($data['name'])
                 ? trim((string) $data['name'])
-                : $this->codeGenerator->generateName($originBranchId, $destinationBranchId, $transitBranchIds);
+                : $this->codeGenerator->generateName(
+                    $originBranchId,
+                    $destinationBranchId,
+                    $transitBranchIds,
+                );
 
             // 6. Unique route code (ignore self on update).
             $codeExists = BranchTransferRoute::query()

@@ -23,6 +23,7 @@ final class BranchTransferLane extends Model
         'is_active',
         'checkpoints',
         'variant_name',
+        'path_signature',
     ];
 
     protected $casts = [
@@ -97,38 +98,107 @@ final class BranchTransferLane extends Model
     }
 
     /**
-     * Get normalized checkpoints for this lane.
-     * Checkpoints are road waypoints that describe the physical path this lane takes.
+     * Normalize checkpoint input into the canonical lane-path shape.
+     *
+     * Legacy rows may use lat/lng or label/display_name keys. Keep those
+     * readable while persisting one stable shape for validation and hashing.
      */
-    public function getCheckpoints(): array
+    public static function normalizeCheckpoints(mixed $value): array
     {
-        $raw = is_array($this->checkpoints) ? $this->checkpoints : [];
+        if (is_string($value)) {
+            $decoded = json_decode($value, true);
+            $value = is_array($decoded) ? $decoded : [];
+        }
+
+        if (!is_array($value)) {
+            return [];
+        }
+
         $normalized = [];
 
-        foreach ($raw as $cp) {
-            if (!is_array($cp)) {
+        foreach ($value as $checkpoint) {
+            if (!is_array($checkpoint)) {
                 continue;
             }
 
-            $name      = isset($cp['name']) ? trim((string) $cp['name']) : '';
-            $latitude  = isset($cp['latitude']) ? (float) $cp['latitude'] : null;
-            $longitude = isset($cp['longitude']) ? (float) $cp['longitude'] : null;
+            $name = trim((string) ($checkpoint['name']
+                ?? $checkpoint['label']
+                ?? $checkpoint['display_name']
+                ?? ''));
+            $city = trim((string) ($checkpoint['city'] ?? ''));
+            $landmark = trim((string) ($checkpoint['landmark'] ?? ''));
 
-            // Skip empty checkpoints
-            if ($name === '' && $latitude === null && $longitude === null) {
+            $latitude = self::normalizeCoordinate(
+                $checkpoint['latitude'] ?? $checkpoint['lat'] ?? null,
+                -90,
+                90,
+            );
+            $longitude = self::normalizeCoordinate(
+                $checkpoint['longitude']
+                    ?? $checkpoint['lng']
+                    ?? $checkpoint['lon']
+                    ?? null,
+                -180,
+                180,
+            );
+
+            if ($name === '' && $city === '' && $landmark === ''
+                && $latitude === null && $longitude === null) {
                 continue;
             }
 
             $normalized[] = [
-                'name'      => $name ?: null,
-                'city'      => isset($cp['city']) ? (string) $cp['city'] : null,
-                'landmark'  => isset($cp['landmark']) ? (string) $cp['landmark'] : null,
-                'latitude'  => $latitude,
+                'name' => $name !== '' ? $name : null,
+                'city' => $city !== '' ? $city : null,
+                'landmark' => $landmark !== '' ? $landmark : null,
+                'latitude' => $latitude,
                 'longitude' => $longitude,
             ];
         }
 
         return $normalized;
+    }
+
+    /**
+     * Return a deterministic identity for the ordered checkpoint path.
+     * Metadata is included so a checkpoint change is treated as a path variant.
+     */
+    public static function checkpointSignature(array $checkpoints): string
+    {
+        return hash(
+            'sha256',
+            json_encode(
+                self::normalizeCheckpoints($checkpoints),
+                JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR,
+            ),
+        );
+    }
+
+    private static function normalizeCoordinate(
+        mixed $value,
+        float $minimum,
+        float $maximum,
+    ): ?float {
+        if ($value === null || $value === '' || !is_numeric($value)) {
+            return null;
+        }
+
+        $coordinate = (float) $value;
+
+        if ($coordinate < $minimum || $coordinate > $maximum) {
+            return null;
+        }
+
+        return round($coordinate, 7);
+    }
+
+    /**
+     * Get normalized checkpoints for this lane.
+     * Checkpoints are road waypoints that describe the physical path this lane takes.
+     */
+    public function getCheckpoints(): array
+    {
+        return self::normalizeCheckpoints($this->checkpoints);
     }
 
     public function getDisplayName(): string

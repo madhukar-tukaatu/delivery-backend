@@ -30,6 +30,9 @@ class MerchantOnboardingService
             'business_type' => $data['business_type'] ?? null,
             'pan_vat_number' => $data['pan_vat_number'] ?? null,
             'website_url' => $data['website_url'] ?? null,
+            'payment_qr_code' => array_key_exists('payment_qr_code', $data)
+                ? ($data['payment_qr_code'] ?: null)
+                : $merchant->payment_qr_code,
             'address' => $data['address'] ?? null,
             'city' => $data['city'] ?? null,
             'area' => $data['area'] ?? null,

@@ -80,8 +80,8 @@ class MerchantShipmentCreateViewService
                     'destination_city' => data_get($payload, 'delivery.city'),
                     'destination_area' => data_get($payload, 'delivery.area'),
                     'delivery_landmark' => data_get($payload, 'delivery.landmark'),
-                    'delivery_latitude' => data_get($payload, 'delivery.latitude'),
-                    'delivery_longitude' => data_get($payload, 'delivery.longitude'),
+                    'delivery_lat' => data_get($payload, 'delivery.latitude'),
+                    'delivery_lng' => data_get($payload, 'delivery.longitude'),
 
                     'package_type' => data_get($payload, 'package.type', 'parcel'),
                     'package_description' => data_get($payload, 'package.description'),

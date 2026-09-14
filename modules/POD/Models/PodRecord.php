@@ -14,6 +14,7 @@ class PodRecord extends Model
         'collected_at' => 'datetime',
         'deposited_at' => 'datetime',
         'settled_at' => 'datetime',
+        'payment_paid_at' => 'datetime',
     ];
 
     public function shipment()

@@ -5,6 +5,7 @@ namespace Modules\POD\Http\Controllers;
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use Modules\POD\Models\PodDeposit;
 use Modules\POD\Models\PodRecord;
 
@@ -20,6 +21,12 @@ class PodController extends Controller
 
     public function collect(Request $request, PodRecord $pod)
     {
+        if ($pod->payment_destination === 'merchant') {
+            throw ValidationException::withMessages([
+                'pod' => ['This payment was already paid directly to the merchant and cannot be collected by the platform.'],
+            ]);
+        }
+
         $data = $request->validate([
             'collected_amount' => ['required', 'numeric', 'min:0'],
         ]);
@@ -40,7 +47,21 @@ class PodController extends Controller
             'branch_id' => ['nullable', 'exists:branches,id'],
             'remarks' => ['nullable', 'string'],
         ]);
-        $records = PodRecord::whereIn('id', $data['pod_record_ids'])->get();
+
+        $recordIds = array_values(array_unique($data['pod_record_ids']));
+        $records = PodRecord::whereIn('id', $recordIds)
+            ->where(function ($query) {
+                $query->whereNull('payment_destination')
+                    ->orWhere('payment_destination', '!=', 'merchant');
+            })
+            ->get();
+
+        if ($records->count() !== count($recordIds)) {
+            throw ValidationException::withMessages([
+                'pod_record_ids' => ['Direct merchant payments cannot be deposited to the platform.'],
+            ]);
+        }
+
         $amount = $records->sum('collected_amount');
         $deposit = PodDeposit::create([
             'branch_id' => $data['branch_id'] ?? $request->user()->branch_id,
@@ -49,7 +70,7 @@ class PodController extends Controller
             'status' => 'confirmed',
             'remarks' => $data['remarks'] ?? null,
         ]);
-        PodRecord::whereIn('id', $data['pod_record_ids'])->update([
+        PodRecord::whereIn('id', $recordIds)->update([
             'status' => 'deposited',
             'deposited_to_branch_id' => $data['branch_id'] ?? $request->user()->branch_id,
             'deposited_at' => now(),

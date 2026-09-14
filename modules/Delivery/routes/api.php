@@ -75,6 +75,18 @@ Route::prefix('v1/staff')
             ->middleware(['route.permission'])
             ->name('deliveries.out-for-delivery');
 
+        Route::post('deliveries/{delivery}/arrived', [StaffDeliveryController::class, 'arrived'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.arrived');
+
+        Route::post('deliveries/{delivery}/payment-session', [StaffDeliveryController::class, 'createPaymentSession'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.payment-session');
+
+        Route::get('deliveries/{delivery}/payment-session', [StaffDeliveryController::class, 'paymentSession'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.payment-session.status');
+
         Route::post('deliveries/{delivery}/delivered', [StaffDeliveryController::class, 'delivered'])
             ->middleware(['route.permission'])
             ->name('deliveries.delivered');

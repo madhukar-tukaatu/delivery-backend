@@ -53,5 +53,20 @@ return [
          * Remote download timeout.
          */
         'document_download_timeout' => 60,
+
+        /*
+         * POD online payment session integration. The Store Manager team
+         * implements these endpoints; keep the URL and shared secret in env.
+         */
+        'payment' => [
+            'enabled' => (bool) env('STORE_MANAGER_PAYMENT_ENABLED', false),
+            'base_url' => env('STORE_MANAGER_PAYMENT_BASE_URL'),
+            'integration_id' => env('STORE_MANAGER_PAYMENT_INTEGRATION_ID', 'tukaatu-express'),
+            'shared_secret' => env('STORE_MANAGER_PAYMENT_INTEGRATION_SECRET'),
+            'create_path' => env('STORE_MANAGER_PAYMENT_CREATE_PATH', '/api/v1/integrations/tukaatu-express/pod-payment-sessions'),
+            'status_path' => env('STORE_MANAGER_PAYMENT_STATUS_PATH', '/api/v1/integrations/tukaatu-express/pod-payment-sessions/{payment_session_id}'),
+            'timeout' => (int) env('STORE_MANAGER_PAYMENT_TIMEOUT', 20),
+            'webhook_tolerance' => (int) env('STORE_MANAGER_PAYMENT_WEBHOOK_TOLERANCE', 300),
+        ],
     ],
 ];

@@ -15,8 +15,10 @@ class DeliveryAssignment extends Model
         'assigned_at' => 'datetime',
         'accepted_at' => 'datetime',
         'out_for_delivery_at' => 'datetime',
+        'arrived_at' => 'datetime',
         'delivered_at' => 'datetime',
         'failed_at' => 'datetime',
+        'customer_confirmed_at' => 'datetime',
         'pod_collected_amount' => 'decimal:2',
     ];
 

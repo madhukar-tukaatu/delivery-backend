@@ -33,6 +33,7 @@ class MerchantOnboardingController extends Controller
             'business_type' => ['required', 'string', 'max:100'],
             'pan_vat_number' => ['nullable', 'string', 'max:80'],
             'website_url' => ['nullable', 'url', 'max:255'],
+            'payment_qr_code' => ['nullable', 'string', 'max:500000'],
             'address' => ['required', 'string', 'max:500'],
             'city' => ['required', 'string', 'max:120'],
             'area' => ['nullable', 'string', 'max:120'],

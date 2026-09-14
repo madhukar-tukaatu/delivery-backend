@@ -2,6 +2,19 @@
 
 use Illuminate\Support\Facades\Route;
 use Modules\POD\Http\Controllers\PodController;
+use Modules\POD\Http\Controllers\StoreManagerPaymentWebhookController;
+
+/*
+|--------------------------------------------------------------------------
+| Store Manager payment webhook
+|--------------------------------------------------------------------------
+| This endpoint is intentionally outside authenticated staff/admin routes.
+| The controller verifies the signed raw request body and event id.
+|--------------------------------------------------------------------------
+*/
+
+Route::post('v1/integrations/store-manager/payment-events', [StoreManagerPaymentWebhookController::class, 'handle'])
+    ->name('integrations.store-manager.payment-events');
 
 /*
 |--------------------------------------------------------------------------

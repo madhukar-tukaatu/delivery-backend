@@ -3,12 +3,13 @@
 namespace Modules\Shipment\Http\Controllers;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Modules\Delivery\Services\DeliveryWorkflowService;
 use Modules\Merchant\Models\Merchant;
 use Modules\Shipment\Http\Requests\ShipmentOperationsCreateRequest;
 use Modules\Shipment\Models\Shipment;
-use Modules\Shipment\Services\DeliveryWorkflowService;
 use Modules\Shipment\Services\PickupWorkflowService;
 use Modules\Shipment\Services\ShipmentOperationsService;
 
@@ -46,10 +47,23 @@ class AdminShipmentLifecycleController  extends Controller
 
     public function assignDelivery(Request $request, Shipment $shipment, DeliveryWorkflowService $deliveryWorkflowService): JsonResponse
     {
-        $data = $request->validate(['rider_id' => ['required', 'integer']]);
+        $data = $request->validate([
+            'rider_id' => ['required', 'integer', 'exists:users,id'],
+        ]);
 
-        $delivery = $deliveryWorkflowService->assign($shipment, (int) $data['rider_id'], $request->user()->id);
+        $rider = User::query()->findOrFail((int) $data['rider_id']);
+        $delivery = $deliveryWorkflowService->createPendingForShipment(
+            $shipment,
+            $request->user()->id,
+        );
 
-        return response()->json(['message' => 'Delivery rider assigned.', 'data' => $delivery]);
+        return response()->json([
+            'message' => 'Delivery rider assigned.',
+            'data' => $deliveryWorkflowService->assign(
+                $delivery,
+                $rider,
+                $request->user(),
+            ),
+        ]);
     }
 }

@@ -28,7 +28,9 @@ class StaffDeliveryController extends Controller
         if ($request->filled('status')) {
             $query->where('status', $request->string('status')->toString());
         } else {
-            $query->whereIn('status', ['assigned', 'accepted', 'out_for_delivery']);
+            // Include the rider's completed history so the staff page can show
+            // accurate Delivered and Failed tabs alongside active deliveries.
+            $query->whereIn('status', ['assigned', 'accepted', 'out_for_delivery', 'delivered', 'failed']);
         }
 
         $perPage = min(max((int) $request->input('per_page', 20), 1), 100);
@@ -52,10 +54,54 @@ class StaffDeliveryController extends Controller
         );
     }
 
+    public function arrived(Request $request, DeliveryAssignment $delivery)
+    {
+        return ApiResponse::success(
+            $this->service->arrived($delivery, $request->user()),
+            'Arrival at delivery location recorded.'
+        );
+    }
+
+    public function createPaymentSession(Request $request, DeliveryAssignment $delivery)
+    {
+        $data = $request->validate([
+            'idempotency_key' => ['nullable', 'string', 'max:191'],
+        ]);
+
+        return ApiResponse::success(
+            $this->service->createPaymentSession(
+                $delivery,
+                $request->user(),
+                $data['idempotency_key'] ?? null,
+            ),
+            'Online payment session ready.'
+        );
+    }
+
+    public function paymentSession(Request $request, DeliveryAssignment $delivery)
+    {
+        $data = $request->validate([
+            'refresh' => ['sometimes', 'boolean'],
+        ]);
+
+        return ApiResponse::success(
+            $this->service->paymentSession(
+                $delivery,
+                $request->user(),
+                (bool) ($data['refresh'] ?? false),
+            ),
+            'Payment session status retrieved.'
+        );
+    }
+
     public function delivered(Request $request, DeliveryAssignment $delivery)
     {
         $data = $request->validate([
-            'payment_method' => ['nullable', 'string', 'in:cash,qr,card,wallet'],
+            'payment_method' => ['nullable', 'string', 'in:cash,online'],
+            'payment_session_id' => ['nullable', 'required_if:payment_method,online', 'string', 'max:191'],
+            'customer_confirmed' => ['required', 'accepted'],
+            'customer_name' => ['required', 'string', 'max:191'],
+            'customer_signature' => ['required', 'string', 'max:2097152'],
             'pod_collected_amount' => ['nullable', 'numeric', 'min:0'],
             'remarks' => ['nullable', 'string', 'max:500'],
         ]);

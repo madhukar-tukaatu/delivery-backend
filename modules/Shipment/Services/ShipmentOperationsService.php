@@ -102,8 +102,8 @@ class ShipmentOperationsService
                 $shipment->delivery_address = $delivery['address'];
                 $shipment->delivery_city = $delivery['city'];
                 $shipment->delivery_area = $delivery['area'] ?? null;
-                $shipment->delivery_latitude = $delivery['latitude'] ?? null;
-                $shipment->delivery_longitude = $delivery['longitude'] ?? null;
+                $shipment->delivery_lat = $delivery['latitude'] ?? null;
+                $shipment->delivery_lng = $delivery['longitude'] ?? null;
 
                 $shipment->package_type = $package['type'] ?? 'parcel';
                 $shipment->package_description = $package['description'] ?? null;

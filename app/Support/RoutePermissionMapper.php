@@ -92,6 +92,8 @@ class RoutePermissionMapper
             'picked_up',
             'out_for_delivery',
             'delivered',
+            'payment_session',
+            'arrived',
             'failed',
             'dispatch_next_step',
             'receive_current_step',

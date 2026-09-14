@@ -11,6 +11,24 @@ class ShipmentLifecycleCreateRequest extends FormRequest
         return true;
     }
 
+    protected function prepareForValidation(): void
+    {
+        $delivery = (array) $this->input('delivery', []);
+        $latitude = data_get($delivery, 'latitude')
+            ?? $this->input('delivery_lat')
+            ?? $this->input('delivery_latitude');
+        $longitude = data_get($delivery, 'longitude')
+            ?? $this->input('delivery_lng')
+            ?? $this->input('delivery_longitude');
+
+        $this->merge([
+            'delivery' => array_merge($delivery, [
+                'latitude' => $latitude,
+                'longitude' => $longitude,
+            ]),
+        ]);
+    }
+
     public function rules(): array
     {
         return [
@@ -23,8 +41,12 @@ class ShipmentLifecycleCreateRequest extends FormRequest
             'delivery.address' => ['required_without:receiver_address', 'string'],
             'delivery.city' => ['required_without:receiver_city', 'string', 'max:100'],
             'delivery.area' => ['nullable', 'string', 'max:100'],
-            'delivery.latitude' => ['nullable', 'numeric'],
-            'delivery.longitude' => ['nullable', 'numeric'],
+            'delivery.latitude' => ['nullable', 'numeric', 'between:-90,90'],
+            'delivery.longitude' => ['nullable', 'numeric', 'between:-180,180'],
+            'delivery_lat' => ['nullable', 'numeric', 'between:-90,90'],
+            'delivery_lng' => ['nullable', 'numeric', 'between:-180,180'],
+            'delivery_latitude' => ['nullable', 'numeric', 'between:-90,90'],
+            'delivery_longitude' => ['nullable', 'numeric', 'between:-180,180'],
             'package.type' => ['nullable', 'string', 'max:100'],
             'package.description' => ['nullable', 'string'],
             'package.weight' => ['required_without:weight', 'numeric', 'min:0.1'],

@@ -5,9 +5,12 @@ namespace Modules\Delivery\Services;
 use App\Models\User;
 use App\Support\CourierStatus;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Modules\Delivery\Models\DeliveryAssignment;
 use Modules\POD\Services\PODWorkflowService;
+use Modules\POD\Services\StoreManagerPaymentService;
 use Modules\Shipment\Models\Shipment;
 use Modules\Shipment\Services\ShipmentCallbackService;
 use Modules\Tracking\Services\TrackingService;
@@ -20,8 +23,9 @@ use Modules\Webhook\Services\WebhookService;
  *   sorted_for_delivery  -> createPendingForShipment()  (status: pending, no rider)
  *   pending              -> assign()                    (status: assigned, rider set; shipment assigned_to_rider)
  *   assigned             -> accept()                    (status: accepted)
- *   accepted             -> outForDelivery()            (status: out_for_delivery; shipment out_for_delivery)
- *   out_for_delivery     -> delivered()                 (status: delivered; POD gating; shipment delivered)
+ *   accepted             -> outForDelivery()            (status: out_for_delivery)
+ *   out_for_delivery     -> arrived()                   (arrived_at recorded)
+ *   out_for_delivery     -> delivered()                 (arrival/POD proof gating; shipment delivered)
  *   (any active)         -> failed()                    (status: failed; shipment delivery_failed)
  */
 class DeliveryWorkflowService
@@ -30,6 +34,7 @@ class DeliveryWorkflowService
         private TrackingService $trackingService,
         private WebhookService $webhookService,
         private ShipmentCallbackService $callbacks,
+        private StoreManagerPaymentService $paymentService,
     ) {}
 
     /**
@@ -163,6 +168,7 @@ class DeliveryWorkflowService
             ]);
 
             $this->trackingService->record($delivery->shipment, CourierStatus::ASSIGNED_TO_RIDER, 'Rider accepted the delivery.', $user->id);
+            $this->webhookService->queueShipmentEvent($delivery->shipment->fresh(), 'delivery.accepted');
             $this->callbacks->deliveryAccepted($delivery->shipment->fresh(), [
                 'rider' => ['id' => $user->id, 'name' => $user->name],
             ]);
@@ -198,20 +204,105 @@ class DeliveryWorkflowService
 
             $this->trackingService->record($shipment->fresh(), CourierStatus::OUT_FOR_DELIVERY, 'Out for delivery.', $user->id);
             $this->webhookService->queueShipmentEvent($shipment->fresh(), 'delivery.out_for_delivery');
-            $this->callbacks->deliveryOutForDelivery($shipment->fresh());
+            $this->callbacks->deliveryOutForDelivery($shipment->fresh(), [
+                'rider' => ['id' => $user->id, 'name' => $user->name],
+                'out_for_delivery_at' => $delivery->out_for_delivery_at?->toIso8601String(),
+            ]);
 
             return $shipment->fresh();
         });
     }
 
     /**
+     * Mark that the assigned rider has reached the delivery location.
+     * The assignment remains out_for_delivery; arrived_at gates completion.
+     */
+    public function arrived(DeliveryAssignment $delivery, User $user): DeliveryAssignment
+    {
+        return DB::transaction(function () use ($delivery, $user) {
+            $delivery = DeliveryAssignment::query()->lockForUpdate()->findOrFail($delivery->id);
+
+            $this->ensureRider($delivery, $user);
+
+            if ($delivery->status !== 'out_for_delivery') {
+                throw ValidationException::withMessages([
+                    'status' => ['Delivery must be out for delivery before arrival can be confirmed.'],
+                ]);
+            }
+
+            if ($delivery->arrived_at) {
+                return $delivery->fresh(['shipment', 'rider']);
+            }
+
+            $arrivedAt = now();
+            $delivery->update([
+                'arrived_at' => $arrivedAt,
+            ]);
+
+            $shipment = $delivery->shipment;
+            $this->trackingService->record(
+                $shipment->fresh(),
+                CourierStatus::OUT_FOR_DELIVERY,
+                'Rider arrived at the delivery location.',
+                $user->id,
+            );
+            $this->webhookService->queueShipmentEvent($shipment->fresh(), 'delivery.arrived');
+            $this->callbacks->deliveryArrived($shipment->fresh(), [
+                'rider' => ['id' => $user->id, 'name' => $user->name],
+                'arrived_at' => $arrivedAt->toIso8601String(),
+            ]);
+
+            return $delivery->fresh(['shipment', 'rider']);
+        });
+    }
+
+    /**
+     * Create the Store Manager payment session used for an online POD payment.
+     * Only the assigned rider can initiate a session while out for delivery.
+     */
+    public function createPaymentSession(
+        DeliveryAssignment $delivery,
+        User $user,
+        ?string $idempotencyKey = null,
+    ): array {
+        $delivery = DeliveryAssignment::query()->findOrFail($delivery->id);
+
+        $this->ensureRider($delivery, $user);
+        $this->ensurePaymentSessionStage($delivery);
+
+        return $this->paymentService->createForShipment(
+            $delivery->shipment,
+            $idempotencyKey,
+        );
+    }
+
+    /**
+     * Return the current Store Manager payment session for a delivery.
+     */
+    public function paymentSession(
+        DeliveryAssignment $delivery,
+        User $user,
+        bool $refresh = false,
+    ): ?array {
+        $delivery = DeliveryAssignment::query()->findOrFail($delivery->id);
+
+        $this->ensureRider($delivery, $user);
+        $this->ensurePaymentSessionStage($delivery);
+
+        return $this->paymentService->currentForShipment(
+            $delivery->shipment,
+            $refresh,
+        );
+    }
+
+    /**
      * Complete the delivery.
      *
-     * POD gating: a POD (pay-on-delivery) shipment can only be marked
-     * delivered once payment is collected. For prepaid shipments there is
-     * nothing to collect, so delivery completes directly.
+     * A POD shipment is completed only after the customer pays the merchant
+     * directly by cash or through a verified Store Manager payment session. The
+     * platform does not collect or settle this payment.
      *
-     * @param array{payment_method?: string, pod_collected_amount?: float, remarks?: string} $data
+     * @param array{payment_method?: string, payment_session_id?: string, pod_collected_amount?: float, customer_confirmed?: bool, customer_name?: string, customer_signature?: string, remarks?: string} $data
      */
     public function delivered(DeliveryAssignment $delivery, User $user, array $data = []): Shipment
     {
@@ -226,30 +317,116 @@ class DeliveryWorkflowService
                 ]);
             }
 
-            $shipment = $delivery->shipment;
+            if (! $delivery->arrived_at) {
+                throw ValidationException::withMessages([
+                    'status' => ['Confirm that the rider has reached the delivery location before completing delivery.'],
+                ]);
+            }
 
+            $shipment = $delivery->shipment()->with('merchant')->firstOrFail();
             $isPod = $this->isPod($shipment);
-            $collectable = (float) ($shipment->total_collectable_amount ?: $shipment->pod_amount);
+            $collectable = (float) ($shipment->total_collectable_amount
+                ?: $shipment->total_collectable
+                ?: $shipment->pod_amount);
+            $directPayment = false;
+            $paymentMethod = null;
+            $paymentReference = null;
+            $paymentSessionId = null;
+            $receiptConfirmed = false;
+            $customerName = null;
+            $customerSignaturePath = null;
+            $customerSignatureHash = null;
+            $customerConfirmedAt = null;
 
             if ($isPod && $collectable > 0) {
-                $collected = (float) ($data['pod_collected_amount'] ?? $collectable);
+                $paymentMethod = strtolower((string) ($data['payment_method'] ?? ''));
 
-                if ($collected + 0.001 < $collectable) {
+                if (! in_array($paymentMethod, ['cash', 'online'], true)) {
                     throw ValidationException::withMessages([
-                        'pod_collected_amount' => [
-                            'Full payment must be collected before completing a pay-on-delivery order.',
+                        'payment_method' => [
+                            'Choose cash or verified online payment before completing a pay-on-delivery order.',
                         ],
                     ]);
                 }
 
+                if ($paymentMethod === 'online') {
+                    $paymentSessionId = trim((string) ($data['payment_session_id'] ?? ''));
+
+                    if ($paymentSessionId === '') {
+                        throw ValidationException::withMessages([
+                            'payment_session_id' => [
+                                'A Store Manager payment session is required for online payment.',
+                            ],
+                        ]);
+                    }
+
+                    $verifiedSession = $this->paymentService->assertPaid(
+                        $shipment,
+                        $paymentSessionId,
+                    );
+                    $paymentReference = $verifiedSession->provider_reference ?: $paymentSessionId;
+                }
+
+                $collected = (float) ($data['pod_collected_amount'] ?? $collectable);
+
+                if (abs($collected - $collectable) > 0.001) {
+                    throw ValidationException::withMessages([
+                        'pod_collected_amount' => [
+                            'The payment amount must exactly match the amount due to the merchant.',
+                        ],
+                    ]);
+                }
+
+                $directPayment = true;
                 $delivery->update(['pod_collected_amount' => $collected]);
 
-                app(PODWorkflowService::class)->markCollected($shipment, $user, $collected);
+                app(PODWorkflowService::class)->markPaidDirectToMerchant(
+                    $shipment,
+                    $paymentMethod === 'cash' ? $user : null,
+                    $collected,
+                    $paymentMethod,
+                    $paymentReference,
+                    $paymentSessionId,
+                );
             }
+
+            $receiptConfirmed = (bool) ($data['customer_confirmed'] ?? false);
+            $customerName = trim((string) ($data['customer_name'] ?? ''));
+            $signatureData = trim((string) ($data['customer_signature'] ?? ''));
+
+            if (! $receiptConfirmed) {
+                throw ValidationException::withMessages([
+                    'customer_confirmed' => [
+                        'The receiver must confirm receipt before delivery can be completed.',
+                    ],
+                ]);
+            }
+
+            if ($customerName === '') {
+                throw ValidationException::withMessages([
+                    'customer_name' => ['Enter the name of the person receiving the parcel.'],
+                ]);
+            }
+
+            if ($signatureData === '') {
+                throw ValidationException::withMessages([
+                    'customer_signature' => ['The receiver signature is required before delivery can be completed.'],
+                ]);
+            }
+
+            [$customerSignaturePath, $customerSignatureHash] = $this->storeCustomerSignature(
+                $delivery,
+                $signatureData,
+            );
+            $customerConfirmedAt = now();
 
             $delivery->update([
                 'status' => 'delivered',
                 'delivered_at' => now(),
+                'customer_confirmed_at' => $customerConfirmedAt,
+                'customer_confirmed_name' => $customerName,
+                'customer_signature_path' => $customerSignaturePath,
+                'customer_signature_hash' => $customerSignatureHash,
                 'remarks' => $data['remarks'] ?? $delivery->remarks,
             ]);
 
@@ -257,15 +434,32 @@ class DeliveryWorkflowService
                 'status' => CourierStatus::DELIVERED,
                 'merchant_status' => CourierStatus::merchantStatus(CourierStatus::DELIVERED),
                 'delivered_at' => now(),
-                'pod_status' => $isPod ? 'collected' : 'not_required',
-                'settlement_status' => $isPod ? 'ready' : 'not_required',
+                'pod_status' => $directPayment ? 'paid_direct' : ($isPod ? 'not_required' : 'not_required'),
+                'settlement_status' => $directPayment ? 'not_required' : 'not_required',
             ]);
 
-            $this->trackingService->record($shipment->fresh(), CourierStatus::DELIVERED, $data['remarks'] ?? 'Delivered successfully.', $user->id);
+            $trackingDescription = $data['remarks']
+                ?? ($directPayment
+                    ? 'Delivered after the rider collected the POD amount for the merchant.'
+                    : 'Delivered successfully.');
+
+            $this->trackingService->record($shipment->fresh(), CourierStatus::DELIVERED, $trackingDescription, $user->id);
             $this->webhookService->queueShipmentEvent($shipment->fresh(), 'delivery.delivered');
             $this->callbacks->deliveryDelivered($shipment->fresh(), [
-                'payment_method' => $data['payment_method'] ?? null,
-                'pod_collected_amount' => $isPod ? (float) ($data['pod_collected_amount'] ?? $collectable) : 0,
+                'payment_method' => $paymentMethod,
+                'payment_destination' => $directPayment ? 'merchant' : null,
+                'payment_reference' => $paymentReference,
+                'payment_session_id' => $paymentSessionId,
+                'payment_status' => $directPayment ? 'paid_direct' : null,
+                'pod_collected_amount' => $directPayment ? $collectable : 0,
+                'arrived_at' => $delivery->arrived_at?->toIso8601String(),
+                'receipt_confirmation' => [
+                    'confirmed' => $receiptConfirmed,
+                    'customer_name' => $customerName,
+                    'confirmed_at' => $customerConfirmedAt?->toIso8601String(),
+                    'signature_present' => filled($customerSignaturePath),
+                    'signature_sha256' => $customerSignatureHash,
+                ],
                 'remarks' => $data['remarks'] ?? null,
             ]);
 
@@ -296,7 +490,11 @@ class DeliveryWorkflowService
 
             $this->trackingService->record($shipment->fresh(), CourierStatus::DELIVERY_FAILED, $reason, $user->id);
             $this->webhookService->queueShipmentEvent($shipment->fresh(), 'delivery.failed');
-            $this->callbacks->deliveryFailed($shipment->fresh(), ['reason' => $reason]);
+            $this->callbacks->deliveryFailed($shipment->fresh(), [
+                'rider' => ['id' => $user->id, 'name' => $user->name],
+                'reason' => $reason,
+                'failed_at' => $delivery->failed_at?->toIso8601String(),
+            ]);
 
             return $shipment->fresh();
         });
@@ -372,6 +570,67 @@ class DeliveryWorkflowService
         $type = strtolower((string) $shipment->payment_type);
 
         return in_array($type, ['pod', 'cod', 'to_pay'], true);
+    }
+
+    /**
+     * Persist the customer signature as a private image and return its audit data.
+     * Raw signature bytes are never included in merchant callbacks.
+     *
+     * @return array{0: string, 1: string}
+     */
+    private function storeCustomerSignature(DeliveryAssignment $delivery, string $signatureData): array
+    {
+        if (! preg_match('/^data:image\/(png|jpe?g);base64,(.+)$/s', $signatureData, $matches)) {
+            throw ValidationException::withMessages([
+                'customer_signature' => ['Provide a valid PNG or JPEG customer signature.'],
+            ]);
+        }
+
+        $binary = base64_decode($matches[2], true);
+        if ($binary === false || $binary === '' || strlen($binary) > 1_500_000) {
+            throw ValidationException::withMessages([
+                'customer_signature' => ['The customer signature is invalid or too large.'],
+            ]);
+        }
+
+        $image = @getimagesizefromstring($binary);
+        if (! is_array($image) || ! in_array($image['mime'] ?? null, ['image/png', 'image/jpeg'], true)) {
+            throw ValidationException::withMessages([
+                'customer_signature' => ['Provide a valid PNG or JPEG customer signature.'],
+            ]);
+        }
+
+        $extension = strtolower($matches[1]) === 'png' ? 'png' : 'jpg';
+        $path = sprintf(
+            'delivery-signatures/%d/%d/%s.%s',
+            $delivery->shipment_id,
+            $delivery->id,
+            Str::uuid()->toString(),
+            $extension,
+        );
+
+        if (! Storage::disk('local')->put($path, $binary)) {
+            throw ValidationException::withMessages([
+                'customer_signature' => ['The customer signature could not be stored.'],
+            ]);
+        }
+
+        return [$path, hash('sha256', $binary)];
+    }
+
+    private function ensurePaymentSessionStage(DeliveryAssignment $delivery): void
+    {
+        if ($delivery->status !== 'out_for_delivery') {
+            throw ValidationException::withMessages([
+                'status' => ['Payment sessions are available only while the delivery is out for delivery.'],
+            ]);
+        }
+
+        if (! $delivery->arrived_at) {
+            throw ValidationException::withMessages([
+                'status' => ['The rider must confirm arrival before starting an online payment session.'],
+            ]);
+        }
     }
 
     private function ensureRider(DeliveryAssignment $delivery, User $user, bool $allowManager = false): void

@@ -74,6 +74,16 @@ class ShipmentLifecycleService
                     'receiver_address' => data_get($payload, 'delivery.address', data_get($payload, 'receiver_address')),
                     'receiver_city' => data_get($payload, 'delivery.city', data_get($payload, 'receiver_city')),
                     'receiver_area' => data_get($payload, 'delivery.area', data_get($payload, 'receiver_area')),
+                    'delivery_lat' => data_get(
+                        $payload,
+                        'delivery.latitude',
+                        data_get($payload, 'delivery_lat', data_get($payload, 'delivery_latitude', data_get($payload, 'receiver_latitude'))),
+                    ),
+                    'delivery_lng' => data_get(
+                        $payload,
+                        'delivery.longitude',
+                        data_get($payload, 'delivery_lng', data_get($payload, 'delivery_longitude', data_get($payload, 'receiver_longitude'))),
+                    ),
                     'receiver_latitude' => data_get($payload, 'delivery.latitude', data_get($payload, 'receiver_latitude')),
                     'receiver_longitude' => data_get($payload, 'delivery.longitude', data_get($payload, 'receiver_longitude')),
                     'package_type' => data_get($payload, 'package.type', data_get($payload, 'package_type', 'parcel')),

@@ -31,6 +31,7 @@ final class ShipmentCallbackService
         'delivery.assigned',
         'delivery.accepted',
         'delivery.out_for_delivery',
+        'delivery.arrived',
         'delivery.delivered',
         'delivery.failed',
     ];
@@ -71,6 +72,11 @@ final class ShipmentCallbackService
     public function deliveryOutForDelivery(Shipment $shipment, array $data = []): void
     {
         $this->dispatch($shipment, 'delivery.out_for_delivery', $data);
+    }
+
+    public function deliveryArrived(Shipment $shipment, array $data = []): void
+    {
+        $this->dispatch($shipment, 'delivery.arrived', $data);
     }
 
     public function deliveryDelivered(Shipment $shipment, array $data = []): void

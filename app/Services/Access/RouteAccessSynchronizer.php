@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services\Access;
 
+use App\Support\RoutePermissionMapper;
 use Illuminate\Routing\Route;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route as RouteFacade;
@@ -128,11 +129,30 @@ final class RouteAccessSynchronizer
 
             /*
             |--------------------------------------------------------------------------
-            | route.permission:pickups.view
+            | Generic route.permission middleware
+            |--------------------------------------------------------------------------
             |
-            | Also support:
-            |
-            | permission:pickups.view
+            | Runtime authorization derives the permission from the route name.
+            | Use the same mapper during synchronization so newly added routes
+            | create their permissions without a seeder entry.
+            |--------------------------------------------------------------------------
+            */
+
+            if ($middleware === 'route.permission') {
+                $permission = RoutePermissionMapper::fromRouteName(
+                    $route->getName()
+                );
+
+                if ($permission !== null) {
+                    $permissions[] = $permission;
+                }
+
+                continue;
+            }
+
+            /*
+            |--------------------------------------------------------------------------
+            | Explicit route.permission:permission declarations
             |--------------------------------------------------------------------------
             */
 
@@ -480,7 +500,11 @@ final class RouteAccessSynchronizer
     private function displayName(
         string $permission
     ): string {
-        return Str::of($permission)
+        $displayPermission = str_starts_with($permission, 'transfers.')
+            ? 'shipment_'.$permission
+            : $permission;
+
+        return Str::of($displayPermission)
             ->replace(
                 ['.', '_', '-'],
                 ' '
@@ -504,6 +528,10 @@ final class RouteAccessSynchronizer
         );
 
         array_pop($segments);
+
+        if (($segments[0] ?? null) === 'transfers') {
+            return 'Shipment Transfers';
+        }
 
         return Str::of(
             implode(

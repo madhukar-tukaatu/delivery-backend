@@ -4,12 +4,17 @@ namespace App\Console\Commands;
 
 use App\Services\Access\RouteAccessSynchronizer;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Artisan;
 use Throwable;
 
 final class SyncRouteAccess extends Command
 {
     protected $signature =
-        'access:sync-routes';
+        'access:sync';
+
+    protected $aliases = [
+        'access:sync-routes',
+    ];
 
     protected $description =
         'Create permissions and menus from registered application routes.';

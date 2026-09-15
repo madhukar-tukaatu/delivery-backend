@@ -66,20 +66,18 @@ Route::prefix('v1/admin')
 
             /*
             |--------------------------------------------------------------------------
-            | TRANSFERS (branch-to-branch)
+            | TRANSFERS (shipment branch handoffs)
             |--------------------------------------------------------------------------
-            | Route names use a unique "transfers" module (RoutePermissionMapper
-            | aliases transfers -> dispatches) so they don't collide with the
-            | Dispatch module's dispatches.* route names, while still mapping to
-            | existing permissions:
-            |   transfers.index / summary -> dispatches.view
-            |   transfers.dispatch        -> dispatches.dispatch
-            |   transfers.receive         -> dispatches.receive
+            | These route names map to the dedicated shipment-transfer
+            | permissions: transfers.view, transfers.dispatch, and
+            | transfers.receive. The index route also declares the frontend menu
+            | metadata consumed by `php artisan access:sync`.
             |--------------------------------------------------------------------------
             */
 
             Route::get('transfers', [TransferController::class, 'index'])
-                ->name('transfers.index');
+                ->name('transfers.index')
+                ->adminMenu('Transfers', '/admin/transfers', 'dispatches', 65);
 
             Route::get('transfers/summary', [TransferController::class, 'summary'])
                 ->name('transfers.summary');

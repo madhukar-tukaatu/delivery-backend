@@ -41,16 +41,14 @@ class RoutePermissionMapper
     }
 
     /**
-     * Map a route module segment to the permission group that owns it.
-     * Lets differently-named routes share an existing permission set.
+     * Keep each route module in its own permission namespace.
+     *
+     * Transfers have a separate board and must be grantable independently from
+     * dispatch manifests.
      */
     private static function mapModule(string $module): string
     {
-        return match ($module) {
-            // Branch-to-branch transfers reuse the dispatch permissions.
-            'transfers' => 'dispatches',
-            default => $module,
-        };
+        return $module;
     }
 
     private static function normalize(string $value): string

@@ -46,7 +46,7 @@ class SyncAccessControl extends Command
 
         $exitCode =
             Artisan::call(
-                'access:sync-routes'
+                'access:sync'
             );
 
         $this->line(

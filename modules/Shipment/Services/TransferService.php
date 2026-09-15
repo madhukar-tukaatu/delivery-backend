@@ -58,6 +58,11 @@ final class TransferService
                 $shipment->current_sub_branch_id = null;
             }
 
+            // Track dispatch timestamp
+            if ($this->shipmentHasColumn('dispatched_at')) {
+                $shipment->dispatched_at = now();
+            }
+
             $shipment->save();
 
             $this->track($shipment, $old, CourierStatus::IN_TRANSIT, 'Dispatched on transfer to destination branch.', $actorId);
@@ -124,6 +129,11 @@ final class TransferService
             }
             if ($this->shipmentHasColumn('current_sub_branch_id')) {
                 $shipment->current_sub_branch_id = $shipment->destination_sub_branch_id;
+            }
+
+            // Track received timestamp
+            if ($this->shipmentHasColumn('received_at_destination_at')) {
+                $shipment->received_at_destination_at = now();
             }
 
             $shipment->save();

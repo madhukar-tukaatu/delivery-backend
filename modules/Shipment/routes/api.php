@@ -79,8 +79,20 @@ Route::prefix('v1/admin')
                 ->name('transfers.index')
                 ->adminMenu('Transfers', '/admin/transfers', 'dispatches', 65);
 
+            Route::get('transfers/stats', [TransferController::class, 'stats'])
+                ->name('transfers.stats');
+
             Route::get('transfers/summary', [TransferController::class, 'summary'])
                 ->name('transfers.summary');
+
+            Route::get('transfers/received', [TransferController::class, 'received'])
+                ->name('transfers.received');
+
+            Route::get('transfers/completed', [TransferController::class, 'completed'])
+                ->name('transfers.completed');
+
+            Route::get('transfers/history', [TransferController::class, 'history'])
+                ->name('transfers.history');
 
             Route::post('transfers/dispatch', [TransferController::class, 'dispatch'])
                 ->name('transfers.dispatch');

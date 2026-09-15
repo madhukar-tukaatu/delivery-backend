@@ -220,6 +220,7 @@ final class TransferController extends Controller
 
     /**
      * Get received transfers at this branch
+     * Note: Only shows CROSS-BRANCH transfers (origin != destination)
      */
     public function received(Request $request)
     {
@@ -233,8 +234,10 @@ final class TransferController extends Controller
             'currentBranch',
         ]);
 
+        // ONLY cross-branch transfers received at this branch
         $query->where('status', CourierStatus::RECEIVED_AT_DESTINATION_BRANCH)
-            ->where('destination_branch_id', $branchId);
+            ->where('destination_branch_id', $branchId)
+            ->whereColumn('origin_branch_id', '!=', 'destination_branch_id'); // Cross-branch only!
 
         if ($request->filled('search')) {
             $search = trim($request->string('search')->toString());
@@ -254,6 +257,7 @@ final class TransferController extends Controller
 
     /**
      * Get completed transfers delivered to this branch
+     * Note: Only shows CROSS-BRANCH transfers (origin != destination), not same-branch local deliveries
      */
     public function completed(Request $request)
     {
@@ -266,8 +270,10 @@ final class TransferController extends Controller
             'destinationBranch',
         ]);
 
+        // ONLY cross-branch transfers (delivered to this branch from another branch)
         $query->where('status', CourierStatus::DELIVERED)
-            ->where('destination_branch_id', $branchId);
+            ->where('destination_branch_id', $branchId)
+            ->whereColumn('origin_branch_id', '!=', 'destination_branch_id'); // Cross-branch only!
 
         if ($request->filled('search')) {
             $search = trim($request->string('search')->toString());
@@ -411,13 +417,21 @@ final class TransferController extends Controller
         $branchId = $this->getBranchScope($user);
         $shipmentIds = array_values(array_unique(array_map(fn($id) => (int) $id, $data['shipment_ids'])));
 
-        // Verify shipments are sorted_for_transfer and at this branch
+        // Verify shipments are ready for transfer (sorted_for_transfer or similar statuses)
         $available = Shipment::query()
             ->whereIn('id', $shipmentIds)
-            ->where('status', CourierStatus::SORTED_FOR_TRANSFER)
+            ->where(function ($q) {
+                // Accept shipments that are sorted for transfer, or picked up and ready
+                $q->where('status', CourierStatus::SORTED_FOR_TRANSFER)
+                    ->orWhere('status', CourierStatus::SORTED_FOR_DELIVERY)
+                    ->orWhere('status', CourierStatus::PICKED_UP)
+                    ->orWhere('status', CourierStatus::RECEIVED_AT_ORIGIN_BRANCH);
+            })
             ->where(function ($q) use ($branchId) {
-                $q->where('origin_branch_id', $branchId)
-                    ->orWhere('current_branch_id', $branchId);
+                if ($branchId !== 0) {
+                    $q->where('origin_branch_id', $branchId)
+                        ->orWhere('current_branch_id', $branchId);
+                }
             })
             ->pluck('id')
             ->all();
@@ -427,7 +441,7 @@ final class TransferController extends Controller
         $result = $this->service->bulkDispatch($available, $user->id);
 
         foreach ($skipped as $id) {
-            $result['skipped'][(int) $id] = 'Not available for dispatch';
+            $result['skipped'][(int) $id] = 'Shipment not ready for dispatch (must be sorted first)';
         }
 
         $ok = count($result['dispatched'] ?? []);

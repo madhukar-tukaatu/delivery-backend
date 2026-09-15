@@ -36,6 +36,9 @@ final class TransferController extends Controller
 
     /**
      * Main transfer board - list transfers by direction
+     * 
+     * OUTBOUND: sorted_for_transfer status at origin_branch
+     * INBOUND: in_transit status destined for this branch (or current_branch for intermediate hubs)
      */
     public function index(Request $request)
     {
@@ -63,11 +66,17 @@ final class TransferController extends Controller
             ->whereColumn('origin_branch_id', '!=', 'destination_branch_id');
 
         if ($direction === 'inbound') {
-            // In transit or at an intermediate hub destined for this branch
-            $query->whereIn('status', [CourierStatus::IN_TRANSIT])
-                ->where('destination_branch_id', $branchId);
+            // INBOUND: in_transit transfers coming TO this branch
+            // This includes:
+            // - Direct transfers: destination_branch_id == this branch
+            // - Intermediate transits: current_branch_id == this branch (after receive)
+            $query->where('status', CourierStatus::IN_TRANSIT)
+                ->where(function ($q) use ($branchId) {
+                    $q->where('destination_branch_id', $branchId)
+                        ->orWhere('current_branch_id', $branchId);
+                });
         } else {
-            // Outbound: ready to leave this branch
+            // OUTBOUND: sorted_for_transfer status at this branch (origin)
             $query->where('status', CourierStatus::SORTED_FOR_TRANSFER)
                 ->where('origin_branch_id', $branchId);
         }
@@ -91,6 +100,12 @@ final class TransferController extends Controller
 
     /**
      * Transfer statistics
+     * 
+     * Shows counts for this branch:
+     * - outbound: ready to leave this branch (sorted_for_transfer)
+     * - in_transit: transfers in transit TO this branch (in_transit)
+     * - received: transfers received and ready for delivery (received_at_destination_branch)
+     * - completed: transfers successfully delivered (delivered)
      */
     public function stats(Request $request)
     {
@@ -109,7 +124,8 @@ final class TransferController extends Controller
             ->where('origin_branch_id', $branchId)
             ->count();
 
-        // In transit: moving through this branch or to this branch
+        // In Transit: transfers coming TO this branch
+        // Check both destination_branch_id (direct transfer) and current_branch_id (intermediate hub)
         $inTransit = (clone $baseQuery)
             ->where('status', CourierStatus::IN_TRANSIT)
             ->where(function ($q) use ($branchId) {
@@ -118,13 +134,13 @@ final class TransferController extends Controller
             })
             ->count();
 
-        // Received: arrived at this branch
+        // Received: arrived at this branch, ready for last-mile delivery
         $received = (clone $baseQuery)
             ->where('status', CourierStatus::RECEIVED_AT_DESTINATION_BRANCH)
             ->where('destination_branch_id', $branchId)
             ->count();
 
-        // Completed: delivered after transfer to this branch
+        // Completed: delivered to final destination (this branch)
         $completed = (clone $baseQuery)
             ->where('status', CourierStatus::DELIVERED)
             ->where('destination_branch_id', $branchId)

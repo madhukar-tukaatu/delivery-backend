@@ -617,6 +617,9 @@ class BranchController extends Controller
         );
 
         $oldCoverageLocationId = $branch->coverage_location_id;
+        
+        // Capture original email BEFORE any modifications
+        $originalEmail = $branch->email;
 
         if ($coverageWasSubmitted) {
             $this->applyCoverageLocationToBranchPayload(
@@ -632,7 +635,8 @@ class BranchController extends Controller
             $effectiveType,
             $coverageWasSubmitted,
             $emailWasSubmitted,
-            $oldCoverageLocationId
+            $oldCoverageLocationId,
+            $originalEmail
         ): void {
             $branch->fill($data);
             $branch->save();
@@ -699,7 +703,7 @@ class BranchController extends Controller
                 if (
                     $branch->account_invitation_status === 
                     BranchAccountInvitationService::STATUS_ACCOUNT_CONFIGURED &&
-                    $branch->getOriginal('email') !== $data['email']
+                    $originalEmail !== $data['email']
                 ) {
                     $updatePayload['account_invitation_status'] = 
                         BranchAccountInvitationService::STATUS_QUEUED;

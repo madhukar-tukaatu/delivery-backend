@@ -700,6 +700,7 @@ class BranchController extends Controller
                     'account_invitation_email' => $data['email'],
                 ];
 
+                $emailChanged = false;
                 if (
                     $branch->account_invitation_status === 
                     BranchAccountInvitationService::STATUS_ACCOUNT_CONFIGURED &&
@@ -707,9 +708,27 @@ class BranchController extends Controller
                 ) {
                     $updatePayload['account_invitation_status'] = 
                         BranchAccountInvitationService::STATUS_QUEUED;
+                    $emailChanged = true;
                 }
 
                 $branch->forceFill($updatePayload)->save();
+                
+                // If email changed, dispatch the job immediately to send invitation to new email
+                if ($emailChanged) {
+                    // Increment attempt counter
+                    $branch->update([
+                        'account_invitation_count' => $branch->account_invitation_count + 1,
+                    ]);
+                    
+                    // Dispatch job to send invitation email
+                    \Modules\Branch\Jobs\SendBranchAccountInvitation::dispatch(
+                        branchId: (int) $branch->id,
+                        managerUserId: (int) $manager->id,
+                        invitationAttempt: $branch->account_invitation_count
+                    )
+                        ->onQueue('default')
+                        ->afterCommit();
+                }
             }
         }, 3);
 

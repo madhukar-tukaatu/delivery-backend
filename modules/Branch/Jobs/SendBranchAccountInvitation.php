@@ -120,17 +120,24 @@ final class SendBranchAccountInvitation implements ShouldQueue
                     ->account_setup_completed_at !==
                 null
             ) {
-                $branch->forceFill([
-                    'account_invitation_status' =>
-                        BranchAccountInvitationService::
-                            STATUS_ACCOUNT_CONFIGURED,
+                // Only set to ACCOUNT_CONFIGURED if not currently QUEUED
+                // (QUEUED means email was just changed and needs resend capability)
+                if (
+                    $branch->account_invitation_status !==
+                    BranchAccountInvitationService::STATUS_QUEUED
+                ) {
+                    $branch->forceFill([
+                        'account_invitation_status' =>
+                            BranchAccountInvitationService::
+                                STATUS_ACCOUNT_CONFIGURED,
 
-                    'account_invitation_email' =>
-                        $manager->email,
+                        'account_invitation_email' =>
+                            $manager->email,
 
-                    'account_invitation_error' =>
-                        null,
-                ])->save();
+                        'account_invitation_error' =>
+                            null,
+                    ])->save();
+                }
 
                 return;
             }

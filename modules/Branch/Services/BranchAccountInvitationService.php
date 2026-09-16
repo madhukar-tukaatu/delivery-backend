@@ -76,9 +76,12 @@ final class BranchAccountInvitationService
                     ]);
                 }
 
+                // If account is fully set up and we're not doing a force resend after email change,
+                // keep it as ACCOUNT_CONFIGURED
                 if (
                     $manager->account_setup_completed_at !==
-                    null
+                    null &&
+                    !$force
                 ) {
                     $lockedBranch->forceFill([
                         'account_invitation_status' =>
@@ -96,6 +99,7 @@ final class BranchAccountInvitationService
                     );
                 }
 
+                // If force=true, always set to QUEUED (for resend after email change)
                 if (
                     !$force &&
                     in_array(

@@ -120,8 +120,9 @@ final class SendBranchAccountInvitation implements ShouldQueue
                     ->account_setup_completed_at !==
                 null
             ) {
-                // Only set to ACCOUNT_CONFIGURED if not currently QUEUED
-                // (QUEUED means email was just changed and needs resend capability)
+                // If account already setup but email was changed (QUEUED status),
+                // we still need to send the verification/notification email
+                // Otherwise, just mark as configured and return
                 if (
                     $branch->account_invitation_status !==
                     BranchAccountInvitationService::STATUS_QUEUED
@@ -137,9 +138,12 @@ final class SendBranchAccountInvitation implements ShouldQueue
                         'account_invitation_error' =>
                             null,
                     ])->save();
-                }
 
-                return;
+                    return;
+                }
+                
+                // If status is QUEUED, continue to send email to new address
+                // Don't return - fall through to email sending logic
             }
 
             /*

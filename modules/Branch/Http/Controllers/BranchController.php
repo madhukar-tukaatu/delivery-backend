@@ -693,22 +693,19 @@ class BranchController extends Controller
                     'email' => $data['email'],
                 ])->save();
 
-                // If the email changed and account was already configured, reset the invitation
-                // status to queued so a new setup email can be sent to the new address
+                // Check if email actually changed
+                $emailChanged = $originalEmail !== $data['email'];
+
                 $updatePayload = [
                     'email' => $data['email'],
                     'account_invitation_email' => $data['email'],
                 ];
 
-                $emailChanged = false;
-                if (
-                    $branch->account_invitation_status === 
-                    BranchAccountInvitationService::STATUS_ACCOUNT_CONFIGURED &&
-                    $originalEmail !== $data['email']
-                ) {
+                // If email changed, always reset status to QUEUED to send new invitation
+                // This handles both ACCOUNT_CONFIGURED and QUEUED states
+                if ($emailChanged) {
                     $updatePayload['account_invitation_status'] = 
                         BranchAccountInvitationService::STATUS_QUEUED;
-                    $emailChanged = true;
                 }
 
                 $branch->forceFill($updatePayload)->save();

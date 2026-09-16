@@ -699,7 +699,7 @@ class BranchController extends Controller
                 if (
                     $branch->account_invitation_status === 
                     BranchAccountInvitationService::STATUS_ACCOUNT_CONFIGURED &&
-                    $branch->email !== $data['email']
+                    $branch->getOriginal('email') !== $data['email']
                 ) {
                     $updatePayload['account_invitation_status'] = 
                         BranchAccountInvitationService::STATUS_QUEUED;

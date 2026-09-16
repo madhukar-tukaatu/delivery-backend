@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Modules\Staff\Http\Controllers;
 
 use App\Http\Controllers\Controller;
-use App\Http\Responses\ApiResponse;
+use App\Support\ApiResponse;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\JsonResponse;

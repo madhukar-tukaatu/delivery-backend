@@ -689,12 +689,25 @@ class BranchController extends Controller
                     ]);
                 }
 
+                // Check if email actually changed
+                $emailChanged = $originalEmail !== $data['email'];
+                
+                // If email changed and account was already setup, we need to reset the 
+                // setup status so a fresh password setup email is sent to the new address
+                if ($emailChanged && $manager->account_setup_completed_at !== null) {
+                    // Delete old password reset tokens that might use old email
+                    Password::broker()
+                        ->deleteToken($manager);
+                    
+                    // Reset setup flag so new setup email will be sent (not just a reset email)
+                    $manager->forceFill([
+                        'account_setup_completed_at' => null,
+                    ])->save();
+                }
+
                 $manager->forceFill([
                     'email' => $data['email'],
                 ])->save();
-
-                // Check if email actually changed
-                $emailChanged = $originalEmail !== $data['email'];
 
                 $updatePayload = [
                     'email' => $data['email'],

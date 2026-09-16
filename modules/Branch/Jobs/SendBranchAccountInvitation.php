@@ -121,12 +121,16 @@ final class SendBranchAccountInvitation implements ShouldQueue
                 null
             ) {
                 // If account already setup but email was changed (QUEUED status),
-                // we still need to send the verification/notification email
-                // Otherwise, just mark as configured and return
+                // we need to treat it as a fresh setup for the new email address
+                // So reset account_setup_completed_at temporarily to generate new setup token
                 if (
-                    $branch->account_invitation_status !==
+                    $branch->account_invitation_status ===
                     BranchAccountInvitationService::STATUS_QUEUED
                 ) {
+                    // Continue below to send setup email, don't reset account_setup_completed_at yet
+                    // It will be set again when they complete setup from the new email
+                } else {
+                    // Account is setup and email didn't change - just mark as configured
                     $branch->forceFill([
                         'account_invitation_status' =>
                             BranchAccountInvitationService::
@@ -141,9 +145,6 @@ final class SendBranchAccountInvitation implements ShouldQueue
 
                     return;
                 }
-                
-                // If status is QUEUED, continue to send email to new address
-                // Don't return - fall through to email sending logic
             }
 
             /*

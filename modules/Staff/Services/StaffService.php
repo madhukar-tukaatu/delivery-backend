@@ -26,6 +26,12 @@ final class StaffService
         'pickup_rider',
         'delivery_staff',
         'staff',
+        'branch_manager',
+        'booking_staff',
+        'pickup_staff',
+        'dispatch_staff',
+        'accounts_staff',
+        'support_staff',
     ];
 
     /*

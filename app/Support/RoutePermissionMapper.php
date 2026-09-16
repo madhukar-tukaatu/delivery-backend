@@ -70,6 +70,13 @@ class RoutePermissionMapper
             'show',
             'list',
             'summary',
+            // Read-only transfer sub-boards are all part of viewing the
+            // transfer board, so they share the single "view" permission
+            // instead of requiring separate grants.
+            'stats',
+            'received',
+            'completed',
+            'history',
             'permissions' => 'view',
 
             'create',

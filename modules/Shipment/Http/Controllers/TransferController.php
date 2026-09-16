@@ -69,7 +69,10 @@ final class TransferController extends Controller
                 CourierStatus::RECEIVED_AT_TRANSIT_HUB,
                 CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
             ]);
-            
+
+            // Cross-branch transfers only (never same-branch local deliveries).
+            $query->whereColumn('origin_branch_id', '!=', 'destination_branch_id');
+
             // Only filter by branch if branch scope is not admin
             if ($branchId !== 0) {
                 $query->where(function ($q) use ($branchId) {
@@ -79,18 +82,15 @@ final class TransferController extends Controller
                 });
             }
         } else {
-            // OUTBOUND: sorted_for_transfer status at this branch
-            // These are shipments that originated at this branch and are ready to be transferred
-            $query->where('status', CourierStatus::SORTED_FOR_TRANSFER);
-            
-            // Only filter by branch if branch scope is not admin
-            if ($branchId !== 0) {
-                $query->where(function ($q) use ($branchId) {
-                    // Either origin_branch or current_branch (in case transfers are queued here)
-                    $q->where('origin_branch_id', $branchId)
-                        ->orWhere('current_branch_id', $branchId);
-                });
-            }
+            // OUTBOUND: cross-branch parcels ready to leave this branch.
+            //
+            // The correct "ready to transfer" status is SORTED_FOR_TRANSFER,
+            // but legacy / mis-sorted cross-branch parcels can be stuck at
+            // SORTED_FOR_DELIVERY (or still PICKED_UP / RECEIVED_AT_ORIGIN_BRANCH)
+            // while their origin != destination. We surface all of those here so
+            // the branch manager can dispatch them, and the dispatch action
+            // repairs the status.
+            $this->applyOutboundScope($query, $branchId);
         }
 
         // Search
@@ -124,20 +124,15 @@ final class TransferController extends Controller
         $user = $request->user();
         $branchId = $this->getBranchScope($user);
 
-        // Outbound: ready to send from this branch
-        $outbound = Shipment::query()
-            ->where('status', CourierStatus::SORTED_FOR_TRANSFER);
-        
-        if ($branchId !== 0) {
-            $outbound->where(function ($q) use ($branchId) {
-                $q->where('origin_branch_id', $branchId)
-                    ->orWhere('current_branch_id', $branchId);
-            });
-        }
-        $outbound = $outbound->count();
+        // Outbound: cross-branch parcels ready to send from this branch
+        // (uses the same scope as the Outbound list so counts always match).
+        $outboundQuery = Shipment::query();
+        $this->applyOutboundScope($outboundQuery, $branchId);
+        $outbound = $outboundQuery->count();
 
-        // In Transit: transfers in transit to this branch
+        // In Transit: cross-branch transfers in transit to this branch
         $inTransit = Shipment::query()
+            ->whereColumn('origin_branch_id', '!=', 'destination_branch_id')
             ->whereIn('status', [
                 CourierStatus::IN_TRANSIT,
                 CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
@@ -152,17 +147,27 @@ final class TransferController extends Controller
         }
         $inTransit = $inTransit->count();
 
-        // Received: arrived at this branch, ready for last-mile delivery
+        // Received: arrived at this branch, ready for last-mile delivery.
+        // Includes both the explicit received status and cross-branch parcels
+        // that auto-advanced to sorted_for_delivery AT the destination.
         $received = Shipment::query()
-            ->where('status', CourierStatus::RECEIVED_AT_DESTINATION_BRANCH);
+            ->whereColumn('origin_branch_id', '!=', 'destination_branch_id')
+            ->where(function ($q) {
+                $q->where('status', CourierStatus::RECEIVED_AT_DESTINATION_BRANCH)
+                    ->orWhere(function ($q2) {
+                        $q2->where('status', CourierStatus::SORTED_FOR_DELIVERY)
+                            ->whereColumn('current_branch_id', '=', 'destination_branch_id');
+                    });
+            });
         
         if ($branchId !== 0) {
             $received->where('destination_branch_id', $branchId);
         }
         $received = $received->count();
 
-        // Completed: delivered to final destination
+        // Completed: cross-branch parcels delivered at destination.
         $completed = Shipment::query()
+            ->whereColumn('origin_branch_id', '!=', 'destination_branch_id')
             ->where('status', CourierStatus::DELIVERED);
         
         if ($branchId !== 0) {
@@ -186,18 +191,12 @@ final class TransferController extends Controller
         $user = $request->user();
         $branchId = $this->getBranchScope($user);
 
-        $outbound = Shipment::query()
-            ->where('status', CourierStatus::SORTED_FOR_TRANSFER);
-        
-        if ($branchId !== 0) {
-            $outbound->where(function ($q) use ($branchId) {
-                $q->where('origin_branch_id', $branchId)
-                    ->orWhere('current_branch_id', $branchId);
-            });
-        }
-        $outbound = $outbound->count();
+        $outboundQuery = Shipment::query();
+        $this->applyOutboundScope($outboundQuery, $branchId);
+        $outbound = $outboundQuery->count();
 
         $inbound = Shipment::query()
+            ->whereColumn('origin_branch_id', '!=', 'destination_branch_id')
             ->whereIn('status', [
                 CourierStatus::IN_TRANSIT,
                 CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
@@ -234,10 +233,20 @@ final class TransferController extends Controller
             'currentBranch',
         ]);
 
-        // ONLY cross-branch transfers received at this branch
-        $query->where('status', CourierStatus::RECEIVED_AT_DESTINATION_BRANCH)
-            ->where('destination_branch_id', $branchId)
-            ->whereColumn('origin_branch_id', '!=', 'destination_branch_id'); // Cross-branch only!
+        // ONLY cross-branch transfers received at this branch. Includes parcels
+        // that auto-advanced to sorted_for_delivery once received at destination.
+        $query->whereColumn('origin_branch_id', '!=', 'destination_branch_id') // Cross-branch only!
+            ->where(function ($q) {
+                $q->where('status', CourierStatus::RECEIVED_AT_DESTINATION_BRANCH)
+                    ->orWhere(function ($q2) {
+                        $q2->where('status', CourierStatus::SORTED_FOR_DELIVERY)
+                            ->whereColumn('current_branch_id', '=', 'destination_branch_id');
+                    });
+            });
+
+        if ($branchId !== 0) {
+            $query->where('destination_branch_id', $branchId);
+        }
 
         if ($request->filled('search')) {
             $search = trim($request->string('search')->toString());
@@ -272,8 +281,11 @@ final class TransferController extends Controller
 
         // ONLY cross-branch transfers (delivered to this branch from another branch)
         $query->where('status', CourierStatus::DELIVERED)
-            ->where('destination_branch_id', $branchId)
             ->whereColumn('origin_branch_id', '!=', 'destination_branch_id'); // Cross-branch only!
+
+        if ($branchId !== 0) {
+            $query->where('destination_branch_id', $branchId);
+        }
 
         if ($request->filled('search')) {
             $search = trim($request->string('search')->toString());
@@ -327,21 +339,25 @@ final class TransferController extends Controller
             'destinationBranch',
         ]);
 
-        // All transfer-related statuses
-        $query->whereIn('status', [
-            CourierStatus::SORTED_FOR_TRANSFER,
-            CourierStatus::IN_TRANSIT,
-            CourierStatus::RECEIVED_AT_DESTINATION_BRANCH,
-            CourierStatus::SORTED_FOR_DELIVERY,
-            CourierStatus::DELIVERED,
-            CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
-            CourierStatus::RECEIVED_AT_TRANSIT_HUB,
-        ])
-        ->where(function ($q) use ($branchId) {
-            // Show transfers that originate from or are destined for this branch
-            $q->where('origin_branch_id', $branchId)
-                ->orWhere('destination_branch_id', $branchId);
-        });
+        // All transfer-related statuses, cross-branch only.
+        $query->whereColumn('origin_branch_id', '!=', 'destination_branch_id')
+            ->whereIn('status', [
+                CourierStatus::SORTED_FOR_TRANSFER,
+                CourierStatus::IN_TRANSIT,
+                CourierStatus::RECEIVED_AT_DESTINATION_BRANCH,
+                CourierStatus::SORTED_FOR_DELIVERY,
+                CourierStatus::DELIVERED,
+                CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
+                CourierStatus::RECEIVED_AT_TRANSIT_HUB,
+            ]);
+
+        if ($branchId !== 0) {
+            $query->where(function ($q) use ($branchId) {
+                // Show transfers that originate from or are destined for this branch
+                $q->where('origin_branch_id', $branchId)
+                    ->orWhere('destination_branch_id', $branchId);
+            });
+        }
 
         if ($request->filled('search')) {
             $search = trim($request->string('search')->toString());
@@ -417,24 +433,11 @@ final class TransferController extends Controller
         $branchId = $this->getBranchScope($user);
         $shipmentIds = array_values(array_unique(array_map(fn($id) => (int) $id, $data['shipment_ids'])));
 
-        // Verify shipments are ready for transfer (sorted_for_transfer or similar statuses)
-        $available = Shipment::query()
-            ->whereIn('id', $shipmentIds)
-            ->where(function ($q) {
-                // Accept shipments that are sorted for transfer, or picked up and ready
-                $q->where('status', CourierStatus::SORTED_FOR_TRANSFER)
-                    ->orWhere('status', CourierStatus::SORTED_FOR_DELIVERY)
-                    ->orWhere('status', CourierStatus::PICKED_UP)
-                    ->orWhere('status', CourierStatus::RECEIVED_AT_ORIGIN_BRANCH);
-            })
-            ->where(function ($q) use ($branchId) {
-                if ($branchId !== 0) {
-                    $q->where('origin_branch_id', $branchId)
-                        ->orWhere('current_branch_id', $branchId);
-                }
-            })
-            ->pluck('id')
-            ->all();
+        // Verify shipments are cross-branch parcels ready for transfer, using
+        // the exact same scope as the Outbound board.
+        $availableQuery = Shipment::query()->whereIn('id', $shipmentIds);
+        $this->applyOutboundScope($availableQuery, $branchId);
+        $available = $availableQuery->pluck('id')->all();
 
         $skipped = array_diff($shipmentIds, $available);
 
@@ -480,6 +483,42 @@ final class TransferController extends Controller
             return ApiResponse::success($result, 'Transfer received and queued for last-mile delivery.');
         } catch (\Exception $e) {
             return ApiResponse::error($e->getMessage(), 422);
+        }
+    }
+
+    /**
+     * Apply the OUTBOUND scope to a query: cross-branch parcels that are ready
+     * to leave the origin branch. Shared by index() and stats()/summary() so
+     * the board count always matches the list.
+     *
+     * "Ready" = one of the pre-dispatch statuses AND origin != destination.
+     * For SORTED_FOR_DELIVERY we additionally require the parcel to still be at
+     * its origin (current_branch_id is null or equals origin) so parcels that
+     * already arrived at the destination are NOT shown as outbound again.
+     */
+    private function applyOutboundScope($query, int $branchId): void
+    {
+        $query->whereColumn('origin_branch_id', '!=', 'destination_branch_id')
+            ->where(function ($q) {
+                $q->whereIn('status', [
+                    CourierStatus::SORTED_FOR_TRANSFER,
+                    CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+                    CourierStatus::PICKED_UP,
+                ])->orWhere(function ($q2) {
+                    // Mis-sorted cross-branch parcel still at its origin.
+                    $q2->where('status', CourierStatus::SORTED_FOR_DELIVERY)
+                        ->where(function ($q3) {
+                            $q3->whereNull('current_branch_id')
+                                ->orWhereColumn('current_branch_id', '=', 'origin_branch_id');
+                        });
+                });
+            });
+
+        if ($branchId !== 0) {
+            $query->where(function ($q) use ($branchId) {
+                $q->where('origin_branch_id', $branchId)
+                    ->orWhere('current_branch_id', $branchId);
+            });
         }
     }
 

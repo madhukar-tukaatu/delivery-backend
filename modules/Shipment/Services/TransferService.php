@@ -40,15 +40,20 @@ final class TransferService
         return DB::transaction(function () use ($shipment, $actorId): Shipment {
             $shipment = Shipment::query()->lockForUpdate()->findOrFail($shipment->id);
 
-            if ($shipment->status !== CourierStatus::SORTED_FOR_TRANSFER) {
+            if (! $this->isDispatchable($shipment)) {
                 throw ValidationException::withMessages([
-                    'shipment' => ['Only a shipment sorted for transfer can be dispatched.'],
+                    'shipment' => ['This parcel is not a cross-branch transfer ready for dispatch.'],
                 ]);
             }
 
             $old = $shipment->status;
             $shipment->status = CourierStatus::IN_TRANSIT;
             $shipment->merchant_status = CourierStatus::merchantStatus(CourierStatus::IN_TRANSIT);
+
+            // Record the transfer-specific stage so all views agree.
+            if ($this->shipmentHasColumn('transfer_status')) {
+                $shipment->transfer_status = CourierStatus::IN_TRANSIT;
+            }
 
             // Parcel is en route: it is between branches now.
             if ($this->shipmentHasColumn('current_branch_id')) {
@@ -75,6 +80,45 @@ final class TransferService
 
             return $fresh;
         });
+    }
+
+    /**
+     * A parcel can be dispatched on a transfer when it is a genuine cross-branch
+     * shipment (origin node != destination node) still sitting at its origin in
+     * one of the pre-dispatch statuses. This tolerates legacy / mis-sorted
+     * parcels that ended up at SORTED_FOR_DELIVERY while being cross-branch.
+     */
+    private function isDispatchable(Shipment $shipment): bool
+    {
+        $originNode = $shipment->origin_sub_branch_id ?? $shipment->origin_branch_id;
+        $destinationNode = $shipment->destination_sub_branch_id ?? $shipment->destination_branch_id;
+
+        // Must be cross-branch.
+        if ($originNode === null || $destinationNode === null) {
+            return false;
+        }
+        if ((int) $originNode === (int) $destinationNode) {
+            return false;
+        }
+
+        // Fast path: the canonical ready-to-transfer status.
+        if (in_array($shipment->status, [
+            CourierStatus::SORTED_FOR_TRANSFER,
+            CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+            CourierStatus::PICKED_UP,
+        ], true)) {
+            return true;
+        }
+
+        // Mis-sorted cross-branch parcel that is still at its origin.
+        if ($shipment->status === CourierStatus::SORTED_FOR_DELIVERY) {
+            $atOrigin = $shipment->current_branch_id === null
+                || (int) $shipment->current_branch_id === (int) $shipment->origin_branch_id;
+
+            return $atOrigin;
+        }
+
+        return false;
     }
 
     /**
@@ -124,6 +168,10 @@ final class TransferService
             $shipment->status = CourierStatus::RECEIVED_AT_DESTINATION_BRANCH;
             $shipment->merchant_status = CourierStatus::merchantStatus(CourierStatus::RECEIVED_AT_DESTINATION_BRANCH);
 
+            if ($this->shipmentHasColumn('transfer_status')) {
+                $shipment->transfer_status = CourierStatus::RECEIVED_AT_DESTINATION_BRANCH;
+            }
+
             if ($this->shipmentHasColumn('current_branch_id')) {
                 $shipment->current_branch_id = $shipment->destination_branch_id;
             }
@@ -165,6 +213,14 @@ final class TransferService
             $old = $shipment->status;
             $shipment->status = CourierStatus::SORTED_FOR_DELIVERY;
             $shipment->merchant_status = CourierStatus::merchantStatus(CourierStatus::SORTED_FOR_DELIVERY);
+
+            // Keep the transfer stage pinned to "received": the parcel has
+            // completed its transfer leg and is now a local last-mile job at
+            // the destination. This makes the transfer_stage accessor and the
+            // Received tab agree even though the raw status is sorted_for_delivery.
+            if ($this->shipmentHasColumn('transfer_status')) {
+                $shipment->transfer_status = CourierStatus::RECEIVED_AT_DESTINATION_BRANCH;
+            }
 
             if ($this->shipmentHasColumn('sort_mode')) {
                 $shipment->sort_mode = ShipmentSortingService::MODE_LAST_MILE;

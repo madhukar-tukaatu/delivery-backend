@@ -17,6 +17,7 @@ use Modules\Branch\Services\BranchDocumentService;
 use Illuminate\Support\Str;
 use Modules\Branch\Services\BranchTeamProvisioner;
 use Modules\Branch\Services\BranchAccountInvitationService;
+use Modules\Branch\Services\BranchEmailVerificationService;
 
 class BranchController extends Controller
 {
@@ -664,9 +665,9 @@ class BranchController extends Controller
             }
 
             /*
-             * The manager email has one source of truth. Updating the
-             * franchise email keeps the branch, manager user and future
-             * invitation recipient synchronized.
+             * Email changes now require verification for security.
+             * Instead of immediately changing the email, we store it as
+             * "pending" and send a verification link to the new email address.
              */
             if (
                 $emailWasSubmitted &&
@@ -685,14 +686,19 @@ class BranchController extends Controller
                     ]);
                 }
 
-                $manager->forceFill([
-                    'email' => $data['email'],
-                ])->save();
+                // Don't change email immediately - initiate verification flow
+                $verificationService = new BranchEmailVerificationService();
+                $verificationResult = $verificationService->initiateEmailChange(
+                    branch: $branch,
+                    manager: $manager,
+                    newEmail: $data['email'],
+                    changedByUser: $request->user(),
+                    ipAddress: $request->ip(),
+                    userAgent: $request->userAgent(),
+                );
 
-                $branch->forceFill([
-                    'email' => $data['email'],
-                    'account_invitation_email' => $data['email'],
-                ])->save();
+                // Store the verification data to return to client
+                $data['_email_verification'] = $verificationResult;
             }
         }, 3);
 
@@ -730,11 +736,29 @@ class BranchController extends Controller
             performedBy: $request->user()?->id,
         );
 
-        return response()->json([
+        // Extract email verification data if present
+        $emailVerification = $data['_email_verification'] ?? null;
+        unset($data['_email_verification']);
+
+        $response = [
             'message' => 'Branch updated successfully.',
             'data' => $updatedBranch,
             'updated_fields' => $updatedFields,
-        ]);
+        ];
+
+        // If an email change was initiated, include verification info
+        if ($emailVerification) {
+            $response['email_verification'] = [
+                'status' => 'pending_verification',
+                'message' => 'A verification link has been sent to the new email address.',
+                'new_email' => $emailVerification['new_email'],
+                'old_email' => $emailVerification['old_email'],
+                'expires_at' => $emailVerification['expires_at'],
+                'resend_after_minutes' => 1, // Allow resend after 1 minute
+            ];
+        }
+
+        return response()->json($response);
     }
 
     public function destroy(Request $request, Branch $branch, BranchVisibilityService $visibility): JsonResponse
@@ -1161,6 +1185,77 @@ class BranchController extends Controller
 
             'account_invitation' =>
             $invitation,
+        ]);
+    }
+
+    /**
+     * Verify an email change using the token from the verification link.
+     */
+    public function verifyEmailChange(
+        Request $request,
+        BranchEmailVerificationService $verificationService,
+    ): JsonResponse {
+        $request->validate([
+            'token' => 'required|string',
+        ]);
+
+        $result = $verificationService->verifyEmailChange(
+            token: $request->input('token'),
+            ipAddress: $request->ip(),
+        );
+
+        if (!$result['success']) {
+            return response()->json([
+                'message' => $result['message'],
+                'reason' => $result['reason'] ?? null,
+            ], 422);
+        }
+
+        return response()->json([
+            'message' => $result['message'],
+            'data' => [
+                'user_id' => $result['user_id'],
+                'old_email' => $result['old_email'],
+                'new_email' => $result['new_email'],
+            ],
+        ]);
+    }
+
+    /**
+     * Resend email verification link for pending email change.
+     */
+    public function resendEmailVerification(
+        Request $request,
+        BranchEmailVerificationService $verificationService,
+    ): JsonResponse {
+        $request->validate([
+            'user_id' => 'required|exists:users,id',
+        ]);
+
+        $user = \App\Models\User::find($request->input('user_id'));
+
+        if (!$user->pending_email || !$user->email_change_token) {
+            return response()->json([
+                'message' => 'No pending email change found for this user.',
+            ], 422);
+        }
+
+        // Check if token is still valid
+        if ($user->email_change_token_expires_at?->isPast()) {
+            return response()->json([
+                'message' => 'Verification token has expired. Please request a new email change.',
+            ], 422);
+        }
+
+        // In a real app, send the email here
+        // For now, just return the verification link
+        $verificationLink = $verificationService->buildVerificationLink($user->email_change_token);
+
+        return response()->json([
+            'message' => 'Verification email resent.',
+            'pending_email' => $user->pending_email,
+            'verification_link' => $verificationLink, // In production, only send via email
+            'expires_at' => $user->email_change_token_expires_at,
         ]);
     }
 

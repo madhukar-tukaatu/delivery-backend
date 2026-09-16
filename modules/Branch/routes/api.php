@@ -130,6 +130,22 @@ Route::prefix('v1/admin')
             )->name('branches.resend-account-invitation');
 
             Route::post(
+                'branches/verify-email-change',
+                [
+                    BranchController::class,
+                    'verifyEmailChange',
+                ]
+            )->name('branches.verify-email-change');
+
+            Route::post(
+                'branches/resend-email-verification',
+                [
+                    BranchController::class,
+                    'resendEmailVerification',
+                ]
+            )->name('branches.resend-email-verification');
+
+            Route::post(
                 'branches/{branch}/approve',
                 [
                     BranchController::class,

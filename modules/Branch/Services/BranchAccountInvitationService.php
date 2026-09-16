@@ -152,7 +152,7 @@ final class BranchAccountInvitationService
                     invitationAttempt:
                         $attempt
                 )
-                    ->onQueue('emails')
+                    ->onQueue('default')
                     ->afterCommit();
 
                 return $this->payload(

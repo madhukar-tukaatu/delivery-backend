@@ -87,12 +87,16 @@ final class SetInitialPasswordController extends Controller
         }
 
         /*
-         * When setup was already completed, send the
-         * manager directly to the login page.
+         * When setup was already completed AND status is not QUEUED,
+         * send the manager directly to the login page.
+         * 
+         * If status is QUEUED (email was just changed), allow setup to continue
+         * so they can set a new password for the new email.
          */
         if (
-            $user->account_setup_completed_at !==
-            null
+            $user->account_setup_completed_at !== null &&
+            $branch->account_invitation_status !==
+            BranchAccountInvitationService::STATUS_QUEUED
         ) {
             return response()->json([
                 'success' => true,

@@ -28,6 +28,8 @@ Route::prefix('v1/admin')
             ])
             ->name('staff.index');
 
+        // NOTE: Roles route MUST come before staff/{staff} to avoid matching {staff} = "roles"
+        // Using /roles as sub-route to avoid conflict with {staff} parameter
         Route::get(
             'staff/roles',
             [StaffController::class, 'roles']
@@ -37,6 +39,8 @@ Route::prefix('v1/admin')
             ])
             ->name('staff.roles');
 
+        // NOTE: Staff show route uses where constraint to only match numeric IDs
+        // This prevents "roles" from being matched as {staff}
         Route::get(
             'staff/{staff}',
             [StaffController::class, 'show']
@@ -44,7 +48,8 @@ Route::prefix('v1/admin')
             ->middleware([
                 'route.permission',
             ])
-            ->name('staff.show');
+            ->name('staff.show')
+            ->where('staff', '[0-9]+');
 
         Route::post(
             'staff',
@@ -62,7 +67,8 @@ Route::prefix('v1/admin')
             ->middleware([
                 'route.permission',
             ])
-            ->name('staff.update');
+            ->name('staff.update')
+            ->where('staff', '[0-9]+');
 
         Route::patch(
             'staff/{staff}/toggle',
@@ -71,7 +77,8 @@ Route::prefix('v1/admin')
             ->middleware([
                 'route.permission',
             ])
-            ->name('staff.toggle');
+            ->name('staff.toggle')
+            ->where('staff', '[0-9]+');
 
         Route::delete(
             'staff/{staff}',
@@ -80,5 +87,6 @@ Route::prefix('v1/admin')
             ->middleware([
                 'route.permission',
             ])
-            ->name('staff.destroy');
+            ->name('staff.destroy')
+            ->where('staff', '[0-9]+');
     });

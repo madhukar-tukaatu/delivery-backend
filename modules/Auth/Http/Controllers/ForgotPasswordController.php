@@ -10,7 +10,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Password;
-use Illuminate\Support\Facades\URL;
+use Illuminate\Support\Facades\Mail;
 
 final class ForgotPasswordController extends Controller
 {
@@ -24,14 +24,14 @@ final class ForgotPasswordController extends Controller
             ],
         ]);
 
-        $user = User::query()
-            ->where('email', trim($request->email))
-            ->first();
+        $email = trim($request->email);
+        $user = User::query()->where('email', $email)->first();
 
+        // Check if user exists
         if (!$user) {
-            return ApiResponse::success(
-                null,
-                'If the email address exists, a password reset link has been sent.'
+            return ApiResponse::error(
+                'No account found with this email address.',
+                404
             );
         }
 
@@ -48,16 +48,16 @@ final class ForgotPasswordController extends Controller
 
         // Build frontend reset URL
         $frontendUrl = config('app.frontend_url', 'http://localhost:3000');
-        $resetUrl = rtrim($frontendUrl, '/') . '/reset-password?email=' . urlencode($user->email) . '&token=' . urlencode($token);
+        $resetUrl = rtrim($frontendUrl, '/') . '/reset-password?email=' . urlencode($email) . '&token=' . urlencode($token);
 
-        // Send password reset link via notification
-        $user->notify(
-            new \Modules\Auth\Notifications\SendPasswordResetLink($token)
+        // Send password reset link via Mailable directly
+        Mail::to($email, $user->name)->send(
+            new \Modules\Auth\Mail\PasswordResetLinkMail($user, $resetUrl)
         );
 
         return ApiResponse::success(
             null,
-            'If the email address exists, a password reset link has been sent.'
+            'A password reset link has been sent to your email address.'
         );
     }
 }

@@ -2,5 +2,8 @@
   "name": "Auth",
   "alias": "auth",
   "description": "Auth module for Tukaatu Express",
-  "active": true
+  "active": true,
+  "providers": [
+    "Modules\\Auth\\Providers\\AuthServiceProvider"
+  ]
 }

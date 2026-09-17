@@ -8,6 +8,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\Rules\Password as PasswordRule;
 use Modules\Access\Models\MenuItem;
 
 class AuthController extends Controller
@@ -85,6 +86,97 @@ class AuthController extends Controller
             $this->presentUser(
                 $request->user()
             )
+        );
+    }
+
+    public function profile(
+        Request $request
+    ): JsonResponse {
+        return ApiResponse::success(
+            $this->presentUser(
+                $request->user()
+            )
+        );
+    }
+
+    public function updateProfile(
+        Request $request
+    ): JsonResponse {
+        $user = $request->user();
+
+        $data = $request->validate([
+            'name' => [
+                'required',
+                'string',
+                'max:255',
+            ],
+
+            'phone' => [
+                'nullable',
+                'string',
+                'max:30',
+            ],
+        ]);
+
+        $user->update([
+            'name' => $data['name'],
+            'phone' => $data['phone'] ?? null,
+        ]);
+
+        return ApiResponse::success(
+            $this->presentUser($user->fresh()),
+            'Profile updated successfully.'
+        );
+    }
+
+    public function changePassword(
+        Request $request
+    ): JsonResponse {
+        $user = $request->user();
+
+        $data = $request->validate([
+            'current_password' => [
+                'required',
+                'string',
+            ],
+
+            'password' => [
+                'required',
+                'string',
+                'confirmed',
+                PasswordRule::min(8)
+                    ->letters()
+                    ->mixedCase()
+                    ->numbers(),
+            ],
+
+            'password_confirmation' => [
+                'required',
+                'string',
+            ],
+        ]);
+
+        if (!Hash::check($data['current_password'], $user->password)) {
+            return ApiResponse::error(
+                'The current password is incorrect.',
+                422
+            );
+        }
+
+        $user->update([
+            'password' => Hash::make($data['password']),
+        ]);
+
+        // Delete all existing tokens and create new one
+        $user->tokens()->delete();
+        $token = $user->createToken('dashboard')->plainTextToken;
+
+        return ApiResponse::success(
+            [
+                'token' => $token,
+                'user' => $this->presentUser($user->fresh()),
+            ],
+            'Password changed successfully. Please login with your new password.'
         );
     }
 

@@ -1,6 +1,8 @@
 <?php
 use Illuminate\Support\Facades\Route;
 use Modules\Auth\Http\Controllers\AuthController;
+use Modules\Auth\Http\Controllers\ForgotPasswordController;
+use Modules\Auth\Http\Controllers\ResetPasswordController;
 use Modules\Auth\Http\Controllers\SetInitialPasswordController;
 
 Route::prefix('v1/auth')
@@ -16,6 +18,13 @@ Route::prefix('v1/auth')
         Route::post('login', [AuthController::class, 'login'])
             ->name('login');
 
+        // Password reset routes
+        Route::post('forgot-password', ForgotPasswordController::class)
+            ->name('auth.forgot-password');
+
+        Route::post('reset-password', ResetPasswordController::class)
+            ->name('auth.reset-password');
+
         /*
         |--------------------------------------------------------------------------
         | Protected Authentication Routes
@@ -29,6 +38,16 @@ Route::prefix('v1/auth')
 
             Route::post('logout', [AuthController::class, 'logout'])
                 ->name('logout');
+
+            // Profile routes
+            Route::get('profile', [AuthController::class, 'profile'])
+                ->name('profile');
+
+            Route::put('profile', [AuthController::class, 'updateProfile'])
+                ->name('profile.update');
+
+            Route::post('profile/password', [AuthController::class, 'changePassword'])
+                ->name('profile.password');
         });
     });
 

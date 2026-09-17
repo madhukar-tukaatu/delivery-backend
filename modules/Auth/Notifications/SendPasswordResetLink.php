@@ -8,7 +8,6 @@ use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
 use Illuminate\Notifications\Notification;
-use Illuminate\Support\Facades\URL;
 
 class SendPasswordResetLink extends Notification implements ShouldQueue
 {
@@ -28,14 +27,9 @@ class SendPasswordResetLink extends Notification implements ShouldQueue
 
     public function toMail(object $notifiable): MailMessage
     {
-        $resetUrl = URL::temporarySignedRoute(
-            'password.reset',
-            now()->addMinutes(60),
-            [
-                'email' => $notifiable->email,
-                'token' => $this->token,
-            ]
-        );
+        // Build reset URL with query parameters
+        $frontendUrl = config('app.frontend_url', 'http://localhost:3000');
+        $resetUrl = rtrim($frontendUrl, '/') . '/reset-password?email=' . urlencode($notifiable->email) . '&token=' . urlencode($this->token);
 
         return (new MailMessage())
             ->subject('Reset Your Password')

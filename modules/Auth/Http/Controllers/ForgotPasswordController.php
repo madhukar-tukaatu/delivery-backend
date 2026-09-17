@@ -6,11 +6,10 @@ namespace Modules\Auth\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
-use App\Notifications\StaffAccountUpdatedNotification;
+use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Password;
-use Illuminate\Support\Str;
 
 final class ForgotPasswordController extends Controller
 {
@@ -43,26 +42,21 @@ final class ForgotPasswordController extends Controller
             );
         }
 
-        // Generate a token for password reset
-        $token = Str::random(60);
-        
-        // Store the token in password_reset_tokens table
-        $passwordReset = \DB::table('password_reset_tokens')->updateOrInsert(
-            ['email' => $user->email],
-            [
-                'token' => hash('sha256', $token),
-                'created_at' => now(),
-            ]
+        // Send password reset link using Laravel's built-in Password facade
+        $status = Password::broker()->sendResetLink(
+            ['email' => $user->email]
         );
 
-        // Send password reset notification
-        $user->notify(
-            new \Modules\Auth\Notifications\SendPasswordResetLink($token)
-        );
+        if ($status === Password::RESET_LINK_SENT) {
+            return ApiResponse::success(
+                null,
+                'If the email address exists, a password reset link has been sent.'
+            );
+        }
 
-        return ApiResponse::success(
-            null,
-            'If the email address exists, a password reset link has been sent.'
+        return ApiResponse::error(
+            'Password reset link could not be sent.',
+            500
         );
     }
 }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Modules\Staff\Services;
 
 use App\Models\User;
+use App\Notifications\StaffAccountUpdatedNotification;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Hash;
 use Spatie\Permission\Models\Role;
@@ -246,6 +247,10 @@ final class StaffService
                 $editor->branch_id;
         }
 
+        $oldName = $staff->name;
+        $oldEmail = $staff->email;
+        $oldPassword = $staff->password;
+
         $staff->name =
             $data['name'];
 
@@ -255,6 +260,7 @@ final class StaffService
         $staff->phone =
             $data['phone'] ?? null;
 
+        $passwordChanged = false;
         if (
             ! empty(
                 $data['password']
@@ -264,6 +270,7 @@ final class StaffService
                 Hash::make(
                     $data['password']
                 );
+            $passwordChanged = true;
         }
 
         if (
@@ -281,6 +288,32 @@ final class StaffService
         $staff->syncRoles([
             $roleName,
         ]);
+
+        // Send notification if email or password was changed
+        $changes = [];
+        
+        if ($oldEmail !== $staff->email) {
+            $changes['email'] = [
+                'old' => $oldEmail,
+                'new' => $staff->email,
+            ];
+        }
+        
+        if ($passwordChanged) {
+            $changes['password'] = [
+                'changed' => true,
+            ];
+        }
+        
+        if ($oldName !== $data['name']) {
+            $changes['name'] = $data['name'];
+        }
+        
+        if (!empty($changes)) {
+            $staff->notify(
+                new StaffAccountUpdatedNotification($changes)
+            );
+        }
 
         return $staff->load([
             'roles:id,name',

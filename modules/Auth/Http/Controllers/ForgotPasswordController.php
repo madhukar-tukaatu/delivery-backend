@@ -10,6 +10,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Facades\URL;
 
 final class ForgotPasswordController extends Controller
 {
@@ -42,21 +43,21 @@ final class ForgotPasswordController extends Controller
             );
         }
 
-        // Send password reset link using Laravel's built-in Password facade
-        $status = Password::broker()->sendResetLink(
-            ['email' => $user->email]
+        // Create password reset token
+        $token = Password::broker()->createToken($user);
+
+        // Build frontend reset URL
+        $frontendUrl = config('app.frontend_url', 'http://localhost:3000');
+        $resetUrl = rtrim($frontendUrl, '/') . '/reset-password?email=' . urlencode($user->email) . '&token=' . urlencode($token);
+
+        // Send password reset link via notification
+        $user->notify(
+            new \Modules\Auth\Notifications\SendPasswordResetLink($token)
         );
 
-        if ($status === Password::RESET_LINK_SENT) {
-            return ApiResponse::success(
-                null,
-                'If the email address exists, a password reset link has been sent.'
-            );
-        }
-
-        return ApiResponse::error(
-            'Password reset link could not be sent.',
-            500
+        return ApiResponse::success(
+            null,
+            'If the email address exists, a password reset link has been sent.'
         );
     }
 }

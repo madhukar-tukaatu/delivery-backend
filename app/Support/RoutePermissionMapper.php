@@ -37,6 +37,11 @@ class RoutePermissionMapper
         $module = self::mapModule($module);
         $action = self::mapAction($action);
 
+        // Handle backups module separately
+        if ($module === 'backups') {
+            return 'backups.' . $action;
+        }
+
         return "{$module}.{$action}";
     }
 
@@ -81,6 +86,8 @@ class RoutePermissionMapper
 
             'create',
             'store' => 'create',
+
+            'download' => 'download',
 
             'edit',
             'update' => 'update',

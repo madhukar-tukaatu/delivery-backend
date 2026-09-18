@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\Setting\Http\Controllers\BackupController;
 use Modules\Setting\Http\Controllers\SettingController;
 
 /*
@@ -31,4 +32,27 @@ Route::prefix('v1/admin')
             Route::post('settings', [SettingController::class, 'store'])
                 ->name('settings.store');
         });
+
+        /*
+        |--------------------------------------------------------------------------
+        | Backup Routes
+        |--------------------------------------------------------------------------
+        | Permissions required:
+        | backups.view - List backups
+        | backups.create - Create backup
+        | backups.download - Download backup
+        | backups.delete - Delete backup
+        */
+
+        Route::get('backups', [BackupController::class, 'index'])
+            ->name('backups.index');
+
+        Route::post('backups', [BackupController::class, 'store'])
+            ->name('backups.store');
+
+        Route::get('backups/{filename}', [BackupController::class, 'download'])
+            ->name('backups.download');
+
+        Route::delete('backups/{filename}', [BackupController::class, 'destroy'])
+            ->name('backups.destroy');
     });

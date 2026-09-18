@@ -45,7 +45,8 @@ Route::prefix('v1/admin')
         */
 
         Route::get('backups', [BackupController::class, 'index'])
-            ->name('backups.index');
+            ->name('backups.index')
+            ->adminMenu('Backups', '/admin/backups', 'database', 161);
 
         Route::post('backups', [BackupController::class, 'store'])
             ->name('backups.store');

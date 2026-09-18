@@ -55,4 +55,7 @@ Route::prefix('v1/admin')
 
         Route::delete('backups/{filename}', [BackupController::class, 'destroy'])
             ->name('backups.destroy');
+
+        Route::post('backups/cleanup', [BackupController::class, 'cleanup'])
+            ->name('backups.cleanup');
     });

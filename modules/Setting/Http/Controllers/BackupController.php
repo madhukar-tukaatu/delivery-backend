@@ -7,6 +7,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\File;
 
 class BackupController extends Controller
 {
@@ -189,5 +190,46 @@ class BackupController extends Controller
     {
         $ext = strtolower(pathinfo($file, PATHINFO_EXTENSION));
         return $ext === 'gz' ? 'sql.gz' : $ext;
+    }
+
+    /**
+     * Delete backups older than specified days
+     */
+    public function cleanup(Request $request)
+    {
+        $request->validate([
+            'days' => ['nullable', 'integer', 'min:1', 'max:365'],
+        ]);
+
+        $days = $request->get('days', 7);
+        $backupDir = storage_path('app/backups');
+
+        if (!File::exists($backupDir)) {
+            return ApiResponse::success([
+                'message' => 'No backup directory found',
+                'deleted' => 0,
+            ]);
+        }
+
+        $files = glob($backupDir . '/*.{sql,sql.gz}', GLOB_BRACE);
+        $cutOffTime = time() - ($days * 24 * 60 * 60);
+        $deleted = 0;
+
+        foreach ($files as $file) {
+            if (filemtime($file) < $cutOffTime) {
+                try {
+                    unlink($file);
+                    $deleted++;
+                } catch (\Exception $e) {
+                    // Skip files that can't be deleted
+                }
+            }
+        }
+
+        return ApiResponse::success([
+            'message' => 'Old backups cleaned up',
+            'days_retained' => $days,
+            'deleted' => $deleted,
+        ]);
     }
 }

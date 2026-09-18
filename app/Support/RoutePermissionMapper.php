@@ -95,6 +95,8 @@ class RoutePermissionMapper
             'destroy',
             'delete' => 'delete',
 
+            'cleanup' => 'cleanup',
+
             'toggle',
             'activate',
             'deactivate',

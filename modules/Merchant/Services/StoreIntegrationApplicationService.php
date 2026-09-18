@@ -2,6 +2,7 @@
 
 namespace Modules\Merchant\Services;
 
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
@@ -9,6 +10,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Modules\Merchant\Models\Merchant;
+use Modules\Merchant\Models\MerchantChangeRequest;
 use Modules\Merchant\Models\MerchantDocument;
 use Modules\Merchant\Models\MerchantPickupLocation;
 use Modules\Routing\Services\BranchLocatorService;
@@ -1584,3 +1586,177 @@ class StoreIntegrationApplicationService
         return $code;
     }
 }
+
+
+    /**
+     * Submit a change request for an existing Store Manager merchant.
+     * 
+     * Store Manager resubmits the FULL payload (like initial submission).
+     * System detects what changed and automatically determines change_type.
+     * 
+     * @param string $externalStoreId
+     * @param array $data Full submission payload
+     * @return array ['change_request' => MerchantChangeRequest, 'merchant' => Merchant]
+     */
+    public function submitMerchantChangeRequest(
+        string $externalStoreId,
+        array $data
+    ): array {
+        return DB::transaction(function () use ($externalStoreId, $data) {
+            // Find merchant by external store ID
+            $merchant = Merchant::where('external_store_id', $externalStoreId)
+                ->where('application_source', Merchant::SOURCE_STORE_MANAGER)
+                ->firstOrFail();
+
+            // Import the change request service
+            $changeRequestService = app(MerchantChangeRequestService::class);
+
+            // Create a fake user for the store manager
+            $storeManagerUser = User::where('merchant_id', $merchant->id)
+                ->where('email', 'like', 'store-manager%')
+                ->first();
+            
+            if (!$storeManagerUser) {
+                $storeManagerUser = User::create([
+                    'name' => 'Store Manager',
+                    'email' => 'store-manager-' . $externalStoreId . '@tukaatu.local',
+                    'password' => bcrypt(Str::random(40)),
+                    'merchant_id' => $merchant->id,
+                ]);
+            }
+
+            // Detect what changed from the full payload
+            $changeType = $this->detectChangeType($merchant, $data);
+
+            // Extract only the changed fields
+            $changeData = $this->extractChangeData($merchant, $data, $changeType);
+
+            // Handle document downloads if needed
+            if ($changeType === 'documents' && !empty($data['documents'])) {
+                $changeData['documents'] = [];
+                foreach ($data['documents'] as $docType => $docArray) {
+                    if (!is_array($docArray)) continue;
+                    
+                    foreach ($docArray as $doc) {
+                        if (isset($doc['url'])) {
+                            try {
+                                $path = $this->downloadAndStoreDocument(
+                                    url: $doc['url'],
+                                    type: $docType,
+                                    merchant: $merchant
+                                );
+                                $changeData['documents'][] = [
+                                    'type' => $docType,
+                                    'path' => $path,
+                                ];
+                            } catch (Throwable) {
+                                // Continue if document download fails
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Submit change request
+            $changeRequest = $changeRequestService->submitChangeRequest(
+                merchant: $merchant,
+                requestedByUser: $storeManagerUser,
+                changeType: $changeType,
+                data: $changeData
+            );
+
+            return [
+                'change_request' => $changeRequest,
+                'merchant' => $merchant->fresh(),
+            ];
+        });
+    }
+
+    /**
+     * Detect what type of change this is by comparing current merchant data with submitted data.
+     */
+    private function detectChangeType(Merchant $merchant, array $data): string
+    {
+        $locationChanged = false;
+        $businessChanged = false;
+        $bankChanged = false;
+        $documentsChanged = false;
+
+        // Check location
+        if (isset($data['pickup_location'])) {
+            $loc = $data['pickup_location'];
+            if (($loc['latitude'] ?? null) != $merchant->pickup_lat ||
+                ($loc['longitude'] ?? null) != $merchant->pickup_lng ||
+                ($loc['address'] ?? null) != $merchant->pickup_address) {
+                $locationChanged = true;
+            }
+        }
+
+        // Check business details
+        if (isset($data['business'])) {
+            $bus = $data['business'];
+            if (($bus['name'] ?? null) != $merchant->name ||
+                ($bus['type'] ?? null) != $merchant->business_type ||
+                ($bus['pan_vat_number'] ?? null) != $merchant->pan_vat_number) {
+                $businessChanged = true;
+            }
+        }
+
+        // Check bank details
+        if (isset($data['bank'])) {
+            $bank = $data['bank'];
+            if (($bank['name'] ?? null) != $merchant->bank_name ||
+                ($bank['account_name'] ?? null) != $merchant->bank_account_name ||
+                ($bank['account_number'] ?? null) != $merchant->bank_account_number) {
+                $bankChanged = true;
+            }
+        }
+
+        // Check documents
+        if (!empty($data['documents'])) {
+            $documentsChanged = true;
+        }
+
+        // Return change type (prioritize location, then documents, then business, then bank)
+        if ($locationChanged) return 'location';
+        if ($documentsChanged) return 'documents';
+        if ($businessChanged) return 'business_profile';
+        if ($bankChanged) return 'bank_details';
+        
+        return 'location'; // Default
+    }
+
+    /**
+     * Extract only the changed fields based on change type.
+     */
+    private function extractChangeData(Merchant $merchant, array $data, string $changeType): array
+    {
+        $extracted = [
+            'reason' => $data['reason'] ?? 'Resubmitted merchant details',
+        ];
+
+        if ($changeType === 'location' && isset($data['pickup_location'])) {
+            $loc = $data['pickup_location'];
+            $extracted['address'] = $loc['address'] ?? $merchant->pickup_address;
+            $extracted['city'] = $loc['city'] ?? $merchant->pickup_city;
+            $extracted['area'] = $loc['area'] ?? $merchant->pickup_area;
+            $extracted['latitude'] = $loc['latitude'] ?? $merchant->pickup_lat;
+            $extracted['longitude'] = $loc['longitude'] ?? $merchant->pickup_lng;
+        } elseif ($changeType === 'business_profile' && isset($data['business'])) {
+            $bus = $data['business'];
+            $extracted['business_name'] = $bus['name'] ?? $merchant->name;
+            $extracted['business_type'] = $bus['type'] ?? $merchant->business_type;
+            $extracted['pan_vat_number'] = $bus['pan_vat_number'] ?? $merchant->pan_vat_number;
+            $extracted['website_url'] = $bus['website'] ?? $merchant->website_url;
+        } elseif ($changeType === 'bank_details' && isset($data['bank'])) {
+            $bank = $data['bank'];
+            $extracted['bank_name'] = $bank['name'] ?? $merchant->bank_name;
+            $extracted['bank_account_name'] = $bank['account_name'] ?? $merchant->bank_account_name;
+            $extracted['bank_account_number'] = $bank['account_number'] ?? $merchant->bank_account_number;
+            $extracted['bank_branch'] = $bank['branch'] ?? $merchant->bank_branch;
+        } elseif ($changeType === 'documents') {
+            $extracted['documents'] = $data['documents'] ?? [];
+        }
+
+        return $extracted;
+    }

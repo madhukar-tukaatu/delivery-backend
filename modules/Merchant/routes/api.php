@@ -3,8 +3,10 @@
 use Illuminate\Support\Facades\Route;
 
 use Modules\Merchant\Http\Controllers\AdminMerchantApplicationController;
+use Modules\Merchant\Http\Controllers\AdminMerchantChangeRequestController;
 use Modules\Merchant\Http\Controllers\ApiLogController;
 use Modules\Merchant\Http\Controllers\MerchantApiKeyController;
+use Modules\Merchant\Http\Controllers\MerchantChangeRequestController;
 use Modules\Merchant\Http\Controllers\MerchantController;
 use Modules\Merchant\Http\Controllers\MerchantDocumentController;
 use Modules\Merchant\Http\Controllers\MerchantOnboardingController;
@@ -62,7 +64,7 @@ Route::prefix('v1/merchant')
 | Store Manager Integration Routes
 |--------------------------------------------------------------------------
 |
-| Store Manager submits merchant integration applications.
+| Store Manager submits merchant integration applications and change requests.
 |
 */
 
@@ -82,6 +84,31 @@ Route::prefix('v1/store-integrations')
                 '[A-Za-z0-9._-]+'
             )
             ->name('applications.submit');
+
+        /*
+        |--------------------------------------------------------------------------
+        | Store Manager Change Request Routes
+        |--------------------------------------------------------------------------
+        |
+        | Store managers can request changes to their merchant details:
+        | - Location changes
+        | - Document updates
+        | - Bank details changes
+        | - Business profile updates
+        |
+        | Pattern: POST /api/v1/store-integrations/merchants/{externalStoreId}/change-request/submit
+        |
+        */
+
+        Route::post(
+            'merchants/{externalStoreId}/change-request/submit',
+            [StoreIntegrationApplicationController::class, 'submitChangeRequest']
+        )
+            ->where(
+                'externalStoreId',
+                '[A-Za-z0-9._-]+'
+            )
+            ->name('change-request.submit');
     });
 
 
@@ -189,6 +216,43 @@ Route::prefix('v1/admin')
                 'merchant-applications/{merchant}/retry-callback',
                 [AdminMerchantApplicationController::class, 'retryCallback']
             )->name('merchant-applications.retry-callback');
+
+
+            /*
+            |--------------------------------------------------------------------------
+            | Merchant Change Requests (Location, Documents, Bank Details, etc.)
+            |--------------------------------------------------------------------------
+            */
+
+            Route::get(
+                'change-requests',
+                [AdminMerchantChangeRequestController::class, 'index']
+            )->name('change-requests.index');
+
+            Route::get(
+                'change-requests/{changeRequest}',
+                [AdminMerchantChangeRequestController::class, 'show']
+            )->name('change-requests.show');
+
+            Route::post(
+                'change-requests/{changeRequest}/approve',
+                [AdminMerchantChangeRequestController::class, 'approve']
+            )->name('change-requests.approve');
+
+            Route::post(
+                'change-requests/{changeRequest}/reject',
+                [AdminMerchantChangeRequestController::class, 'reject']
+            )->name('change-requests.reject');
+
+            Route::post(
+                'change-requests/{changeRequest}/start-review',
+                [AdminMerchantChangeRequestController::class, 'startReview']
+            )->name('change-requests.start-review');
+
+            Route::get(
+                'merchants-with-suspended-services',
+                [AdminMerchantChangeRequestController::class, 'getMerchantsWithSuspendedServices']
+            )->name('merchants-with-suspended-services');
 
 
             /*
@@ -327,6 +391,61 @@ Route::prefix('v1/merchant')
             'onboarding/submit',
             [MerchantOnboardingController::class, 'submit']
         )->name('submit');
+    });
+
+
+/*
+|--------------------------------------------------------------------------
+| Merchant Change Request Routes
+|--------------------------------------------------------------------------
+|
+| Merchants can request changes to their details (location, documents, etc.)
+| Services are granularly suspended based on what changed.
+|
+| Pattern follows Store Manager integrations:
+|   POST /api/v1/merchant/change-requests/{merchantId}/submit
+|
+*/
+
+Route::prefix('v1/merchant')
+    ->name('merchant.change-requests.')
+    ->middleware([
+        'auth:sanctum',
+        'role:merchant',
+    ])
+    ->group(function () {
+
+        // Get merchant's service status and pending changes
+        Route::get(
+            'service-status',
+            [MerchantChangeRequestController::class, 'getServiceStatus']
+        )->name('service-status');
+
+        // List all change requests for this merchant
+        Route::get(
+            'change-requests',
+            [MerchantChangeRequestController::class, 'index']
+        )->name('index');
+
+        // Get a specific change request
+        Route::get(
+            'change-requests/{changeRequest}',
+            [MerchantChangeRequestController::class, 'show']
+        )->name('show');
+
+        // Unified submit endpoint for all change types
+        // POST /api/v1/merchant/change-requests/{merchantId}/submit
+        Route::post(
+            'change-requests/{merchant}/submit',
+            [MerchantChangeRequestController::class, 'submit']
+        )->where('merchant', '[0-9]+')
+            ->name('submit');
+
+        // Cancel a pending change request
+        Route::post(
+            'change-requests/{changeRequest}/cancel',
+            [MerchantChangeRequestController::class, 'cancel']
+        )->name('cancel');
     });
 
 

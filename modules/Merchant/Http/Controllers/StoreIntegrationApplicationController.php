@@ -76,4 +76,55 @@ class StoreIntegrationApplicationController extends Controller
             $result['created'] ? 201 : 200
         );
     }
+
+    /**
+     * Submit a change request for a Store Manager merchant.
+     * 
+     * Store Manager resubmits using the SAME payload structure as initial submission.
+     * System automatically detects which fields changed.
+     * 
+     * POST /api/v1/store-integrations/merchants/{externalStoreId}/change-request/submit
+     */
+    public function submitChangeRequest(
+        StoreIntegrationSubmissionRequest $request,
+        string $externalStoreId,
+        StoreIntegrationApplicationService $service
+    ) {
+        $data = $request->validated();
+
+        try {
+            $result = $service->submitMerchantChangeRequest(
+                externalStoreId: $externalStoreId,
+                data: $data
+            );
+
+            $changeRequest = $result['change_request'];
+            $merchant = $result['merchant'];
+
+            event(
+                new MerchantApplicationChanged(
+                    merchantId: $merchant->id,
+                    action: 'change_requested',
+                    source: $merchant->application_source,
+                    status: $merchant->status
+                )
+            );
+
+            return ApiResponse::success(
+                [
+                    'change_request_id' => $changeRequest->id,
+                    'merchant_id' => $merchant->id,
+                    'external_store_id' => $externalStoreId,
+                    'change_type' => $changeRequest->change_type,
+                    'affected_services' => $changeRequest->affected_services,
+                    'status' => $changeRequest->status,
+                    'requested_at' => $changeRequest->requested_at,
+                ],
+                'Merchant change request submitted successfully. Services affected by this change have been suspended pending admin approval.',
+                201
+            );
+        } catch (\Exception $e) {
+            return ApiResponse::error($e->getMessage(), 400);
+        }
+    }
 }

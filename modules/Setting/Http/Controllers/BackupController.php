@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\DB;
 
 class BackupController extends Controller
 {
@@ -133,10 +134,9 @@ class BackupController extends Controller
         
         $connection = config('database.connections.mysql');
         
+        // Use docker exec to run mysqldump in the mysql container
         $command = sprintf(
-            'mysqldump --host=%s --port=%s --user=%s --password=%s %s > %s 2>&1',
-            escapeshellarg($connection['host']),
-            escapeshellarg($connection['port']),
+            'docker exec delivery-mysql mysqldump -u%s -p%s %s > %s 2>&1',
             escapeshellarg($connection['username']),
             escapeshellarg($connection['password']),
             escapeshellarg($connection['database']),
@@ -231,5 +231,139 @@ class BackupController extends Controller
             'days_retained' => $days,
             'deleted' => $deleted,
         ]);
+    }
+
+    /**
+     * Get backup schedules
+     */
+    public function schedules()
+    {
+        $schedules = DB::table('backup_schedules')->orderBy('type')->get();
+        
+        return ApiResponse::success([
+            'schedules' => $schedules,
+        ]);
+    }
+
+    /**
+     * Update backup schedule
+     */
+    public function updateSchedule(Request $request, $id)
+    {
+        $request->validate([
+            'enabled' => ['boolean'],
+            'cron_time' => ['nullable', 'date_format:H:i'],
+        ]);
+
+        $schedule = DB::table('backup_schedules')->find($id);
+        
+        if (!$schedule) {
+            return ApiResponse::error('Schedule not found', 404);
+        }
+
+        DB::table('backup_schedules')
+            ->where('id', $id)
+            ->update([
+                'enabled' => $request->get('enabled', $schedule->enabled),
+                'cron_time' => $request->get('cron_time', $schedule->cron_time),
+                'updated_at' => now(),
+            ]);
+
+        return ApiResponse::success(null, 'Schedule updated');
+    }
+
+    /**
+     * Trigger backup manually
+     */
+    public function triggerBackup(Request $request)
+    {
+        $request->validate([
+            'type' => ['required', 'in:daily,weekly,monthly'],
+        ]);
+
+        $type = $request->get('type');
+        
+        // Get schedule
+        $schedule = DB::table('backup_schedules')->where('type', $type)->first();
+        
+        if (!$schedule || !$schedule->enabled) {
+            return ApiResponse::error('Backup schedule not enabled', 400);
+        }
+
+        $backupDir = storage_path('app/backups');
+        if (!file_exists($backupDir)) {
+            mkdir($backupDir, 0755, true);
+        }
+
+        $date = date('Y-m-d_His');
+        $filename = "backup_{$type}_{$date}.sql";
+        $backupFile = $backupDir . '/' . $filename;
+
+        $connection = config('database.connections.mysql');
+
+        $command = sprintf(
+            'docker exec delivery-mysql mysqldump -u%s -p%s %s > %s 2>&1',
+            escapeshellarg($connection['username']),
+            escapeshellarg($connection['password']),
+            escapeshellarg($connection['database']),
+            escapeshellarg($backupFile)
+        );
+
+        $output = [];
+        $returnVar = 0;
+        exec($command, $output, $returnVar);
+
+        if ($returnVar !== 0) {
+            return ApiResponse::error('Backup failed: ' . implode('\n', $output), 500);
+        }
+
+        // Update schedule
+        DB::table('backup_schedules')
+            ->where('id', $schedule->id)
+            ->update([
+                'last_run_at' => now(),
+                'next_run_at' => $this->calculateNextRun($schedule->type, $schedule->cron_time, $schedule->cron_day, $schedule->cron_day_of_month),
+                'updated_at' => now(),
+            ]);
+
+        return ApiResponse::success([
+            'message' => 'Backup created successfully',
+            'backup' => [
+                'filename' => $filename,
+                'size' => filesize($backupFile),
+                'size_formatted' => $this->formatSize(filesize($backupFile)),
+                'created_at' => now(),
+                'type' => $type,
+            ],
+        ]);
+    }
+
+    /**
+     * Calculate next run time
+     */
+    private function calculateNextRun(string $type, ?string $cronTime, ?string $cronDay, ?string $cronDayOfMonth): ?string
+    {
+        $now = now();
+        
+        switch ($type) {
+            case 'daily':
+                $next = $now->copy()->addDay()->setTimeFromTimeString($cronTime);
+                break;
+            case 'weekly':
+                $dayMap = ['Sunday' => 0, 'Monday' => 1, 'Tuesday' => 2, 'Wednesday' => 3, 'Thursday' => 4, 'Friday' => 5, 'Saturday' => 6];
+                $targetDay = $dayMap[$cronDay] ?? 0;
+                $currentDay = $now->dayOfWeek;
+                $daysUntil = ($targetDay - $currentDay + 7) % 7;
+                $next = $now->copy()->addDays($daysUntil)->setTimeFromTimeString($cronTime);
+                break;
+            case 'monthly':
+                $targetDay = (int)($cronDayOfMonth ?? 1);
+                $next = $now->copy()->addMonth()->day($targetDay)->setTimeFromTimeString($cronTime);
+                break;
+            default:
+                $next = $now->copy()->addDay()->setTimeFromTimeString($cronTime);
+        }
+        
+        return $next->toDateTimeString();
     }
 }

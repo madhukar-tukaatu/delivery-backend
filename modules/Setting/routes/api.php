@@ -59,4 +59,13 @@ Route::prefix('v1/admin')
 
         Route::post('backups/cleanup', [BackupController::class, 'cleanup'])
             ->name('backups.cleanup');
+
+        Route::get('backups/schedules', [BackupController::class, 'schedules'])
+            ->name('backups.schedules');
+
+        Route::put('backups/schedules/{id}', [BackupController::class, 'updateSchedule'])
+            ->name('backups.updateSchedule');
+
+        Route::post('backups/trigger', [BackupController::class, 'triggerBackup'])
+            ->name('backups.trigger');
     });

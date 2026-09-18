@@ -76,6 +76,7 @@ class Merchant extends Model
             'integration_approved_at' => 'datetime',
             'integration_callback_sent_at' => 'datetime',
             'verified_at' => 'datetime',
+            'services_suspended_at' => 'datetime',
 
             /*
              * Location values
@@ -84,12 +85,18 @@ class Merchant extends Model
             'pickup_lng' => 'float',
 
             /*
+             * Service suspension tracking
+             */
+            'suspended_services' => 'array',
+
+            /*
              * Foreign keys
              */
             'default_branch_id' => 'integer',
             'default_sub_branch_id' => 'integer',
             'suggested_branch_id' => 'integer',
             'suggested_sub_branch_id' => 'integer',
+            'pending_change_request_id' => 'integer',
         ];
     }
 
@@ -151,6 +158,31 @@ class Merchant extends Model
     public function shipments(): HasMany
     {
         return $this->hasMany(Shipment::class);
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Change Request Relationships
+    |--------------------------------------------------------------------------
+    */
+
+    /**
+     * All change requests for this merchant.
+     */
+    public function changeRequests(): HasMany
+    {
+        return $this->hasMany(MerchantChangeRequest::class);
+    }
+
+    /**
+     * The current/pending change request.
+     */
+    public function pendingChangeRequest(): BelongsTo
+    {
+        return $this->belongsTo(
+            MerchantChangeRequest::class,
+            'pending_change_request_id'
+        );
     }
 
     /*
@@ -219,5 +251,51 @@ class Merchant extends Model
     {
         return $this->application_source ===
             self::SOURCE_ADMIN;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Service Suspension Status Helpers
+    |--------------------------------------------------------------------------
+    */
+
+    /**
+     * Check if merchant has any suspended services.
+     */
+    public function hasSuspendedServices(): bool
+    {
+        return !empty($this->suspended_services);
+    }
+
+    /**
+     * Get list of suspended services.
+     */
+    public function getSuspendedServices(): array
+    {
+        return $this->suspended_services ?? [];
+    }
+
+    /**
+     * Check if a specific service is suspended.
+     */
+    public function isServiceSuspended(string $service): bool
+    {
+        return in_array($service, $this->getSuspendedServices());
+    }
+
+    /**
+     * Check if merchant has an active pending change request.
+     */
+    public function hasPendingChangeRequest(): bool
+    {
+        return $this->pending_change_request_id !== null;
+    }
+
+    /**
+     * Get the active pending change request if exists.
+     */
+    public function getActivePendingChangeRequest(): ?MerchantChangeRequest
+    {
+        return $this->pendingChangeRequest;
     }
 }

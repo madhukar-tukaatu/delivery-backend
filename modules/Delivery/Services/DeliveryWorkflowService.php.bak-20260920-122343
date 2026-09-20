@@ -338,8 +338,6 @@ class DeliveryWorkflowService
             $customerSignatureHash = null;
             $customerConfirmedAt = null;
 
-            $cashCollected = false;
-
             if ($isPod && $collectable > 0) {
                 $paymentMethod = strtolower((string) ($data['payment_method'] ?? ''));
 
@@ -350,19 +348,6 @@ class DeliveryWorkflowService
                         ],
                     ]);
                 }
-
-                $collected = (float) ($data['pod_collected_amount'] ?? $collectable);
-
-                if (abs($collected - $collectable) > 0.001) {
-                    throw ValidationException::withMessages([
-                        'pod_collected_amount' => [
-                            'The payment amount must exactly match the amount due to the merchant.',
-                        ],
-                    ]);
-                }
-
-                $delivery->update(['pod_collected_amount' => $collected]);
-                $podWorkflow = app(PODWorkflowService::class);
 
                 if ($paymentMethod === 'online') {
                     $paymentSessionId = trim((string) ($data['payment_session_id'] ?? ''));
@@ -380,21 +365,29 @@ class DeliveryWorkflowService
                         $paymentSessionId,
                     );
                     $paymentReference = $verifiedSession->provider_reference ?: $paymentSessionId;
-                    $directPayment = true;
-
-                    $podWorkflow->markPaidDirectToMerchant(
-                        $shipment,
-                        null,
-                        $collected,
-                        'online',
-                        $paymentReference,
-                        $paymentSessionId,
-                    );
-                } else {
-                    // Cash stays with the rider until branch deposit, then settlement.
-                    $cashCollected = true;
-                    $podWorkflow->markCollectedForShipment($shipment, $user, $collected);
                 }
+
+                $collected = (float) ($data['pod_collected_amount'] ?? $collectable);
+
+                if (abs($collected - $collectable) > 0.001) {
+                    throw ValidationException::withMessages([
+                        'pod_collected_amount' => [
+                            'The payment amount must exactly match the amount due to the merchant.',
+                        ],
+                    ]);
+                }
+
+                $directPayment = true;
+                $delivery->update(['pod_collected_amount' => $collected]);
+
+                app(PODWorkflowService::class)->markPaidDirectToMerchant(
+                    $shipment,
+                    $paymentMethod === 'cash' ? $user : null,
+                    $collected,
+                    $paymentMethod,
+                    $paymentReference,
+                    $paymentSessionId,
+                );
             }
 
             $receiptConfirmed = (bool) ($data['customer_confirmed'] ?? false);
@@ -437,41 +430,28 @@ class DeliveryWorkflowService
                 'remarks' => $data['remarks'] ?? $delivery->remarks,
             ]);
 
-            if ($directPayment) {
-                $podStatus = 'paid_direct';
-                $settlementStatus = 'not_required';
-            } elseif ($cashCollected) {
-                $podStatus = 'collected';
-                $settlementStatus = 'pending_deposit';
-            } else {
-                $podStatus = 'not_required';
-                $settlementStatus = 'not_required';
-            }
-
             $shipment->update([
                 'status' => CourierStatus::DELIVERED,
                 'merchant_status' => CourierStatus::merchantStatus(CourierStatus::DELIVERED),
                 'delivered_at' => now(),
-                'pod_status' => $podStatus,
-                'settlement_status' => $settlementStatus,
+                'pod_status' => $directPayment ? 'paid_direct' : ($isPod ? 'not_required' : 'not_required'),
+                'settlement_status' => $directPayment ? 'not_required' : 'not_required',
             ]);
 
             $trackingDescription = $data['remarks']
                 ?? ($directPayment
-                    ? 'Delivered after online POD was paid directly to the merchant.'
-                    : ($cashCollected
-                        ? 'Delivered after the rider collected cash POD for later branch deposit and settlement.'
-                        : 'Delivered successfully.'));
+                    ? 'Delivered after the rider collected the POD amount for the merchant.'
+                    : 'Delivered successfully.');
 
             $this->trackingService->record($shipment->fresh(), CourierStatus::DELIVERED, $trackingDescription, $user->id);
             $this->webhookService->queueShipmentEvent($shipment->fresh(), 'delivery.delivered');
             $this->callbacks->deliveryDelivered($shipment->fresh(), [
                 'payment_method' => $paymentMethod,
-                'payment_destination' => $directPayment ? 'merchant' : ($cashCollected ? 'rider' : null),
+                'payment_destination' => $directPayment ? 'merchant' : null,
                 'payment_reference' => $paymentReference,
                 'payment_session_id' => $paymentSessionId,
-                'payment_status' => $directPayment ? 'paid_direct' : ($cashCollected ? 'collected_pending_deposit' : null),
-                'pod_collected_amount' => ($directPayment || $cashCollected) ? $collectable : 0,
+                'payment_status' => $directPayment ? 'paid_direct' : null,
+                'pod_collected_amount' => $directPayment ? $collectable : 0,
                 'arrived_at' => $delivery->arrived_at?->toIso8601String(),
                 'receipt_confirmation' => [
                     'confirmed' => $receiptConfirmed,

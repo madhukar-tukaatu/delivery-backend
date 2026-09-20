@@ -8,7 +8,6 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 use Modules\POD\Models\PodDeposit;
 use Modules\POD\Models\PodRecord;
-use Modules\Shipment\Models\Shipment;
 
 class PodController extends Controller
 {
@@ -36,18 +35,8 @@ class PodController extends Controller
             'collected_amount' => $data['collected_amount'],
             'collected_by' => $request->user()->id,
             'collected_at' => now(),
-            'payment_method' => $pod->payment_method ?: 'cash',
-            'payment_destination' => $pod->payment_destination ?: 'rider',
         ]);
-
-        if ($pod->shipment_id) {
-            Shipment::whereKey($pod->shipment_id)->update([
-                'pod_status' => 'collected',
-                'settlement_status' => 'pending_deposit',
-            ]);
-        }
-
-        return ApiResponse::success($pod->fresh('shipment'), 'POD marked collected.');
+        return ApiResponse::success($pod->fresh(), 'POD marked collected.');
     }
 
     public function deposit(Request $request)
@@ -73,40 +62,19 @@ class PodController extends Controller
             ]);
         }
 
-        foreach ($records as $record) {
-            if ($record->status !== 'collected') {
-                throw ValidationException::withMessages([
-                    'pod_record_ids' => ['Only collected cash POD records can be deposited.'],
-                ]);
-            }
-        }
-
-        $branchId = $data['branch_id'] ?? $request->user()->branch_id;
         $amount = $records->sum('collected_amount');
         $deposit = PodDeposit::create([
-            'branch_id' => $branchId,
+            'branch_id' => $data['branch_id'] ?? $request->user()->branch_id,
             'staff_id' => $request->user()->id,
             'amount' => $amount,
             'status' => 'confirmed',
             'remarks' => $data['remarks'] ?? null,
         ]);
-
         PodRecord::whereIn('id', $recordIds)->update([
             'status' => 'deposited',
-            'deposited_by' => $request->user()->id,
-            'deposited_to_branch_id' => $branchId,
+            'deposited_to_branch_id' => $data['branch_id'] ?? $request->user()->branch_id,
             'deposited_at' => now(),
-            'remarks' => $data['remarks'] ?? null,
         ]);
-
-        $shipmentIds = $records->pluck('shipment_id')->filter()->unique()->values();
-        if ($shipmentIds->isNotEmpty()) {
-            Shipment::whereIn('id', $shipmentIds)->update([
-                'pod_status' => 'deposited',
-                'settlement_status' => 'ready',
-            ]);
-        }
-
-        return ApiResponse::success($deposit, 'POD deposited to branch. Shipments are ready for merchant settlement.');
+        return ApiResponse::success($deposit, 'POD deposited to branch.');
     }
 }

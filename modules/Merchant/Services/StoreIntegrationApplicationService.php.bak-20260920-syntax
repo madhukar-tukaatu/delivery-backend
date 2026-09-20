@@ -1585,6 +1585,7 @@ class StoreIntegrationApplicationService
 
         return $code;
     }
+}
 
 
     /**
@@ -1630,11 +1631,30 @@ class StoreIntegrationApplicationService
             // Extract only the changed fields
             $changeData = $this->extractChangeData($merchant, $data, $changeType);
 
-            // Documents: pass URLs through. MerchantChangeRequestService owns pending-doc handling.
-            // Do NOT call downloadAndStoreDocument here - it writes merchant files immediately
-            // and its signature is (Merchant, type, document[], &$newFiles): void (no return path).
+            // Handle document downloads if needed
             if ($changeType === 'documents' && !empty($data['documents'])) {
-                $changeData['documents'] = $data['documents'];
+                $changeData['documents'] = [];
+                foreach ($data['documents'] as $docType => $docArray) {
+                    if (!is_array($docArray)) continue;
+                    
+                    foreach ($docArray as $doc) {
+                        if (isset($doc['url'])) {
+                            try {
+                                $path = $this->downloadAndStoreDocument(
+                                    url: $doc['url'],
+                                    type: $docType,
+                                    merchant: $merchant
+                                );
+                                $changeData['documents'][] = [
+                                    'type' => $docType,
+                                    'path' => $path,
+                                ];
+                            } catch (Throwable) {
+                                // Continue if document download fails
+                            }
+                        }
+                    }
+                }
             }
 
             // Submit change request
@@ -1740,5 +1760,3 @@ class StoreIntegrationApplicationService
 
         return $extracted;
     }
-
-}

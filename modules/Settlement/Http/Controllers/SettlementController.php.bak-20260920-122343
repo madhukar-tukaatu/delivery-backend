@@ -5,9 +5,8 @@ namespace Modules\Settlement\Http\Controllers;
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
-use Illuminate\Validation\ValidationException;
 use Illuminate\Support\Facades\DB;
-use Modules\POD\Models\PodRecord;
+use Modules\POD\Models\CodRecord;
 use Modules\Settlement\Models\MerchantSettlement;
 use Modules\Settlement\Models\MerchantSettlementItem;
 use Modules\Shipment\Models\Shipment;
@@ -32,23 +31,10 @@ class SettlementController extends Controller
         ]);
 
         $settlement = DB::transaction(function () use ($data) {
-            // Cash POD only: deposited at branch and marked ready for payable settlement.
-            // Online paid_direct shipments stay out of the payable pool.
-            $shipments = Shipment::query()
-                ->where('merchant_id', $data['merchant_id'])
+            $shipments = Shipment::where('merchant_id', $data['merchant_id'])
                 ->where('status', 'delivered')
                 ->where('settlement_status', 'ready')
-                ->where(function ($query) {
-                    $query->whereNull('pod_status')
-                        ->orWhereNotIn('pod_status', ['paid_direct']);
-                })
                 ->get();
-
-            if ($shipments->isEmpty()) {
-                throw ValidationException::withMessages([
-                    'merchant_id' => ['No deposited cash POD shipments are ready to settle for this merchant.'],
-                ]);
-            }
 
             $totalCod = $shipments->sum('pod_amount');
             $deliveryCharges = $shipments->sum('delivery_charge');
@@ -103,9 +89,7 @@ class SettlementController extends Controller
             ]);
             $shipmentIds = $settlement->items()->pluck('shipment_id');
             Shipment::whereIn('id', $shipmentIds)->update(['settlement_status' => 'settled']);
-            PodRecord::whereIn('shipment_id', $shipmentIds)
-                ->where('status', 'deposited')
-                ->update(['status' => 'settled', 'settled_at' => now()]);
+            CodRecord::whereIn('shipment_id', $shipmentIds)->update(['status' => 'settled', 'settled_at' => now()]);
         });
         return ApiResponse::success($settlement->fresh('items'), 'Settlement marked paid.');
     }

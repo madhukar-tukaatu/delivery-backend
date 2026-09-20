@@ -12,15 +12,11 @@ class PODWorkflowService
 {
     public function markCollectedForShipment(Shipment $shipment, User $rider, float $amount): ?PodRecord
     {
-        $due = (float) ($shipment->total_collectable_amount
-            ?: $shipment->total_collectable
-            ?: $shipment->pod_amount);
-
-        if ($due <= 0) {
+        if ((float) $shipment->pod_amount <= 0) {
             return null;
         }
 
-        return DB::transaction(function () use ($shipment, $rider, $amount, $due) {
+        return DB::transaction(function () use ($shipment, $rider, $amount) {
             $record = PodRecord::firstOrCreate(
                 ['shipment_id' => $shipment->id],
                 [
@@ -37,47 +33,7 @@ class PODWorkflowService
                 'collected_by' => $rider->id,
                 'collected_amount' => $amount,
                 'collected_at' => now(),
-                'payment_method' => 'cash',
-                'payment_destination' => 'rider',
-                'payment_reference' => null,
-                'payment_session_id' => null,
-                'payment_paid_at' => now(),
             ]);
-
-            $shipment->update([
-                'pod_status' => 'collected',
-                // Cash must be deposited at branch before merchant settlement.
-                'settlement_status' => 'pending_deposit',
-            ]);
-
-            if (Schema::hasTable('pod_collections')) {
-                $collection = DB::table('pod_collections')
-                    ->where('shipment_id', $shipment->id)
-                    ->first();
-
-                if ($collection) {
-                    $updates = [
-                        'total_collected' => $amount,
-                        'status' => 'collected_pending_deposit',
-                        'collected_at' => now(),
-                        'updated_at' => now(),
-                    ];
-
-                    foreach ([
-                        'payment_method' => 'cash',
-                        'payment_destination' => 'rider',
-                        'payment_paid_at' => now(),
-                    ] as $column => $value) {
-                        if (Schema::hasColumn('pod_collections', $column)) {
-                            $updates[$column] = $value;
-                        }
-                    }
-
-                    DB::table('pod_collections')
-                        ->where('id', $collection->id)
-                        ->update($updates);
-                }
-            }
 
             return $record->fresh();
         });
@@ -188,47 +144,20 @@ class PODWorkflowService
                 }
             }
 
-            // Online / direct merchant payments are recorded but not platform-payable.
-            $shipment->update([
-                'pod_status' => 'paid_direct',
-                'settlement_status' => 'not_required',
-            ]);
-
             return $record->fresh();
         });
     }
 
     public function markDeposited(PodRecord $record, User $user, ?string $remarks = null): PodRecord
     {
-        return DB::transaction(function () use ($record, $user, $remarks) {
-            if ($record->payment_destination === 'merchant' || $record->status === 'paid_direct') {
-                throw \Illuminate\Validation\ValidationException::withMessages([
-                    'pod' => ['Direct merchant payments cannot be deposited to the platform.'],
-                ]);
-            }
+        $record->update([
+            'status' => 'deposited',
+            'deposited_by' => $user->id,
+            'deposited_at' => now(),
+            'remarks' => $remarks,
+        ]);
 
-            if ($record->status !== 'collected') {
-                throw \Illuminate\Validation\ValidationException::withMessages([
-                    'pod' => ['Only collected cash POD can be deposited.'],
-                ]);
-            }
-
-            $record->update([
-                'status' => 'deposited',
-                'deposited_by' => $user->id,
-                'deposited_at' => now(),
-                'remarks' => $remarks,
-            ]);
-
-            if ($record->shipment_id) {
-                Shipment::whereKey($record->shipment_id)->update([
-                    'pod_status' => 'deposited',
-                    'settlement_status' => 'ready',
-                ]);
-            }
-
-            return $record->fresh();
-        });
+        return $record->fresh();
     }
 
     public function confirm(PodRecord $record, User $user, ?string $remarks = null): PodRecord

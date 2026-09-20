@@ -96,6 +96,15 @@ class StaffDeliveryController extends Controller
 
     public function delivered(Request $request, DeliveryAssignment $delivery)
     {
+        // Normalize checkbox / JSON truthy values for Laravel "accepted".
+        $request->merge([
+            'customer_confirmed' => filter_var(
+                $request->input('customer_confirmed'),
+                FILTER_VALIDATE_BOOLEAN,
+                FILTER_NULL_ON_FAILURE
+            ) ?? $request->input('customer_confirmed'),
+        ]);
+
         $data = $request->validate([
             'payment_method' => ['nullable', 'string', 'in:cash,online'],
             'payment_session_id' => ['nullable', 'required_if:payment_method,online', 'string', 'max:191'],

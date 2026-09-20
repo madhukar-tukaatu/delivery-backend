@@ -221,10 +221,16 @@ class PODWorkflowService
             ]);
 
             if ($record->shipment_id) {
-                Shipment::whereKey($record->shipment_id)->update([
-                    'pod_status' => 'deposited',
-                    'settlement_status' => 'ready',
-                ]);
+                $shipment = Shipment::query()->lockForUpdate()->find($record->shipment_id);
+                if ($shipment) {
+                    $updates = ['pod_status' => 'deposited'];
+                    // If merchant was already settled/processing via on_collection, keep that status.
+                    // Otherwise mark ready for the preferred after_deposit settlement path.
+                    if (! in_array($shipment->settlement_status, ['processing', 'settled'], true)) {
+                        $updates['settlement_status'] = 'ready';
+                    }
+                    $shipment->update($updates);
+                }
             }
 
             return $record->fresh();

@@ -101,10 +101,12 @@ class PodController extends Controller
 
         $shipmentIds = $records->pluck('shipment_id')->filter()->unique()->values();
         if ($shipmentIds->isNotEmpty()) {
-            Shipment::whereIn('id', $shipmentIds)->update([
-                'pod_status' => 'deposited',
-                'settlement_status' => 'ready',
-            ]);
+            // Always record branch cash intake. Do not downgrade settlement if merchant
+            // was already settled/processing via the on_collection path.
+            Shipment::whereIn('id', $shipmentIds)->update(['pod_status' => 'deposited']);
+            Shipment::whereIn('id', $shipmentIds)
+                ->whereNotIn('settlement_status', ['processing', 'settled'])
+                ->update(['settlement_status' => 'ready']);
         }
 
         return ApiResponse::success($deposit, 'POD deposited to branch. Shipments are ready for merchant settlement.');

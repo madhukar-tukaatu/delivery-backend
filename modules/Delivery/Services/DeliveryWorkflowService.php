@@ -2,6 +2,9 @@
 
 namespace Modules\Delivery\Services;
 
+use App\Events\DeliveryStatusUpdated;
+use App\Events\ShipmentStatusUpdated;
+
 use App\Models\User;
 use App\Support\CourierStatus;
 use Illuminate\Support\Facades\DB;
@@ -329,6 +332,8 @@ class DeliveryWorkflowService
                 ?: $shipment->total_collectable
                 ?: $shipment->pod_amount);
             $directPayment = false;
+            $cashCollected = false;
+            $completionType = 'prepaid'; // prepaid | pod_cash | pod_online
             $paymentMethod = null;
             $paymentReference = null;
             $paymentSessionId = null;
@@ -338,7 +343,16 @@ class DeliveryWorkflowService
             $customerSignatureHash = null;
             $customerConfirmedAt = null;
 
-            $cashCollected = false;
+            // Prepaid (or POD with nothing due): no collection at door.
+            if (! $isPod || $collectable <= 0) {
+                if (! empty($data['payment_method'])) {
+                    throw ValidationException::withMessages([
+                        'payment_method' => [
+                            'This shipment is prepaid / not collectable. Do not submit a POD payment method.',
+                        ],
+                    ]);
+                }
+            }
 
             if ($isPod && $collectable > 0) {
                 $paymentMethod = strtolower((string) ($data['payment_method'] ?? ''));
@@ -390,14 +404,16 @@ class DeliveryWorkflowService
                         $paymentReference,
                         $paymentSessionId,
                     );
+                    $completionType = 'pod_online';
                 } else {
                     // Cash stays with the rider until branch deposit, then settlement.
                     $cashCollected = true;
+                    $completionType = 'pod_cash';
                     $podWorkflow->markCollectedForShipment($shipment, $user, $collected);
                 }
             }
 
-            $receiptConfirmed = (bool) ($data['customer_confirmed'] ?? false);
+            $receiptConfirmed = $this->normalizeAcceptedFlag($data['customer_confirmed'] ?? false);
             $customerName = trim((string) ($data['customer_name'] ?? ''));
             $signatureData = trim((string) ($data['customer_signature'] ?? ''));
 
@@ -457,21 +473,31 @@ class DeliveryWorkflowService
             ]);
 
             $trackingDescription = $data['remarks']
-                ?? ($directPayment
-                    ? 'Delivered after online POD was paid directly to the merchant.'
-                    : ($cashCollected
-                        ? 'Delivered after the rider collected cash POD for later branch deposit and settlement.'
-                        : 'Delivered successfully.'));
+                ?? match ($completionType) {
+                    'pod_online' => 'Delivered after online POD was paid directly to the merchant.',
+                    'pod_cash' => 'Delivered after the rider collected cash POD for later branch deposit and settlement.',
+                    default => 'Delivered successfully (prepaid / no collection at door).',
+                };
 
             $this->trackingService->record($shipment->fresh(), CourierStatus::DELIVERED, $trackingDescription, $user->id);
             $this->webhookService->queueShipmentEvent($shipment->fresh(), 'delivery.delivered');
-            $this->callbacks->deliveryDelivered($shipment->fresh(), [
+            $freshDelivery = $delivery->fresh(['shipment', 'rider']);
+            $freshShipment = $shipment->fresh();
+
+            event(new DeliveryStatusUpdated($freshDelivery));
+            event(new ShipmentStatusUpdated($freshShipment));
+
+            $this->callbacks->deliveryDelivered($freshShipment, [
+                'completion_type' => $completionType,
+                'payment_type' => $shipment->payment_type,
                 'payment_method' => $paymentMethod,
                 'payment_destination' => $directPayment ? 'merchant' : ($cashCollected ? 'rider' : null),
                 'payment_reference' => $paymentReference,
                 'payment_session_id' => $paymentSessionId,
-                'payment_status' => $directPayment ? 'paid_direct' : ($cashCollected ? 'collected_pending_deposit' : null),
+                'payment_status' => $directPayment ? 'paid_direct' : ($cashCollected ? 'collected_pending_deposit' : 'not_required'),
                 'pod_collected_amount' => ($directPayment || $cashCollected) ? $collectable : 0,
+                'pod_status' => $podStatus,
+                'settlement_status' => $settlementStatus,
                 'arrived_at' => $delivery->arrived_at?->toIso8601String(),
                 'receipt_confirmation' => [
                     'confirmed' => $receiptConfirmed,
@@ -590,6 +616,21 @@ class DeliveryWorkflowService
         $type = strtolower((string) $shipment->payment_type);
 
         return in_array($type, ['pod', 'cod', 'to_pay'], true);
+    }
+
+    private function normalizeAcceptedFlag(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value === 1;
+        }
+
+        $normalized = strtolower(trim((string) $value));
+
+        return in_array($normalized, ['1', 'true', 'yes', 'on', 'accepted'], true);
     }
 
     /**

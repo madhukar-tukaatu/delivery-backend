@@ -80,6 +80,8 @@ class MenuSeeder extends Seeder
 
             // ── Finance ───────────────────────────────────────────────
             ['section'=>'admin','label'=>'Settlements',            'route'=>'/admin/settlements',          'icon'=>'settlements', 'permission'=>'settlements.view',                  'sort_order'=>100],
+            ['section'=>'admin','label'=>'HQ Commissions',         'route'=>'/admin/hq-commissions',       'icon'=>'money',       'permission'=>'hq-commissions.bills',              'sort_order'=>101],
+            ['section'=>'admin','label'=>'Payment Gateways',       'route'=>'/admin/payment-gateways',     'icon'=>'api',         'permission'=>'payment-gateways.accounts',         'sort_order'=>102],
             ['section'=>'admin','label'=>'Invoices',               'route'=>'/admin/invoices',             'icon'=>'invoices',    'permission'=>'invoices.view',                     'sort_order'=>110],
 
             // ── Integrations ──────────────────────────────────────────
@@ -367,6 +369,24 @@ class MenuSeeder extends Seeder
                 'icon' => 'settlements',
                 'permission' => 'settlements.view',
                 'sort_order' => 80,
+            ],
+            [
+                'section' => 'staff',
+                'title' => 'HQ Commissions',
+                'label' => 'HQ Commissions',
+                'route' => '/staff/hq-commissions',
+                'icon' => 'money',
+                'permission' => 'hq-commissions.bills',
+                'sort_order' => 81,
+            ],
+            [
+                'section' => 'staff',
+                'title' => 'Payment Gateways',
+                'label' => 'Payment Gateways',
+                'route' => '/staff/payment-gateways',
+                'icon' => 'api',
+                'permission' => 'payment-gateways.accounts',
+                'sort_order' => 82,
             ],
         ];
 

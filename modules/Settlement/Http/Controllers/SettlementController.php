@@ -11,14 +11,16 @@ use Illuminate\Validation\ValidationException;
 use Modules\POD\Models\PodRecord;
 use Modules\Settlement\Models\MerchantSettlement;
 use Modules\Settlement\Models\MerchantSettlementItem;
+use Modules\Settlement\Services\SettlementHamroPayService;
 use Modules\Settlement\Services\SettlementWorkflowService;
 use Modules\Shipment\Models\Shipment;
 
 class SettlementController extends Controller
 {
-    public function __construct(private SettlementWorkflowService $settlements)
-    {
-    }
+    public function __construct(
+        private SettlementWorkflowService $settlements,
+        private SettlementHamroPayService $hamroPaySettlements,
+    ) {}
 
     public function index(Request $request)
     {
@@ -157,7 +159,7 @@ class SettlementController extends Controller
         }
 
         $adjustments = (float) ($data['adjustments'] ?? 0);
-        $final = $totalPod - $totalDelivery - $totalPodCharges + $adjustments;
+        $final = $totalPod + $adjustments; // delivery fees billed separately via invoices
 
         return ApiResponse::success([
             'cash_path' => $cashPath,
@@ -222,7 +224,7 @@ class SettlementController extends Controller
             }
 
             $adjustments = (float) ($data['adjustments'] ?? 0);
-            $final = $totalPod - $totalDelivery - $totalPodCharges + $adjustments;
+            $final = $totalPod + $adjustments; // delivery fees billed separately via invoices
 
             $payload = [
                 'merchant_id' => $data['merchant_id'],
@@ -301,4 +303,31 @@ class SettlementController extends Controller
     {
         return ApiResponse::success($settlement->load('items.shipment'));
     }
+
+    public function payHamroPay(MerchantSettlement $settlement)
+    {
+        $session = $this->hamroPaySettlements->createPayoutSession($settlement);
+
+        return ApiResponse::success($session, 'HamroPay checkout session created for POD settlement.');
+    }
+
+    public function confirmHamroPay(Request $request, MerchantSettlement $settlement)
+    {
+        $data = $request->validate([
+            'merchant_txn_id' => ['required', 'string'],
+        ]);
+
+        $check = $this->hamroPaySettlements->confirmFromProvider($settlement, $data['merchant_txn_id']);
+        if (! ($check['paid'] ?? false)) {
+            return ApiResponse::error('HamroPay has not confirmed this payment yet.', 422, $check);
+        }
+
+        $request->merge([
+            'payment_method' => 'hamropay',
+            'bank_reference_number' => $data['merchant_txn_id'],
+        ]);
+
+        return $this->markPaid($request, $settlement);
+    }
+
 }

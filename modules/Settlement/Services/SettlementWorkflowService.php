@@ -12,15 +12,12 @@ use Modules\Shipment\Models\Shipment;
 /**
  * Unified merchant settlement math + auto batching after delivery.
  *
- * Payable to merchant ≈
- *   cash POD (with rider or deposited)
- * − delivery charges owed by merchant (free delivery / merchant payer)
- * − POD service charges
- * + adjustments
+ * POD settlement (independent of delivery-fee billing):
+ *   payable to merchant = deposited cash POD (+ adjustments)
  *
- * Online paid_direct POD cash is NOT payable again.
- * Settlement batches auto-open/append after successful delivery;
- * manual Generate remains as catch-up.
+ * Delivery / POD service fees are billed separately via Billing invoices.
+ * Online paid_direct POD cash is NOT in the cash settlement pool.
+ * Cash POD settlements auto-open after branch deposit; Generate is catch-up.
  */
 class SettlementWorkflowService
 {
@@ -31,14 +28,92 @@ class SettlementWorkflowService
     {
         $payer = strtolower(trim((string) ($shipment->delivery_charge_paid_by ?? 'customer')));
 
+        // Only deduct when merchant/store covers delivery (free delivery for customer).
+        // Customer-paid delivery was already handled at checkout / door collection.
         return in_array($payer, ['merchant', 'store', 'seller', 'free', 'free_delivery'], true)
-            && (float) ($shipment->delivery_charge ?? 0) > 0;
+            && $this->checkoutDeliveryCharge($shipment) > 0;
+    }
+
+    /**
+     * Locked delivery fee from checkout/pricing — not recomputed at settlement time.
+     * Prefer shipment.delivery_charge, then charge/price breakdown snapshots, then quote.
+     */
+    public function checkoutDeliveryCharge(Shipment $shipment): float
+    {
+        $candidates = [];
+
+        $onShipment = (float) ($shipment->delivery_charge ?? 0);
+        if ($onShipment > 0) {
+            $candidates[] = $onShipment;
+        }
+
+        $breakdown = $shipment->delivery_charge_breakdown;
+        if (is_string($breakdown)) {
+            $decoded = json_decode($breakdown, true);
+            $breakdown = is_array($decoded) ? $decoded : null;
+        }
+        if (is_array($breakdown)) {
+            foreach (['delivery_charge', 'total', 'final_price', 'total_amount', 'amount'] as $key) {
+                if (isset($breakdown[$key]) && (float) $breakdown[$key] > 0) {
+                    $candidates[] = (float) $breakdown[$key];
+                    break;
+                }
+            }
+        }
+
+        if (Schema::hasTable('shipment_charge_breakdowns')) {
+            $row = DB::table('shipment_charge_breakdowns')
+                ->where('shipment_id', $shipment->id)
+                ->orderByDesc('id')
+                ->first();
+            if ($row) {
+                $val = (float) ($row->delivery_charge ?? 0);
+                if ($val > 0) {
+                    $candidates[] = $val;
+                }
+            }
+        }
+
+        if (Schema::hasTable('shipment_price_breakdowns')) {
+            $row = DB::table('shipment_price_breakdowns')
+                ->where('shipment_id', $shipment->id)
+                ->orderByDesc('id')
+                ->first();
+            if ($row) {
+                $val = (float) ($row->final_price ?? $row->base_delivery_fee ?? 0);
+                if ($val > 0) {
+                    $candidates[] = $val;
+                }
+            }
+        }
+
+        if (Schema::hasTable('pricing_quotes')) {
+            $quote = null;
+            if (Schema::hasColumn('shipments', 'pricing_quote_id') && ! empty($shipment->pricing_quote_id)) {
+                $quote = DB::table('pricing_quotes')->where('id', $shipment->pricing_quote_id)->first();
+            }
+            if (! $quote && Schema::hasColumn('pricing_quotes', 'quoteable_type')) {
+                $quote = DB::table('pricing_quotes')
+                    ->where('quoteable_type', 'like', '%Shipment%')
+                    ->where('quoteable_id', $shipment->id)
+                    ->orderByDesc('id')
+                    ->first();
+            }
+            if ($quote) {
+                $val = (float) ($quote->total_amount ?? $quote->subtotal ?? 0);
+                if ($val > 0) {
+                    $candidates[] = $val;
+                }
+            }
+        }
+
+        return round($candidates[0] ?? 0.0, 2);
     }
 
     public function merchantDeliveryCharge(Shipment $shipment): float
     {
         return $this->merchantOwesDeliveryCharge($shipment)
-            ? (float) $shipment->delivery_charge
+            ? $this->checkoutDeliveryCharge($shipment)
             : 0.0;
     }
 
@@ -104,17 +179,17 @@ class SettlementWorkflowService
     public function lineNet(Shipment $shipment, string $cashPath): array
     {
         $podCash = $this->cashPodPayable($shipment, $cashPath);
-        $deliveryOwed = $this->merchantDeliveryCharge($shipment);
-        $podCharge = (float) ($shipment->pod_charge ?? 0);
-        $net = $podCash - $deliveryOwed - $podCharge;
+        // Delivery fees are billed on invoices — not deducted from POD payable.
+        $checkoutFee = $this->checkoutDeliveryCharge($shipment);
 
         return [
             'pod_amount' => round($podCash, 2),
-            'delivery_charge' => round($deliveryOwed, 2),
-            'pod_charge' => round($podCharge, 2),
-            'net_amount' => round($net, 2),
+            'delivery_charge' => 0.0,
+            'pod_charge' => 0.0,
+            'net_amount' => round($podCash, 2),
             'delivery_charge_paid_by' => $shipment->delivery_charge_paid_by,
-            'include' => ($podCash > 0 || $deliveryOwed > 0 || $podCharge > 0),
+            'checkout_delivery_charge' => $checkoutFee,
+            'include' => $podCash > 0,
         ];
     }
 
@@ -163,60 +238,35 @@ class SettlementWorkflowService
     {
         $completionType = strtolower(trim((string) $completionType));
         $podStatus = strtolower((string) ($shipment->pod_status ?? ''));
+        $checkoutFee = $this->checkoutDeliveryCharge($shipment);
 
-        // After branch deposit: force cash POD onto settlements.
+        // Settlement list is POD cash only (after branch deposit).
         if ($completionType === 'after_deposit' || $podStatus === 'deposited') {
             $podCash = $this->cashPodPayableAuto($shipment);
             if ($podCash <= 0) {
                 $podCash = $this->cashPodAmount($shipment);
             }
-            $deliveryOwed = $this->merchantDeliveryCharge($shipment);
-            $podCharge = (float) ($shipment->pod_charge ?? 0);
-            $net = $podCash - $deliveryOwed - $podCharge;
 
             return [
                 'pod_amount' => round(max($podCash, 0), 2),
-                'delivery_charge' => round($deliveryOwed, 2),
-                'pod_charge' => round($podCharge, 2),
-                'net_amount' => round($net, 2),
-                'delivery_charge_paid_by' => $shipment->delivery_charge_paid_by,
-                // Deposited cash POD must appear even if amount fields were empty (still accountable).
-                'include' => true,
-            ];
-        }
-
-        // Cash POD before deposit must wait.
-        if ($completionType === 'pod_cash' || (
-            $this->isCashPodAwaitingDeposit($shipment)
-            && ! $this->isPrepaidOrOnlineComplete($shipment, $completionType)
-        )) {
-            return [
-                'pod_amount' => 0.0,
                 'delivery_charge' => 0.0,
                 'pod_charge' => 0.0,
-                'net_amount' => 0.0,
+                'net_amount' => round(max($podCash, 0), 2),
                 'delivery_charge_paid_by' => $shipment->delivery_charge_paid_by,
-                'include' => false,
+                'checkout_delivery_charge' => $checkoutFee,
+                'include' => $podCash > 0,
             ];
         }
 
-        $podCash = $this->cashPodPayableAuto($shipment);
-        $deliveryOwed = $this->merchantDeliveryCharge($shipment);
-        $podCharge = (float) ($shipment->pod_charge ?? 0);
-        $net = $podCash - $deliveryOwed - $podCharge;
-
-        $include = $podCash > 0
-            || $deliveryOwed > 0
-            || $podCharge > 0
-            || $this->isPrepaidOrOnlineComplete($shipment, $completionType);
-
+        // Before deposit / prepaid / online: no POD cash settlement line.
         return [
-            'pod_amount' => round($podCash, 2),
-            'delivery_charge' => round($deliveryOwed, 2),
-            'pod_charge' => round($podCharge, 2),
-            'net_amount' => round($net, 2),
+            'pod_amount' => 0.0,
+            'delivery_charge' => 0.0,
+            'pod_charge' => 0.0,
+            'net_amount' => 0.0,
             'delivery_charge_paid_by' => $shipment->delivery_charge_paid_by,
-            'include' => $include,
+            'checkout_delivery_charge' => $checkoutFee,
+            'include' => false,
         ];
     }
 
@@ -366,15 +416,14 @@ class SettlementWorkflowService
     {
         $items = $settlement->items()->get();
         $totalPod = (float) $items->sum('pod_amount');
-        $totalDelivery = (float) $items->sum('delivery_charge');
-        $totalPodCharges = (float) $items->sum('pod_charge');
         $adjustments = (float) ($settlement->adjustments ?? 0);
 
+        // POD settlement payable = cash owed to merchant (fees billed separately).
         $settlement->update([
             'total_pod_collected' => round($totalPod, 2),
-            'total_delivery_charges' => round($totalDelivery, 2),
-            'total_pod_charges' => round($totalPodCharges, 2),
-            'final_payable_amount' => round($totalPod - $totalDelivery - $totalPodCharges + $adjustments, 2),
+            'total_delivery_charges' => 0,
+            'total_pod_charges' => 0,
+            'final_payable_amount' => round($totalPod + $adjustments, 2),
             'period_to' => now()->toDateString(),
         ]);
     }

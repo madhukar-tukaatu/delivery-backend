@@ -1,4 +1,4 @@
-<?php
+﻿<?php
 
 namespace Modules\Merchant\Models;
 
@@ -88,6 +88,8 @@ class Merchant extends Model
              * Service suspension tracking
              */
             'suspended_services' => 'array',
+            'hamropay_enabled_services' => 'array',
+            'hamropay_registered_at' => 'datetime',
 
             /*
              * Foreign keys

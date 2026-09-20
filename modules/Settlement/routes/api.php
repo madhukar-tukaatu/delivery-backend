@@ -27,6 +27,12 @@ Route::prefix('v1/admin')
 
             Route::post('settlements/{settlement}/mark-paid', [SettlementController::class, 'markPaid'])
                 ->name('settlements.mark-paid');
+
+            Route::post('settlements/{settlement}/pay-hamropay', [SettlementController::class, 'payHamroPay'])
+                ->name('settlements.pay-hamropay');
+
+            Route::post('settlements/{settlement}/confirm-hamropay', [SettlementController::class, 'confirmHamroPay'])
+                ->name('settlements.confirm-hamropay');
         });
     });
 

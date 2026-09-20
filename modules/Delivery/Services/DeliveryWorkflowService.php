@@ -2,6 +2,8 @@
 
 namespace Modules\Delivery\Services;
 
+use Modules\Billing\Services\BranchCommissionService;
+use Modules\Billing\Services\MerchantDeliveryBillingService;
 use Modules\Settlement\Services\SettlementWorkflowService;
 
 use App\Events\DeliveryStatusUpdated;
@@ -486,17 +488,18 @@ class DeliveryWorkflowService
             event(new DeliveryStatusUpdated($freshDelivery));
             event(new ShipmentStatusUpdated($freshShipment));
 
-            // Auto settlement:
-            // prepaid + pod_online -> list on settlements immediately
-            // pod_cash -> wait for branch deposit (handled on deposit)
+            // Independent money tracks after delivery:
+            // 1) Delivery-charge bill to merchant (Billing invoice) when merchant owes fees
+            // 2) POD cash settlement only after branch deposit (not here)
             try {
-                if (in_array($completionType, ['prepaid', 'pod_online'], true)) {
-                    app(SettlementWorkflowService::class)->autoEnsureForShipment(
-                        $freshShipment,
-                        $completionType,
-                    );
-                    $freshShipment = $freshShipment->fresh();
-                }
+                app(MerchantDeliveryBillingService::class)->autoEnsureForShipment($freshShipment);
+            } catch (\Throwable $e) {
+                report($e);
+            }
+
+            // HQ commission bill (branch owes Tukaatu Express) — independent track
+            try {
+                app(BranchCommissionService::class)->autoEnsureForShipment($freshShipment);
             } catch (\Throwable $e) {
                 report($e);
             }
@@ -572,7 +575,7 @@ class DeliveryWorkflowService
      * Riders that can be assigned to this delivery.
      *
      * Prefers riders at the delivery's destination branch, but falls back to
-     * all active riders/staff if none match — so the manager is never left
+     * all active riders/staff if none match â€” so the manager is never left
      * with an empty list.
      *
      * @return \Illuminate\Support\Collection<int, User>
@@ -721,3 +724,4 @@ class DeliveryWorkflowService
         abort_unless((int) $delivery->rider_id === (int) $user->id, 403, 'Only the assigned rider can perform this action.');
     }
 }
+

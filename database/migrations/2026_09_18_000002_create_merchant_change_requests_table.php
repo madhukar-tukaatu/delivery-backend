@@ -54,7 +54,7 @@ return new class extends Migration
             
             // JSON array of affected services that will be suspended
             // e.g., ['pickup', 'delivery', 'settlement']
-            $table->json('affected_services')->default('[]');
+            $table->json('affected_services')->nullable();
             
             /*
             |--------------------------------------------------------------------------

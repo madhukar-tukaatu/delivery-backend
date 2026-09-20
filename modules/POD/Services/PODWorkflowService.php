@@ -105,7 +105,7 @@ class PODWorkflowService
 
             $shipment->update([
                 'pod_status' => 'collected',
-                'settlement_status' => 'ready',
+                'settlement_status' => 'pending_deposit',
             ]);
 
             return $record->fresh();
@@ -189,9 +189,14 @@ class PODWorkflowService
             }
 
             // Online / direct merchant payments are recorded but not platform-payable.
+            $payer = strtolower(trim((string) ($shipment->delivery_charge_paid_by ?? 'customer')));
+            $owesDelivery = in_array($payer, ['merchant', 'store', 'seller', 'free', 'free_delivery'], true)
+                && (float) ($shipment->delivery_charge ?? 0) > 0;
+
             $shipment->update([
                 'pod_status' => 'paid_direct',
-                'settlement_status' => 'not_required',
+                // Fee-only settle still needed when merchant owes delivery charge.
+                'settlement_status' => $owesDelivery ? 'ready' : 'not_required',
             ]);
 
             return $record->fresh();

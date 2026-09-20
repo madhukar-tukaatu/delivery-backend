@@ -3,12 +3,6 @@
 use Illuminate\Support\Facades\Route;
 use Modules\Settlement\Http\Controllers\SettlementController;
 
-/*
-|--------------------------------------------------------------------------
-| Admin Settlement Routes
-|--------------------------------------------------------------------------
-*/
-
 Route::prefix('v1/admin')
     ->name('admin.')
     ->middleware(['auth:sanctum'])
@@ -16,18 +10,17 @@ Route::prefix('v1/admin')
 
         Route::middleware(['route.permission'])->group(function () {
 
-            /*
-            |--------------------------------------------------------------------------
-            | Settlements (Admin)
-            |--------------------------------------------------------------------------
-            | Auto generated permissions:
-            | settlements.view
-            | settlements.create
-            | settlements.pay
-            */
-
             Route::get('settlements', [SettlementController::class, 'index'])
                 ->name('settlements.index');
+
+            Route::get('settlements/pending-cash', [SettlementController::class, 'pendingCash'])
+                ->name('settlements.pending-cash');
+
+            Route::get('settlements/preview', [SettlementController::class, 'preview'])
+                ->name('settlements.preview');
+
+            Route::get('settlements/{settlement}', [SettlementController::class, 'show'])
+                ->name('settlements.show');
 
             Route::post('settlements', [SettlementController::class, 'store'])
                 ->name('settlements.store');
@@ -37,12 +30,6 @@ Route::prefix('v1/admin')
         });
     });
 
-/*
-|--------------------------------------------------------------------------
-| Merchant Settlement Routes
-|--------------------------------------------------------------------------
-*/
-
 Route::prefix('v1/merchant')
     ->name('merchant.')
     ->middleware(['auth:sanctum', 'role:merchant'])
@@ -50,15 +37,10 @@ Route::prefix('v1/merchant')
 
         Route::middleware(['route.permission'])->group(function () {
 
-            /*
-            |--------------------------------------------------------------------------
-            | Settlements (Merchant)
-            |--------------------------------------------------------------------------
-            | Permissions:
-            | merchant.settlements OR settlements.view
-            */
-
             Route::get('settlements', [SettlementController::class, 'index'])
                 ->name('settlements.index');
+
+            Route::get('settlements/{settlement}', [SettlementController::class, 'show'])
+                ->name('settlements.show');
         });
     });

@@ -2,6 +2,8 @@
 
 namespace Modules\Delivery\Services;
 
+use Modules\Settlement\Services\SettlementWorkflowService;
+
 use App\Events\DeliveryStatusUpdated;
 use App\Events\ShipmentStatusUpdated;
 
@@ -453,16 +455,13 @@ class DeliveryWorkflowService
                 'remarks' => $data['remarks'] ?? $delivery->remarks,
             ]);
 
-            if ($directPayment) {
-                $podStatus = 'paid_direct';
-                $settlementStatus = 'not_required';
-            } elseif ($cashCollected) {
-                $podStatus = 'collected';
-                $settlementStatus = 'pending_deposit';
-            } else {
-                $podStatus = 'not_required';
-                $settlementStatus = 'not_required';
-            }
+            $statusPair = app(SettlementWorkflowService::class)->settlementStatusAfterDelivery(
+                $cashCollected,
+                $directPayment,
+                $shipment,
+            );
+            $podStatus = $statusPair['pod_status'];
+            $settlementStatus = $statusPair['settlement_status'];
 
             $shipment->update([
                 'status' => CourierStatus::DELIVERED,

@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 use Modules\POD\Models\PodDeposit;
 use Modules\POD\Models\PodRecord;
+use Modules\Settlement\Services\SettlementWorkflowService;
 use Modules\Shipment\Models\Shipment;
 
 class PodController extends Controller
@@ -107,8 +108,27 @@ class PodController extends Controller
             Shipment::whereIn('id', $shipmentIds)
                 ->whereNotIn('settlement_status', ['processing', 'settled'])
                 ->update(['settlement_status' => 'ready']);
+
+            $settlements = app(SettlementWorkflowService::class);
+            foreach (Shipment::whereIn('id', $shipmentIds)->get() as $shipment) {
+                try {
+                    // Keep shipment POD amount in sync with what was deposited.
+                    $collected = (float) PodRecord::query()
+                        ->where('shipment_id', $shipment->id)
+                        ->where('status', 'deposited')
+                        ->sum('collected_amount');
+                    if ($collected > 0 && (float) ($shipment->pod_amount ?? 0) <= 0) {
+                        $shipment->update(['pod_amount' => $collected]);
+                        $shipment->refresh();
+                    }
+
+                    $settlements->autoEnsureForShipment($shipment, 'after_deposit');
+                } catch (\Throwable $e) {
+                    report($e);
+                }
+            }
         }
 
-        return ApiResponse::success($deposit, 'POD deposited to branch. Shipments are ready for merchant settlement.');
+        return ApiResponse::success($deposit, 'POD deposited to branch. Settlement batch updated automatically.');
     }
 }

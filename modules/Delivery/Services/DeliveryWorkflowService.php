@@ -486,6 +486,21 @@ class DeliveryWorkflowService
             event(new DeliveryStatusUpdated($freshDelivery));
             event(new ShipmentStatusUpdated($freshShipment));
 
+            // Auto settlement:
+            // prepaid + pod_online -> list on settlements immediately
+            // pod_cash -> wait for branch deposit (handled on deposit)
+            try {
+                if (in_array($completionType, ['prepaid', 'pod_online'], true)) {
+                    app(SettlementWorkflowService::class)->autoEnsureForShipment(
+                        $freshShipment,
+                        $completionType,
+                    );
+                    $freshShipment = $freshShipment->fresh();
+                }
+            } catch (\Throwable $e) {
+                report($e);
+            }
+
             $this->callbacks->deliveryDelivered($freshShipment, [
                 'completion_type' => $completionType,
                 'payment_type' => $shipment->payment_type,

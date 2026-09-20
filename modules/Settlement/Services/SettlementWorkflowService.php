@@ -3,20 +3,24 @@
 namespace Modules\Settlement\Services;
 
 use Illuminate\Support\Collection;
-use Illuminate\Validation\ValidationException;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+use Modules\Settlement\Models\MerchantSettlement;
+use Modules\Settlement\Models\MerchantSettlementItem;
 use Modules\Shipment\Models\Shipment;
 
 /**
- * Unified merchant settlement math.
+ * Unified merchant settlement math + auto batching after delivery.
  *
  * Payable to merchant ≈
- *   cash POD (branch-deposited or optionally still with rider)
+ *   cash POD (with rider or deposited)
  * − delivery charges owed by merchant (free delivery / merchant payer)
  * − POD service charges
  * + adjustments
  *
- * Online paid_direct POD cash is NOT payable again (already with merchant),
- * but merchant-owed delivery fees on those shipments still settle here.
+ * Online paid_direct POD cash is NOT payable again.
+ * Settlement batches auto-open/append after successful delivery;
+ * manual Generate remains as catch-up.
  */
 class SettlementWorkflowService
 {
@@ -41,12 +45,6 @@ class SettlementWorkflowService
     public function cashPodPayable(Shipment $shipment, string $cashPath): float
     {
         $podStatus = strtolower((string) ($shipment->pod_status ?? ''));
-
-        // Already paid direct to merchant — not in cash payable pool.
-        if (in_array($podStatus, ['paid_direct'], true)) {
-            return 0.0;
-        }
-
         $settlementStatus = strtolower((string) ($shipment->settlement_status ?? ''));
         $amount = (float) (
             $shipment->pod_amount
@@ -54,7 +52,7 @@ class SettlementWorkflowService
             ?: 0
         );
 
-        if ($amount <= 0) {
+        if (in_array($podStatus, ['paid_direct'], true) || $amount <= 0) {
             return 0.0;
         }
 
@@ -64,8 +62,39 @@ class SettlementWorkflowService
                 : 0.0;
         }
 
-        // Preferred path: branch deposit completed → settlement_status ready + pod deposited.
         if ($settlementStatus === 'ready' && $podStatus === 'deposited') {
+            return $amount;
+        }
+
+        return 0.0;
+    }
+
+    /**
+     * Auto settlement cash POD:
+     * - prepaid / online: no door cash in the pool
+     * - cash POD: only AFTER branch deposit (pod_status=deposited)
+     */
+    public function cashPodAmount(Shipment $shipment): float
+    {
+        return (float) (
+            $shipment->pod_amount
+            ?: $shipment->total_collectable_amount
+            ?: $shipment->total_collectable
+            ?: 0
+        );
+    }
+
+    public function cashPodPayableAuto(Shipment $shipment): float
+    {
+        $podStatus = strtolower((string) ($shipment->pod_status ?? ''));
+        $amount = $this->cashPodAmount($shipment);
+
+        if ($podStatus === 'paid_direct') {
+            return 0.0;
+        }
+
+        // Cash POD enters the settlement list only after branch deposit.
+        if ($podStatus === 'deposited' && $amount > 0) {
             return $amount;
         }
 
@@ -89,9 +118,108 @@ class SettlementWorkflowService
         ];
     }
 
-    /**
-     * Shipments eligible for a merchant settlement batch.
-     */
+    public function isCashPodAwaitingDeposit(Shipment $shipment): bool
+    {
+        $podStatus = strtolower((string) ($shipment->pod_status ?? ''));
+        $settlementStatus = strtolower((string) ($shipment->settlement_status ?? ''));
+
+        return $podStatus === 'collected' || $settlementStatus === 'pending_deposit';
+    }
+
+    public function isPrepaidOrOnlineComplete(Shipment $shipment, ?string $completionType = null): bool
+    {
+        $completionType = strtolower(trim((string) $completionType));
+        if (in_array($completionType, ['prepaid', 'pod_online'], true)) {
+            return true;
+        }
+        if (in_array($completionType, ['pod_cash', 'after_deposit'], true)) {
+            return false;
+        }
+
+        $podStatus = strtolower((string) ($shipment->pod_status ?? ''));
+        $paymentType = strtolower((string) ($shipment->payment_type ?? ''));
+        $isPodType = in_array($paymentType, ['pod', 'cod', 'to_pay'], true);
+        $amount = $this->cashPodAmount($shipment);
+
+        // Cash POD lifecycle — never treat as prepaid/online.
+        if (in_array($podStatus, ['collected', 'deposited', 'pending_deposit'], true)) {
+            return false;
+        }
+
+        // Online POD paid at door to merchant.
+        if ($podStatus === 'paid_direct') {
+            return true;
+        }
+
+        // Prepaid / non-POD / nothing collectable at door.
+        if (! $isPodType || $amount <= 0) {
+            return true;
+        }
+
+        return false;
+    }
+
+    public function lineNetAuto(Shipment $shipment, ?string $completionType = null): array
+    {
+        $completionType = strtolower(trim((string) $completionType));
+        $podStatus = strtolower((string) ($shipment->pod_status ?? ''));
+
+        // After branch deposit: force cash POD onto settlements.
+        if ($completionType === 'after_deposit' || $podStatus === 'deposited') {
+            $podCash = $this->cashPodPayableAuto($shipment);
+            if ($podCash <= 0) {
+                $podCash = $this->cashPodAmount($shipment);
+            }
+            $deliveryOwed = $this->merchantDeliveryCharge($shipment);
+            $podCharge = (float) ($shipment->pod_charge ?? 0);
+            $net = $podCash - $deliveryOwed - $podCharge;
+
+            return [
+                'pod_amount' => round(max($podCash, 0), 2),
+                'delivery_charge' => round($deliveryOwed, 2),
+                'pod_charge' => round($podCharge, 2),
+                'net_amount' => round($net, 2),
+                'delivery_charge_paid_by' => $shipment->delivery_charge_paid_by,
+                // Deposited cash POD must appear even if amount fields were empty (still accountable).
+                'include' => true,
+            ];
+        }
+
+        // Cash POD before deposit must wait.
+        if ($completionType === 'pod_cash' || (
+            $this->isCashPodAwaitingDeposit($shipment)
+            && ! $this->isPrepaidOrOnlineComplete($shipment, $completionType)
+        )) {
+            return [
+                'pod_amount' => 0.0,
+                'delivery_charge' => 0.0,
+                'pod_charge' => 0.0,
+                'net_amount' => 0.0,
+                'delivery_charge_paid_by' => $shipment->delivery_charge_paid_by,
+                'include' => false,
+            ];
+        }
+
+        $podCash = $this->cashPodPayableAuto($shipment);
+        $deliveryOwed = $this->merchantDeliveryCharge($shipment);
+        $podCharge = (float) ($shipment->pod_charge ?? 0);
+        $net = $podCash - $deliveryOwed - $podCharge;
+
+        $include = $podCash > 0
+            || $deliveryOwed > 0
+            || $podCharge > 0
+            || $this->isPrepaidOrOnlineComplete($shipment, $completionType);
+
+        return [
+            'pod_amount' => round($podCash, 2),
+            'delivery_charge' => round($deliveryOwed, 2),
+            'pod_charge' => round($podCharge, 2),
+            'net_amount' => round($net, 2),
+            'delivery_charge_paid_by' => $shipment->delivery_charge_paid_by,
+            'include' => $include,
+        ];
+    }
+
     public function eligibleShipments(int $merchantId, string $cashPath, ?string $periodFrom = null, ?string $periodTo = null): Collection
     {
         $query = Shipment::query()
@@ -106,18 +234,11 @@ class SettlementWorkflowService
             $query->whereDate('delivered_at', '<=', $periodTo);
         }
 
-        $shipments = $query->orderBy('delivered_at')->get();
-
-        return $shipments->filter(function (Shipment $shipment) use ($cashPath) {
-            $line = $this->lineNet($shipment, $cashPath);
-
-            return $line['include'];
+        return $query->orderBy('delivered_at')->get()->filter(function (Shipment $shipment) use ($cashPath) {
+            return $this->lineNet($shipment, $cashPath)['include'];
         })->values();
     }
 
-    /**
-     * After delivery complete: what settlement_status should be?
-     */
     public function settlementStatusAfterDelivery(
         bool $cashCollected,
         bool $directPayment,
@@ -128,7 +249,6 @@ class SettlementWorkflowService
         if ($directPayment) {
             return [
                 'pod_status' => 'paid_direct',
-                // Fee-only settle still needed when merchant owes delivery charge.
                 'settlement_status' => $owesDelivery ? 'ready' : 'not_required',
             ];
         }
@@ -140,10 +260,122 @@ class SettlementWorkflowService
             ];
         }
 
-        // Prepaid / nothing collected at door.
         return [
             'pod_status' => 'not_required',
             'settlement_status' => $owesDelivery ? 'ready' : 'not_required',
         ];
+    }
+
+    /**
+     * Open/append a pending settlement batch when eligible:
+     * - prepaid / online POD: right after successful delivery (fees and/or record)
+     * - cash POD: only after branch deposit
+     * Idempotent.
+     */
+    public function autoEnsureForShipment(Shipment $shipment, ?string $completionType = null): ?MerchantSettlement
+    {
+        $shipment->refresh();
+
+        if (strtolower((string) $shipment->status) !== 'delivered') {
+            return null;
+        }
+
+        if (in_array(strtolower((string) $shipment->settlement_status), ['settled'], true)) {
+            return null;
+        }
+
+        $completionType = strtolower(trim((string) $completionType));
+
+        // Explicit: cash POD waits for branch deposit (unless this call is after_deposit).
+        if ($completionType === 'pod_cash') {
+            return null;
+        }
+
+        $line = $this->lineNetAuto($shipment, $completionType ?: null);
+        if (! $line['include']) {
+            return null;
+        }
+
+        return DB::transaction(function () use ($shipment, $line) {
+            $existingItem = MerchantSettlementItem::query()
+                ->where('shipment_id', $shipment->id)
+                ->first();
+
+            if ($existingItem) {
+                // Refresh line amounts (e.g. after deposit) while batch still pending.
+                $settlement = MerchantSettlement::query()->lockForUpdate()->find($existingItem->merchant_settlement_id);
+                if ($settlement && $settlement->status === 'pending') {
+                    $existingItem->update([
+                        'pod_amount' => $line['pod_amount'],
+                        'delivery_charge' => $line['delivery_charge'],
+                        'pod_charge' => $line['pod_charge'],
+                        'net_amount' => $line['net_amount'],
+                    ]);
+                    $this->recalcSettlementTotals($settlement);
+                    $shipment->update(['settlement_status' => 'processing']);
+
+                    return $settlement->fresh('items');
+                }
+
+                return $settlement?->fresh('items');
+            }
+
+            $settlement = MerchantSettlement::query()
+                ->where('merchant_id', $shipment->merchant_id)
+                ->where('status', 'pending')
+                ->orderByDesc('id')
+                ->lockForUpdate()
+                ->first();
+
+            if (! $settlement) {
+                $payload = [
+                    'merchant_id' => $shipment->merchant_id,
+                    'settlement_number' => 'SET-'.now()->format('YmdHis').'-'.random_int(100, 999),
+                    'period_from' => now()->toDateString(),
+                    'period_to' => null,
+                    'total_pod_collected' => 0,
+                    'total_delivery_charges' => 0,
+                    'total_pod_charges' => 0,
+                    'adjustments' => 0,
+                    'final_payable_amount' => 0,
+                    'status' => 'pending',
+                ];
+                if (Schema::hasColumn('merchant_settlements', 'cash_path')) {
+                    $payload['cash_path'] = 'auto';
+                }
+                $settlement = MerchantSettlement::create($payload);
+            }
+
+            MerchantSettlementItem::create([
+                'merchant_settlement_id' => $settlement->id,
+                'shipment_id' => $shipment->id,
+                'pod_amount' => $line['pod_amount'],
+                'delivery_charge' => $line['delivery_charge'],
+                'pod_charge' => $line['pod_charge'],
+                'net_amount' => $line['net_amount'],
+            ]);
+
+            $shipment->update(['settlement_status' => 'processing']);
+            $this->recalcSettlementTotals($settlement->fresh());
+
+            return $settlement->fresh('items');
+        });
+    }
+
+    public function recalcSettlementTotals(MerchantSettlement $settlement): void
+    {
+        $items = $settlement->items()->get();
+        $totalPod = (float) $items->sum('pod_amount');
+        $totalDelivery = (float) $items->sum('delivery_charge');
+        $totalPodCharges = (float) $items->sum('pod_charge');
+        $adjustments = (float) ($settlement->adjustments ?? 0);
+
+        $settlement->update([
+            'total_pod_collected' => round($totalPod, 2),
+            'total_delivery_charges' => round($totalDelivery, 2),
+            'total_pod_charges' => round($totalPodCharges, 2),
+            'final_payable_amount' => round($totalPod - $totalDelivery - $totalPodCharges + $adjustments, 2),
+            'period_to' => now()->toDateString(),
+        ]);
     }
 }

@@ -6,6 +6,7 @@ use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Modules\POD\Models\PodRecord;
+use Modules\Settlement\Services\SettlementWorkflowService;
 use Modules\Shipment\Models\Shipment;
 
 class PODWorkflowService
@@ -235,6 +236,16 @@ class PODWorkflowService
                         $updates['settlement_status'] = 'ready';
                     }
                     $shipment->update($updates);
+                    try {
+                        $fresh = $shipment->fresh();
+                        if ($fresh && (float) ($fresh->pod_amount ?? 0) <= 0 && (float) ($record->collected_amount ?? 0) > 0) {
+                            $fresh->update(['pod_amount' => $record->collected_amount]);
+                            $fresh->refresh();
+                        }
+                        app(SettlementWorkflowService::class)->autoEnsureForShipment($fresh, 'after_deposit');
+                    } catch (\Throwable $e) {
+                        report($e);
+                    }
                 }
             }
 

@@ -5,7 +5,6 @@ declare (strict_types = 1);
 use Illuminate\Support\Facades\Route;
 use Modules\Shipment\Http\Controllers\Api\AdminNotificationController;
 use Modules\Shipment\Http\Controllers\Api\AdminShipmentTaskController;
-use Modules\Shipment\Http\Controllers\Api\AdminStaffController;
 use Modules\Shipment\Http\Controllers\Api\MerchantShipmentController;
 use Modules\Shipment\Http\Controllers\GatewayShipmentController;
 use Modules\Shipment\Http\Controllers\ShipmentController;
@@ -99,60 +98,6 @@ Route::prefix('v1/admin')
 
             Route::post('transfers/{shipment}/receive', [TransferController::class, 'receive'])
                 ->name('transfers.receive');
-
-            /*
-            |--------------------------------------------------------------------------
-            | STAFF
-            |--------------------------------------------------------------------------
-            */
-
-            Route::get(
-                'staff',
-                [
-                    AdminStaffController::class,
-                    'index',
-                ]
-            )->name('staff.index');
-
-            Route::post(
-                'staff',
-                [
-                    AdminStaffController::class,
-                    'store',
-                ]
-            )->name('staff.store');
-
-            Route::get(
-                'staff/{staff}',
-                [
-                    AdminStaffController::class,
-                    'show',
-                ]
-            )->name('staff.show');
-
-            Route::put(
-                'staff/{staff}',
-                [
-                    AdminStaffController::class,
-                    'update',
-                ]
-            )->name('staff.update');
-
-            Route::delete(
-                'staff/{staff}',
-                [
-                    AdminStaffController::class,
-                    'destroy',
-                ]
-            )->name('staff.destroy');
-
-            Route::post(
-                'staff/{staff}/toggle',
-                [
-                    AdminStaffController::class,
-                    'toggle',
-                ]
-            )->name('staff.toggle');
 
             /*
             |--------------------------------------------------------------------------

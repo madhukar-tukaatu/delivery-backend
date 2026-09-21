@@ -7,6 +7,8 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Modules\Branch\Enums\BranchStatus;
+use Modules\Branch\Enums\BranchType;
 
 class Branch extends Model
 {
@@ -82,6 +84,8 @@ class Branch extends Model
     ];
 
     protected $casts = [
+        'type' => BranchType::class,
+        'status' => BranchStatus::class,
         'covered_areas' => 'array',
         'operating_days' => 'array',
 
@@ -107,19 +111,21 @@ class Branch extends Model
         'account_invitation_count' => 'integer',
     ];
 
-    public const TYPE_HEAD_BRANCH = 'head_branch';
-    public const TYPE_FRANCHISE_BRANCH = 'franchise_branch';
-    public const TYPE_SUB_BRANCH = 'sub_branch';
-    public const TYPE_PICKUP_POINT = 'pickup_point';
-    public const TYPE_DELIVERY_HUB = 'delivery_hub';
+    /** @deprecated use BranchType enum */
+    public const TYPE_HEAD_BRANCH = BranchType::HeadBranch->value;
+    public const TYPE_FRANCHISE_BRANCH = BranchType::FranchiseBranch->value;
+    public const TYPE_SUB_BRANCH = BranchType::SubBranch->value;
+    public const TYPE_PICKUP_POINT = BranchType::PickupPoint->value;
+    public const TYPE_DELIVERY_HUB = BranchType::DeliveryHub->value;
 
-    public const STATUS_DRAFT = 'draft';
-    public const STATUS_PENDING_REVIEW = 'pending_review';
-    public const STATUS_APPROVED = 'approved';
-    public const STATUS_ACTIVE = 'active';
-    public const STATUS_SUSPENDED = 'suspended';
-    public const STATUS_REJECTED = 'rejected';
-    public const STATUS_CLOSED = 'closed';
+    /** @deprecated use BranchStatus enum */
+    public const STATUS_DRAFT = BranchStatus::Draft->value;
+    public const STATUS_PENDING_REVIEW = BranchStatus::PendingReview->value;
+    public const STATUS_APPROVED = BranchStatus::Approved->value;
+    public const STATUS_ACTIVE = BranchStatus::Active->value;
+    public const STATUS_SUSPENDED = BranchStatus::Suspended->value;
+    public const STATUS_REJECTED = BranchStatus::Rejected->value;
+    public const STATUS_CLOSED = BranchStatus::Closed->value;
 
     public function parent(): BelongsTo
     {
@@ -177,7 +183,7 @@ class Branch extends Model
 
     public function scopeActive(Builder $query): Builder
     {
-        return $query->where('status', self::STATUS_ACTIVE);
+        return $query->where('status', BranchStatus::Active);
     }
 
     public function scopeType(Builder $query, ?string $type): Builder
@@ -195,7 +201,7 @@ class Branch extends Model
 
     public function scopeSubBranches(Builder $query): Builder
     {
-        return $query->where('type', self::TYPE_SUB_BRANCH);
+        return $query->where('type', BranchType::SubBranch);
     }
 
     public function getFullAddressAttribute(): string
@@ -232,6 +238,8 @@ class Branch extends Model
 
     public function getIsSubBranchAttribute(): bool
     {
-        return $this->type === self::TYPE_SUB_BRANCH;
+        $type = $this->type instanceof BranchType ? $this->type : BranchType::resolve($this->type);
+
+        return $type->isSubBranch();
     }
 }

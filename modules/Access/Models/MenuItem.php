@@ -2,7 +2,9 @@
 
 namespace Modules\Access\Models;
 
+use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
+use Modules\Access\Enums\MenuSection;
 
 class MenuItem extends Model
 {
@@ -19,14 +21,12 @@ class MenuItem extends Model
         'is_active',
     ];
 
-    protected $casts = [
-        'parent_id' => 'integer',
-        'sort_order' => 'integer',
-        'is_active' => 'boolean',
-    ];
     protected function casts(): array
     {
         return [
+            'section' => MenuSection::class,
+            'parent_id' => 'integer',
+            'sort_order' => 'integer',
             'is_active' => 'boolean',
         ];
     }
@@ -41,12 +41,19 @@ class MenuItem extends Model
         return $this->hasMany(self::class, 'parent_id')->orderBy('sort_order');
     }
 
-    public static function visibleFor(?\App\Models\User $user, string $section = 'admin')
+    public static function visibleFor(?User $user, string|MenuSection $section = MenuSection::Admin)
     {
-        $query = self::query()->where('section', $section)->where('is_active', true)->orderBy('sort_order');
+        $sectionValue = $section instanceof MenuSection
+            ? $section->value
+            : MenuSection::resolve($section)->value;
+
+        $query = self::query()
+            ->where('section', $sectionValue)
+            ->where('is_active', true)
+            ->orderBy('sort_order');
 
         $items = $query->get();
-        if (!$user) {
+        if (! $user) {
             return collect();
         }
 

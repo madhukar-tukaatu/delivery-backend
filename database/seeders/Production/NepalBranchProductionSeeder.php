@@ -2,6 +2,10 @@
 
 namespace Database\Seeders\Production;
 
+use Modules\Branch\Enums\ActiveInactive;
+use Modules\Branch\Enums\BranchStatus;
+use Modules\Branch\Enums\BranchType;
+
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -18,7 +22,7 @@ class NepalBranchProductionSeeder extends Seeder
         $mainBranchId = $this->upsertBranch([
             'code' => 'NP-KTM-MAIN',
             'name' => 'Kathmandu Main Branch',
-            'type' => 'main_branch',
+            'type' => BranchType::HeadBranch->value,
             'phone' => '015970001',
             'email' => 'main.kathmandu@tukaatuexpress.com',
             'city' => 'Kathmandu',
@@ -26,7 +30,7 @@ class NepalBranchProductionSeeder extends Seeder
             'address' => 'Tripureshwor, Kathmandu, Bagmati Province',
             'latitude' => 27.7172,
             'longitude' => 85.3240,
-            'status' => 'active',
+            'status' => BranchStatus::Active->value,
             'is_active' => true,
             'created_at' => $now,
             'updated_at' => $now,
@@ -40,7 +44,7 @@ class NepalBranchProductionSeeder extends Seeder
                 'parent_id' => $mainBranchId,
                 'code' => $this->branchCode($district, 'BR'),
                 'name' => $district . ' Branch',
-                'type' => 'branch',
+                'type' => BranchType::FranchiseBranch->value,
                 'phone' => $this->phoneFromText($district),
                 'email' => Str::slug($district) . '.branch@tukaatuexpress.com',
                 'city' => $district,
@@ -48,7 +52,7 @@ class NepalBranchProductionSeeder extends Seeder
                 'address' => ($cities[0] ?? $district) . ', ' . $district . ', Nepal',
                 'latitude' => $districtActive ? $districtCoordinates['latitude'] : null,
                 'longitude' => $districtActive ? $districtCoordinates['longitude'] : null,
-                'status' => $districtActive ? 'active' : 'inactive',
+                'status' => $districtActive ? BranchStatus::Active->value : BranchStatus::Inactive->value,
                 'is_active' => $districtActive,
                 'created_at' => $now,
                 'updated_at' => $now,
@@ -64,7 +68,7 @@ class NepalBranchProductionSeeder extends Seeder
                     'parent_id' => $districtBranchId,
                     'code' => $this->branchCode($district . ' ' . $city, 'SB'),
                     'name' => $city . ' Sub-Branch',
-                    'type' => 'sub_branch',
+                    'type' => BranchType::SubBranch->value,
                     'phone' => $this->phoneFromText($district . $city),
                     'email' => Str::slug($district . '-' . $city) . '.sub@tukaatuexpress.com',
                     'city' => $district,
@@ -72,7 +76,7 @@ class NepalBranchProductionSeeder extends Seeder
                     'address' => $city . ', ' . $district . ', Nepal',
                     'latitude' => $subActive ? $subCoordinates['latitude'] : null,
                     'longitude' => $subActive ? $subCoordinates['longitude'] : null,
-                    'status' => $subActive ? 'active' : 'inactive',
+                    'status' => $subActive ? BranchStatus::Active->value : BranchStatus::Inactive->value,
                     'is_active' => $subActive,
                     'created_at' => $now,
                     'updated_at' => $now,
@@ -84,8 +88,8 @@ class NepalBranchProductionSeeder extends Seeder
 
         $this->command?->info('Production Nepal branches seeded successfully.');
         $this->command?->info('Total branches: ' . DB::table('branches')->count());
-        $this->command?->info('Active branches: ' . DB::table('branches')->where('status', 'active')->count());
-        $this->command?->info('Inactive branches: ' . DB::table('branches')->where('status', 'inactive')->count());
+        $this->command?->info('Active branches: ' . DB::table('branches')->where('status', BranchStatus::Active->value)->count());
+        $this->command?->info('Inactive branches: ' . DB::table('branches')->where('status', BranchStatus::Inactive->value)->count());
     }
 
     private function upsertBranch(array $data): int
@@ -117,7 +121,7 @@ class NepalBranchProductionSeeder extends Seeder
                 'city' => $city,
                 'area' => $area,
                 'postal_code' => null,
-                'status' => $active ? 'active' : 'inactive',
+                'status' => ActiveInactive::fromBool($active)->value,
                 'created_at' => now(),
                 'updated_at' => now(),
             ])

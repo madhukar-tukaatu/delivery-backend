@@ -25,7 +25,7 @@ return new class extends Migration
             $table->string('bank_name')->nullable();
             $table->string('bank_account_name')->nullable();
             $table->string('bank_account_number')->nullable();
-            $table->string('status')->default('pending')->index();
+            $table->string('status')->default(MerchantStatus::Pending->value)->index();
             $table->timestamps();
         });
 
@@ -41,7 +41,7 @@ return new class extends Migration
             $table->string('area')->nullable();
             $table->text('address');
             $table->boolean('is_default')->default(false);
-            $table->string('status')->default('active');
+            $table->string('status')->default(ActiveInactive::Active->value);
             $table->timestamps();
         });
     }

@@ -12,7 +12,7 @@ return new class extends Migration
             Schema::create('menu_items', function (Blueprint $table) {
                 $table->id();
                 $table->unsignedBigInteger('parent_id')->nullable();
-                $table->string('section', 50)->default('admin')->index();
+                $table->string('section', 50)->default(MenuSection::Admin->value)->index();
                 $table->string('label');
                 $table->string('path')->nullable();
                 $table->string('icon')->nullable();
@@ -33,7 +33,7 @@ return new class extends Migration
             }
 
             if (!Schema::hasColumn('menu_items', 'section')) {
-                $table->string('section', 50)->default('admin')->index();
+                $table->string('section', 50)->default(MenuSection::Admin->value)->index();
             }
 
             if (!Schema::hasColumn('menu_items', 'label')) {

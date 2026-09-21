@@ -18,7 +18,7 @@ return new class extends Migration
             }
 
             if (!Schema::hasColumn('branches', 'type')) {
-                $table->string('type', 50)->default('head_branch')->index()->after('parent_id');
+                $table->string('type', 50)->default(BranchType::HeadBranch->value)->index()->after('parent_id');
             }
 
             if (!Schema::hasColumn('branches', 'code')) {
@@ -62,7 +62,7 @@ return new class extends Migration
             }
 
             if (!Schema::hasColumn('branches', 'status')) {
-                $table->string('status', 50)->default('draft')->index()->after('business_type');
+                $table->string('status', 50)->default(BranchStatus::Draft->value)->index()->after('business_type');
             }
 
             foreach (['country', 'province', 'district', 'city', 'area', 'address', 'landmark'] as $column) {

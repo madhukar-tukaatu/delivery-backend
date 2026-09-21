@@ -13,13 +13,13 @@ return new class extends Migration
             $table->foreignId('parent_id')->nullable()->constrained('branches')->nullOnDelete();
             $table->string('name');
             $table->string('code')->unique();
-            $table->string('type')->index(); // main_branch, branch, sub_branch
+            $table->string('type')->default(BranchType::HeadBranch->value)->index();
             $table->string('phone')->nullable();
             $table->string('email')->nullable();
             $table->string('city')->nullable()->index();
             $table->string('area')->nullable()->index();
             $table->text('address')->nullable();
-            $table->string('status')->default('active')->index();
+            $table->string('status')->default(BranchStatus::Active->value)->index();
             $table->timestamps();
         });
 
@@ -29,7 +29,7 @@ return new class extends Migration
             $table->string('city')->index();
             $table->string('area')->nullable()->index();
             $table->string('postal_code')->nullable();
-            $table->string('status')->default('active');
+            $table->string('status')->default(ActiveInactive::Active->value);
             $table->timestamps();
         });
     }

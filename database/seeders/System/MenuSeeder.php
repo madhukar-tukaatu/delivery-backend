@@ -2,6 +2,8 @@
 
 namespace Database\Seeders\System;
 
+use Modules\Access\Enums\MenuSection;
+
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -33,73 +35,73 @@ class MenuSeeder extends Seeder
         ] as $legacyPricingRoute) {
             $this->deleteMenuByRoute(
                 table: $table,
-                section: 'admin',
+                section: MenuSection::Admin->value,
                 route: $legacyPricingRoute
             );
         }
 
         $menus = [
             // ── Core ──────────────────────────────────────────────────
-            ['section'=>'admin','label'=>'Dashboard',              'route'=>'/admin/dashboard',            'icon'=>'dashboard',   'permission'=>'dashboard.view',                    'sort_order'=>10],
+            ['section'=>MenuSection::Admin->value,'label'=>'Dashboard',              'route'=>'/admin/dashboard',            'icon'=>'dashboard',   'permission'=>'dashboard.view',                    'sort_order'=>10],
 
             // ── Branches (super_admin / main_admin only) ──────────────
-            ['section'=>'admin','label'=>'Branches',               'route'=>'/admin/branches',             'icon'=>'branches',    'permission'=>'branches.view',                     'sort_order'=>20],
-            ['section'=>'admin','label'=>'Branch Allocation',      'route'=>'/admin/coverage-locations',   'icon'=>'location',    'permission'=>'coverage_locations.view',            'sort_order'=>21],
-            ['section'=>'admin','label'=>'Franchise / Branch Offices','route'=>'/admin/branch-offices',    'icon'=>'branches',    'permission'=>'branches.view',                     'sort_order'=>22],
+            ['section'=>MenuSection::Admin->value,'label'=>'Branches',               'route'=>'/admin/branches',             'icon'=>'branches',    'permission'=>'branches.view',                     'sort_order'=>20],
+            ['section'=>MenuSection::Admin->value,'label'=>'Branch Allocation',      'route'=>'/admin/coverage-locations',   'icon'=>'location',    'permission'=>'coverage_locations.view',            'sort_order'=>21],
+            ['section'=>MenuSection::Admin->value,'label'=>'Franchise / Branch Offices','route'=>'/admin/branch-offices',    'icon'=>'branches',    'permission'=>'branches.view',                     'sort_order'=>22],
 
             // ── Branch Manager: own team ──────────────────────────────
-            ['section'=>'admin','label'=>'Branch Staff',           'route'=>'/admin/branch-staff',         'icon'=>'users',       'permission'=>'branches.team.view',                'sort_order'=>23],
-            ['section'=>'admin','label'=>'Branch Roles',           'route'=>'/admin/branch-roles',         'icon'=>'roles',       'permission'=>'branches.team.view',                'sort_order'=>24],
+            ['section'=>MenuSection::Admin->value,'label'=>'Branch Staff',           'route'=>'/admin/branch-staff',         'icon'=>'users',       'permission'=>'branches.team.view',                'sort_order'=>23],
+            ['section'=>MenuSection::Admin->value,'label'=>'Branch Roles',           'route'=>'/admin/branch-roles',         'icon'=>'roles',       'permission'=>'branches.team.view',                'sort_order'=>24],
 
             // ── Merchants ─────────────────────────────────────────────
-            ['section'=>'admin','label'=>'Merchants',              'route'=>'/admin/merchants',            'icon'=>'merchants',   'permission'=>'merchants.view',                    'sort_order'=>30],
-            ['section'=>'admin','label'=>'Merchant Applications',  'route'=>'/admin/merchant-applications','icon'=>'store',       'permission'=>'merchants.view',                    'sort_order'=>31],
+            ['section'=>MenuSection::Admin->value,'label'=>'Merchants',              'route'=>'/admin/merchants',            'icon'=>'merchants',   'permission'=>'merchants.view',                    'sort_order'=>30],
+            ['section'=>MenuSection::Admin->value,'label'=>'Merchant Applications',  'route'=>'/admin/merchant-applications','icon'=>'store',       'permission'=>'merchants.view',                    'sort_order'=>31],
 
             // ── Customers ─────────────────────────────────────────────
-            ['section'=>'admin','label'=>'Customers',              'route'=>'/admin/customers',            'icon'=>'customers',   'permission'=>'customers.view',                    'sort_order'=>35],
+            ['section'=>MenuSection::Admin->value,'label'=>'Customers',              'route'=>'/admin/customers',            'icon'=>'customers',   'permission'=>'customers.view',                    'sort_order'=>35],
 
             // ── Operations ────────────────────────────────────────────
-            ['section'=>'admin','label'=>'Shipments',              'route'=>'/admin/shipments',            'icon'=>'shipments',   'permission'=>'shipments.view',                    'sort_order'=>40],
-            ['section'=>'admin','label'=>'Shipment Tasks',         'route'=>'/admin/shipment-tasks',       'icon'=>'checklist',   'permission'=>'shipment_tasks.view',               'sort_order'=>41],
-            ['section'=>'admin','label'=>'Pickups',                'route'=>'/admin/pickups',              'icon'=>'pickups',     'permission'=>'pickups.view',                      'sort_order'=>50],
-            ['section'=>'admin','label'=>'Deliveries',             'route'=>'/admin/deliveries',           'icon'=>'deliveries',  'permission'=>'deliveries.view',                   'sort_order'=>60],
-            ['section'=>'admin','label'=>'Transfers',              'route'=>'/admin/transfers',            'icon'=>'dispatches',  'permission'=>'transfers.view',                    'sort_order'=>65],
-            ['section'=>'admin','label'=>'Dispatches',             'route'=>'/admin/dispatches',           'icon'=>'dispatches',  'permission'=>'dispatches.view',                   'sort_order'=>70],
-            ['section'=>'admin','label'=>'POD',                    'route'=>'/admin/pod',                  'icon'=>'pod',         'permission'=>'pod.view',                          'sort_order'=>80],
+            ['section'=>MenuSection::Admin->value,'label'=>'Shipments',              'route'=>'/admin/shipments',            'icon'=>'shipments',   'permission'=>'shipments.view',                    'sort_order'=>40],
+            ['section'=>MenuSection::Admin->value,'label'=>'Shipment Tasks',         'route'=>'/admin/shipment-tasks',       'icon'=>'checklist',   'permission'=>'shipment_tasks.view',               'sort_order'=>41],
+            ['section'=>MenuSection::Admin->value,'label'=>'Pickups',                'route'=>'/admin/pickups',              'icon'=>'pickups',     'permission'=>'pickups.view',                      'sort_order'=>50],
+            ['section'=>MenuSection::Admin->value,'label'=>'Deliveries',             'route'=>'/admin/deliveries',           'icon'=>'deliveries',  'permission'=>'deliveries.view',                   'sort_order'=>60],
+            ['section'=>MenuSection::Admin->value,'label'=>'Transfers',              'route'=>'/admin/transfers',            'icon'=>'dispatches',  'permission'=>'transfers.view',                    'sort_order'=>65],
+            ['section'=>MenuSection::Admin->value,'label'=>'Dispatches',             'route'=>'/admin/dispatches',           'icon'=>'dispatches',  'permission'=>'dispatches.view',                   'sort_order'=>70],
+            ['section'=>MenuSection::Admin->value,'label'=>'POD',                    'route'=>'/admin/pod',                  'icon'=>'pod',         'permission'=>'pod.view',                          'sort_order'=>80],
 
             // ── Pricing (admin/pricing_manager only) ──────────────────
-            ['section'=>'admin','label'=>'Pricing Settings',       'route'=>'/admin/rates',                'icon'=>'rates',       'permission'=>'pricing.settings.manage',            'sort_order'=>90],
-            ['section'=>'admin','label'=>'Service Types',          'route'=>'/admin/service-types',        'icon'=>'settings',    'permission'=>'pricing.service_types.manage',       'sort_order'=>91],
-            ['section'=>'admin','label'=>'Transfer Lanes',         'route'=>'/admin/branch-transfer-lanes','icon'=>'transfer',    'permission'=>'pricing.transfer_lanes.manage',      'sort_order'=>92],
-            ['section'=>'admin','label'=>'Transfer Routes',        'route'=>'/admin/branch-transfer-routes','icon'=>'truck',      'permission'=>'pricing.transfer_routes.manage',     'sort_order'=>93],
-            ['section'=>'admin','label'=>'Price Simulator',        'route'=>'/admin/pricing-test',         'icon'=>'refresh',     'permission'=>'pricing.simulator.use',              'sort_order'=>94],
-            ['section'=>'admin','label'=>'Pricing Quotes',         'route'=>'/admin/pricing-quotes',       'icon'=>'money',       'permission'=>'pricing.quotes.view',                'sort_order'=>95],
+            ['section'=>MenuSection::Admin->value,'label'=>'Pricing Settings',       'route'=>'/admin/rates',                'icon'=>'rates',       'permission'=>'pricing.settings.manage',            'sort_order'=>90],
+            ['section'=>MenuSection::Admin->value,'label'=>'Service Types',          'route'=>'/admin/service-types',        'icon'=>'settings',    'permission'=>'pricing.service_types.manage',       'sort_order'=>91],
+            ['section'=>MenuSection::Admin->value,'label'=>'Transfer Lanes',         'route'=>'/admin/branch-transfer-lanes','icon'=>'transfer',    'permission'=>'pricing.transfer_lanes.manage',      'sort_order'=>92],
+            ['section'=>MenuSection::Admin->value,'label'=>'Transfer Routes',        'route'=>'/admin/branch-transfer-routes','icon'=>'truck',      'permission'=>'pricing.transfer_routes.manage',     'sort_order'=>93],
+            ['section'=>MenuSection::Admin->value,'label'=>'Price Simulator',        'route'=>'/admin/pricing-test',         'icon'=>'refresh',     'permission'=>'pricing.simulator.use',              'sort_order'=>94],
+            ['section'=>MenuSection::Admin->value,'label'=>'Pricing Quotes',         'route'=>'/admin/pricing-quotes',       'icon'=>'money',       'permission'=>'pricing.quotes.view',                'sort_order'=>95],
 
             // ── Branch Pricing (branch_manager: view only) ────────────
-            ['section'=>'admin','label'=>'Branch Pricing',         'route'=>'/admin/branch-pricing',       'icon'=>'money',       'permission'=>'pricing.branch_rates.view',          'sort_order'=>96],
+            ['section'=>MenuSection::Admin->value,'label'=>'Branch Pricing',         'route'=>'/admin/branch-pricing',       'icon'=>'money',       'permission'=>'pricing.branch_rates.view',          'sort_order'=>96],
 
             // ── Finance ───────────────────────────────────────────────
-            ['section'=>'admin','label'=>'Settlements',            'route'=>'/admin/settlements',          'icon'=>'settlements', 'permission'=>'settlements.view',                  'sort_order'=>100],
-            ['section'=>'admin','label'=>'HQ Commissions',         'route'=>'/admin/hq-commissions',       'icon'=>'money',       'permission'=>'hq-commissions.bills',              'sort_order'=>101],
-            ['section'=>'admin','label'=>'Payment Gateways',       'route'=>'/admin/payment-gateways',     'icon'=>'api',         'permission'=>'payment-gateways.accounts',         'sort_order'=>102],
-            ['section'=>'admin','label'=>'Invoices',               'route'=>'/admin/invoices',             'icon'=>'invoices',    'permission'=>'invoices.view',                     'sort_order'=>110],
+            ['section'=>MenuSection::Admin->value,'label'=>'Settlements',            'route'=>'/admin/settlements',          'icon'=>'settlements', 'permission'=>'settlements.view',                  'sort_order'=>100],
+            ['section'=>MenuSection::Admin->value,'label'=>'HQ Commissions',         'route'=>'/admin/hq-commissions',       'icon'=>'money',       'permission'=>'hq-commissions.bills',              'sort_order'=>101],
+            ['section'=>MenuSection::Admin->value,'label'=>'Payment Gateways',       'route'=>'/admin/payment-gateways',     'icon'=>'api',         'permission'=>'payment-gateways.accounts',         'sort_order'=>102],
+            ['section'=>MenuSection::Admin->value,'label'=>'Invoices',               'route'=>'/admin/invoices',             'icon'=>'invoices',    'permission'=>'invoices.view',                     'sort_order'=>110],
 
             // ── Integrations ──────────────────────────────────────────
-            ['section'=>'admin','label'=>'API Keys',               'route'=>'/admin/api-keys',             'icon'=>'api',         'permission'=>'api_keys.view',                     'sort_order'=>115],
-            ['section'=>'admin','label'=>'Webhooks',               'route'=>'/admin/webhooks',             'icon'=>'webhooks',    'permission'=>'webhooks.view',                     'sort_order'=>116],
-            ['section'=>'admin','label'=>'API Logs',               'route'=>'/admin/api-logs',             'icon'=>'api',         'permission'=>'api_logs.view',                     'sort_order'=>117],
-            ['section'=>'admin','label'=>'Webhook Logs',           'route'=>'/admin/webhook-logs',         'icon'=>'webhooks',    'permission'=>'webhook_logs.view',                 'sort_order'=>118],
+            ['section'=>MenuSection::Admin->value,'label'=>'API Keys',               'route'=>'/admin/api-keys',             'icon'=>'api',         'permission'=>'api_keys.view',                     'sort_order'=>115],
+            ['section'=>MenuSection::Admin->value,'label'=>'Webhooks',               'route'=>'/admin/webhooks',             'icon'=>'webhooks',    'permission'=>'webhooks.view',                     'sort_order'=>116],
+            ['section'=>MenuSection::Admin->value,'label'=>'API Logs',               'route'=>'/admin/api-logs',             'icon'=>'api',         'permission'=>'api_logs.view',                     'sort_order'=>117],
+            ['section'=>MenuSection::Admin->value,'label'=>'Webhook Logs',           'route'=>'/admin/webhook-logs',         'icon'=>'webhooks',    'permission'=>'webhook_logs.view',                 'sort_order'=>118],
 
             // ── Notifications / Reports / Support ─────────────────────
-            ['section'=>'admin','label'=>'Notifications',          'route'=>'/admin/notifications',        'icon'=>'notifications','permission'=>'notifications.view',                'sort_order'=>120],
-            ['section'=>'admin','label'=>'Reports',                'route'=>'/admin/reports',              'icon'=>'reports',     'permission'=>'reports.view',                      'sort_order'=>125],
-            ['section'=>'admin','label'=>'Support',                'route'=>'/admin/support-tickets',      'icon'=>'support',     'permission'=>'support.view',                      'sort_order'=>130],
+            ['section'=>MenuSection::Admin->value,'label'=>'Notifications',          'route'=>'/admin/notifications',        'icon'=>'notifications','permission'=>'notifications.view',                'sort_order'=>120],
+            ['section'=>MenuSection::Admin->value,'label'=>'Reports',                'route'=>'/admin/reports',              'icon'=>'reports',     'permission'=>'reports.view',                      'sort_order'=>125],
+            ['section'=>MenuSection::Admin->value,'label'=>'Support',                'route'=>'/admin/support-tickets',      'icon'=>'support',     'permission'=>'support.view',                      'sort_order'=>130],
 
             // ── System Admin ──────────────────────────────────────────
-            ['section'=>'admin','label'=>'Users',                  'route'=>'/admin/users',                'icon'=>'users',       'permission'=>'users.view',                        'sort_order'=>140],
-            ['section'=>'admin','label'=>'Roles',                  'route'=>'/admin/roles',                'icon'=>'roles',       'permission'=>'roles.view',                        'sort_order'=>150],
-            ['section'=>'admin','label'=>'Menus',                  'route'=>'/admin/menus',                'icon'=>'menus',       'permission'=>'menus.view',                        'sort_order'=>155],
-            ['section'=>'admin','label'=>'Settings',               'route'=>'/admin/settings',             'icon'=>'settings',    'permission'=>'settings.view',                     'sort_order'=>160],
+            ['section'=>MenuSection::Admin->value,'label'=>'Users',                  'route'=>'/admin/users',                'icon'=>'users',       'permission'=>'users.view',                        'sort_order'=>140],
+            ['section'=>MenuSection::Admin->value,'label'=>'Roles',                  'route'=>'/admin/roles',                'icon'=>'roles',       'permission'=>'roles.view',                        'sort_order'=>150],
+            ['section'=>MenuSection::Admin->value,'label'=>'Menus',                  'route'=>'/admin/menus',                'icon'=>'menus',       'permission'=>'menus.view',                        'sort_order'=>155],
+            ['section'=>MenuSection::Admin->value,'label'=>'Settings',               'route'=>'/admin/settings',             'icon'=>'settings',    'permission'=>'settings.view',                     'sort_order'=>160],
         ];
 
         $this->upsertMenus($table, $menus);
@@ -109,7 +111,7 @@ class MenuSeeder extends Seeder
     {
         $menus = [
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Dashboard',
                 'label' => 'Dashboard',
                 'route' => '/merchant/dashboard',
@@ -118,7 +120,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 10,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Onboarding',
                 'label' => 'Onboarding',
                 'route' => '/merchant/onboarding',
@@ -127,7 +129,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 20,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Business Profile',
                 'label' => 'Business Profile',
                 'route' => '/merchant/onboarding',
@@ -136,7 +138,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 30,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Documents',
                 'label' => 'Documents',
                 'route' => '/merchant/onboarding',
@@ -145,7 +147,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 40,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Pickup Location',
                 'label' => 'Pickup Location',
                 'route' => '/merchant/onboarding',
@@ -154,7 +156,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 50,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Bank Details',
                 'label' => 'Bank Details',
                 'route' => '/merchant/onboarding',
@@ -163,7 +165,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 60,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Submit Verification',
                 'label' => 'Submit Verification',
                 'route' => '/merchant/onboarding',
@@ -172,7 +174,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 70,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Shipments',
                 'label' => 'Shipments',
                 'route' => '/merchant/shipments',
@@ -181,7 +183,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 80,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Customers',
                 'label' => 'Customers',
                 'route' => '/merchant/customers',
@@ -190,7 +192,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 90,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Pickups',
                 'label' => 'Pickups',
                 'route' => '/merchant/pickups',
@@ -199,7 +201,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 100,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Pickup Locations',
                 'label' => 'Pickup Locations',
                 'route' => '/merchant/pickup-locations',
@@ -208,7 +210,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 110,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Rates',
                 'label' => 'Rates',
                 'route' => '/merchant/rates',
@@ -217,7 +219,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 120,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'POD',
                 'label' => 'POD',
                 'route' => '/merchant/pod',
@@ -226,7 +228,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 130,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Settlements',
                 'label' => 'Settlements',
                 'route' => '/merchant/settlements',
@@ -235,7 +237,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 140,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Invoices',
                 'label' => 'Invoices',
                 'route' => '/merchant/invoices',
@@ -244,7 +246,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 150,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'API Keys',
                 'label' => 'API Keys',
                 'route' => '/merchant/api-keys',
@@ -253,7 +255,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 160,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'API Logs',
                 'label' => 'API Logs',
                 'route' => '/merchant/api-logs',
@@ -262,7 +264,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 170,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Webhooks',
                 'label' => 'Webhooks',
                 'route' => '/merchant/webhooks',
@@ -271,7 +273,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 180,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Webhook Logs',
                 'label' => 'Webhook Logs',
                 'route' => '/merchant/webhook-logs',
@@ -280,7 +282,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 190,
             ],
             [
-                'section' => 'merchant',
+                'section' => MenuSection::Merchant->value,
                 'title' => 'Support',
                 'label' => 'Support',
                 'route' => '/merchant/support-tickets',
@@ -297,7 +299,7 @@ class MenuSeeder extends Seeder
     {
         $menus = [
             [
-                'section' => 'staff',
+                'section' => MenuSection::Staff->value,
                 'title' => 'Dashboard',
                 'label' => 'Dashboard',
                 'route' => '/staff/dashboard',
@@ -306,7 +308,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 10,
             ],
             [
-                'section' => 'staff',
+                'section' => MenuSection::Staff->value,
                 'title' => 'Pickups',
                 'label' => 'Pickups',
                 'route' => '/staff/pickups',
@@ -315,7 +317,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 20,
             ],
             [
-                'section' => 'staff',
+                'section' => MenuSection::Staff->value,
                 'title' => 'Deliveries',
                 'label' => 'Deliveries',
                 'route' => '/staff/deliveries',
@@ -324,7 +326,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 30,
             ],
             [
-                'section' => 'staff',
+                'section' => MenuSection::Staff->value,
                 'title' => 'POD',
                 'label' => 'POD',
                 'route' => '/staff/pod',
@@ -334,7 +336,7 @@ class MenuSeeder extends Seeder
             ],
             // support_staff menus
             [
-                'section' => 'staff',
+                'section' => MenuSection::Staff->value,
                 'title' => 'Shipments',
                 'label' => 'Shipments',
                 'route' => '/staff/shipments',
@@ -343,7 +345,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 50,
             ],
             [
-                'section' => 'staff',
+                'section' => MenuSection::Staff->value,
                 'title' => 'Support Tickets',
                 'label' => 'Support Tickets',
                 'route' => '/staff/support',
@@ -353,7 +355,7 @@ class MenuSeeder extends Seeder
             ],
             // accounts_staff menus
             [
-                'section' => 'staff',
+                'section' => MenuSection::Staff->value,
                 'title' => 'COD / POD',
                 'label' => 'COD / POD',
                 'route' => '/staff/cod',
@@ -362,7 +364,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 70,
             ],
             [
-                'section' => 'staff',
+                'section' => MenuSection::Staff->value,
                 'title' => 'Settlements',
                 'label' => 'Settlements',
                 'route' => '/staff/settlements',
@@ -371,7 +373,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 80,
             ],
             [
-                'section' => 'staff',
+                'section' => MenuSection::Staff->value,
                 'title' => 'HQ Commissions',
                 'label' => 'HQ Commissions',
                 'route' => '/staff/hq-commissions',
@@ -380,7 +382,7 @@ class MenuSeeder extends Seeder
                 'sort_order' => 81,
             ],
             [
-                'section' => 'staff',
+                'section' => MenuSection::Staff->value,
                 'title' => 'Payment Gateways',
                 'label' => 'Payment Gateways',
                 'route' => '/staff/payment-gateways',

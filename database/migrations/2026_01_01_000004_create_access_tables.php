@@ -84,7 +84,7 @@ return new class extends Migration
         Schema::create('menu_items', function (Blueprint $table) {
             $table->id();
             $table->foreignId('parent_id')->nullable()->constrained('menu_items')->nullOnDelete();
-            $table->string('section')->default('admin')->index();
+            $table->string('section')->default(MenuSection::Admin->value)->index();
             $table->string('label');
             $table->string('path')->nullable();
             $table->string('icon')->nullable();

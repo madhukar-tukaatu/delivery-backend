@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Modules\Branch\Models\Branch;
+use Modules\Merchant\Enums\MerchantStatus;
 use Modules\Shipment\Models\Shipment;
 
 class Merchant extends Model
@@ -56,6 +57,7 @@ class Merchant extends Model
     protected function casts(): array
     {
         return [
+            'status' => MerchantStatus::class,
             /*
              * Store integration JSON fields
              */

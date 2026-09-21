@@ -2,6 +2,8 @@
 
 namespace Database\Seeders\System;
 
+use Modules\Access\Enums\SystemRole;
+
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Schema;
 use Spatie\Permission\Models\Permission;
@@ -80,13 +82,13 @@ class RoleSeeder extends Seeder
             // ═══════════════════════════════════════════════════════════
             // SUPER ADMIN — everything
             // ═══════════════════════════════════════════════════════════
-            'super_admin' => $all,
+            SystemRole::SuperAdmin->value => $all,
 
             // ═══════════════════════════════════════════════════════════
             // MAIN ADMIN
             // Full operational access. No system role/menu/delete control.
             // ═══════════════════════════════════════════════════════════
-            'main_admin' => [
+            SystemRole::MainAdmin->value => [
                 'dashboard.view',
 
                 // Branches — full management
@@ -214,7 +216,7 @@ class RoleSeeder extends Seeder
             // Manages one branch: operations + team. No system pricing config.
             // No top-level branches list. View-only on pricing.
             // ═══════════════════════════════════════════════════════════
-            'branch_manager' => [
+            SystemRole::BranchManager->value => [
                 'dashboard.view',
 
                 // Own branch team only — NOT branches.view (hides Branches menu)
@@ -265,7 +267,7 @@ class RoleSeeder extends Seeder
             // SUB BRANCH MANAGER
             // Subset of branch_manager — local sub-branch only.
             // ═══════════════════════════════════════════════════════════
-            'sub_branch_manager' => [
+            SystemRole::SubBranchManager->value => [
                 'dashboard.view',
 
                 'branches.team.view', 'branches.team.manage', 'branches.team.credentials',
@@ -304,7 +306,7 @@ class RoleSeeder extends Seeder
             // BOOKING STAFF
             // Books shipments via ADMIN portal. No staff portal.
             // ═══════════════════════════════════════════════════════════
-            'booking_staff' => [
+            SystemRole::BookingStaff->value => [
                 'dashboard.view',
 
                 'customers.view', 'customers.create', 'customers.edit',
@@ -326,7 +328,7 @@ class RoleSeeder extends Seeder
             // ═══════════════════════════════════════════════════════════
             // PICKUP STAFF — staff portal only
             // ═══════════════════════════════════════════════════════════
-            'pickup_staff' => [
+            SystemRole::PickupStaff->value => [
                 'staff.dashboard', 'staff.pickups',
 
                 'shipments.view',
@@ -348,7 +350,7 @@ class RoleSeeder extends Seeder
             // ═══════════════════════════════════════════════════════════
             // DISPATCH STAFF — staff portal + admin dispatch screens
             // ═══════════════════════════════════════════════════════════
-            'dispatch_staff' => [
+            SystemRole::DispatchStaff->value => [
                 'staff.dashboard',
 
                 'shipments.view', 'shipments.status', 'shipments.lifecycle',
@@ -372,7 +374,7 @@ class RoleSeeder extends Seeder
             // ═══════════════════════════════════════════════════════════
             // DELIVERY STAFF — staff portal only
             // ═══════════════════════════════════════════════════════════
-            'delivery_staff' => [
+            SystemRole::DeliveryStaff->value => [
                 'staff.dashboard', 'staff.deliveries',
 
                 'shipments.view',
@@ -386,7 +388,7 @@ class RoleSeeder extends Seeder
             // ═══════════════════════════════════════════════════════════
             // WAREHOUSE STAFF — staff portal, receiving only
             // ═══════════════════════════════════════════════════════════
-            'warehouse_staff' => [
+            SystemRole::WarehouseStaff->value => [
                 'staff.dashboard',
 
                 'shipments.view', 'shipments.status',
@@ -401,7 +403,7 @@ class RoleSeeder extends Seeder
             // ═══════════════════════════════════════════════════════════
             // RIDER — staff portal, pickup + delivery + POD
             // ═══════════════════════════════════════════════════════════
-            'rider' => [
+            SystemRole::Rider->value => [
                 'staff.dashboard', 'staff.pickups', 'staff.deliveries',
                 'staff.pod', 'staff.rider_location',
 
@@ -431,7 +433,7 @@ class RoleSeeder extends Seeder
             // ═══════════════════════════════════════════════════════════
             // ACCOUNTS STAFF — staff portal, finance
             // ═══════════════════════════════════════════════════════════
-            'accounts_staff' => [
+            SystemRole::AccountsStaff->value => [
                 'staff.dashboard',
 
                 'merchants.view',
@@ -457,7 +459,7 @@ class RoleSeeder extends Seeder
             // ═══════════════════════════════════════════════════════════
             // SUPPORT STAFF — staff portal, read + tickets
             // ═══════════════════════════════════════════════════════════
-            'support_staff' => [
+            SystemRole::SupportStaff->value => [
                 'staff.dashboard',
 
                 'shipments.view',
@@ -475,7 +477,7 @@ class RoleSeeder extends Seeder
             // ═══════════════════════════════════════════════════════════
             // BRANCH STAFF (generic catch-all for branch-level staff)
             // ═══════════════════════════════════════════════════════════
-            'branch_staff' => [
+            SystemRole::BranchStaff->value => [
                 'staff.dashboard',
                 'shipments.view',
                 'pickups.view',
@@ -486,7 +488,7 @@ class RoleSeeder extends Seeder
             // ═══════════════════════════════════════════════════════════
             // MERCHANT — merchant portal only
             // ═══════════════════════════════════════════════════════════
-            'merchant' => [
+            SystemRole::Merchant->value => [
                 'merchant.onboarding', 'merchant.profile', 'merchant.documents',
                 'merchant.locations', 'merchant.bank_details', 'merchant.submit_verification',
                 'merchant.dashboard', 'merchant.shipments', 'merchant.pickups',

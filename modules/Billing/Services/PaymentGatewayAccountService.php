@@ -2,8 +2,10 @@
 
 namespace Modules\Billing\Services;
 
+use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
 use Modules\Billing\Models\PaymentGatewayAccount;
+use Modules\Billing\Support\PaymentGatewayCatalog;
 
 class PaymentGatewayAccountService
 {
@@ -44,6 +46,26 @@ class PaymentGatewayAccountService
         }
 
         return $this->companyAccount($gateway);
+    }
+
+    /**
+     * Keep only known keys for the gateway (ignore unknown FE extras).
+     */
+    public function filterCredentials(string $gateway, array $credentials): array
+    {
+        $allowed = PaymentGatewayCatalog::fieldKeys($gateway);
+        if ($allowed === []) {
+            return $credentials;
+        }
+
+        $out = [];
+        foreach ($allowed as $key) {
+            if (array_key_exists($key, $credentials)) {
+                $out[$key] = $credentials[$key];
+            }
+        }
+
+        return $out;
     }
 
     public function upsert(string $ownerType, ?int $ownerId, string $gateway, array $credentials, array $opts = []): PaymentGatewayAccount
@@ -130,6 +152,7 @@ class PaymentGatewayAccountService
         foreach ($creds as $k => $v) {
             $isSecret = str_contains(strtolower($k), 'secret')
                 || str_contains(strtolower($k), 'key')
+                || str_contains(strtolower($k), 'password')
                 || str_contains(strtolower($k), 'authorization');
             if ($isSecret && filled($v)) {
                 $s = (string) $v;
@@ -153,5 +176,13 @@ class PaymentGatewayAccountService
             'credentials' => $masked,
             'updated_at' => $account->updated_at,
         ];
+    }
+
+    public function logDecryptFailure(int $accountId, \Throwable $e): void
+    {
+        Log::warning('PaymentGatewayAccount decrypt failed', [
+            'id' => $accountId,
+            'message' => $e->getMessage(),
+        ]);
     }
 }

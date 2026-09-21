@@ -4,6 +4,7 @@ namespace Modules\Billing\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Crypt;
+use Illuminate\Support\Facades\Log;
 
 class PaymentGatewayAccount extends Model
 {
@@ -41,6 +42,11 @@ class PaymentGatewayAccount extends Model
 
             return is_array($decoded) ? $decoded : [];
         } catch (\Throwable $e) {
+            Log::warning('PaymentGatewayAccount credentials decrypt failed', [
+                'id' => $this->attributes['id'] ?? null,
+                'message' => $e->getMessage(),
+            ]);
+
             return [];
         }
     }

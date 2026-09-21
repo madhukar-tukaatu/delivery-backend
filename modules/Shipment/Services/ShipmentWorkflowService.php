@@ -9,6 +9,10 @@ class ShipmentWorkflowService
 {
     public function createPriceBreakdown(int $shipmentId, ?int $quoteId, array $snapshot): void
     {
+        if (!Schema::hasTable('shipment_price_breakdowns')) {
+            return;
+        }
+
         $b = $snapshot['breakdown'] ?? [];
         DB::table('shipment_price_breakdowns')->insert($this->cols('shipment_price_breakdowns', [
             'shipment_id'           => $shipmentId,

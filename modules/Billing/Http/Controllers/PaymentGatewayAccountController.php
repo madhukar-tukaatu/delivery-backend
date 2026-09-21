@@ -7,6 +7,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Modules\Billing\Models\PaymentGatewayAccount;
 use Modules\Billing\Services\PaymentGatewayAccountService;
+use Modules\Billing\Support\PaymentGatewayCatalog;
 
 class PaymentGatewayAccountController extends Controller
 {
@@ -18,22 +19,35 @@ class PaymentGatewayAccountController extends Controller
     {
         $user = $request->user();
         $ok = method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin();
-        $ok = $ok || $user->hasRole(['super_admin', 'main_admin']);
+        $ok = $ok || (method_exists($user, 'hasRole') && $user->hasRole(['super_admin', 'main_admin']));
         abort_unless($ok, 403, 'Only superadmin can manage company payment accounts.');
     }
 
-    public function catalog()
+    protected function isHqUser($user): bool
+    {
+        $ok = method_exists($user, 'isSuperAdmin') && ($user->isSuperAdmin() ?? false);
+        $ok = $ok || (method_exists($user, 'hasRole') && $user->hasRole(['super_admin', 'main_admin', 'admin']));
+
+        return (bool) $ok;
+    }
+
+    protected function canManageCompany($user): bool
+    {
+        $ok = method_exists($user, 'isSuperAdmin') && ($user->isSuperAdmin() ?? false);
+        $ok = $ok || (method_exists($user, 'hasRole') && $user->hasRole(['super_admin', 'main_admin']));
+
+        return (bool) $ok;
+    }
+
+    public function catalog(Request $request)
     {
         return ApiResponse::success([
-            'gateways' => [
-                ['code' => 'hamropay', 'label' => 'HamroPay', 'status' => 'live'],
-                ['code' => 'esewa', 'label' => 'eSewa', 'status' => 'planned'],
-                ['code' => 'khalti', 'label' => 'Khalti', 'status' => 'planned'],
-                ['code' => 'connectips', 'label' => 'ConnectIPS', 'status' => 'planned'],
-            ],
-            'owners' => [
-                ['type' => 'company', 'label' => 'Tukaatu Express (superadmin)'],
-                ['type' => 'branch', 'label' => 'Branch'],
+            'gateways' => PaymentGatewayCatalog::gateways(),
+            'owners' => PaymentGatewayCatalog::owners(),
+            'can_manage_company' => $this->canManageCompany($request->user()),
+            'viewer' => [
+                'is_hq' => $this->isHqUser($request->user()),
+                'branch_id' => $request->user()->branch_id ?? null,
             ],
         ]);
     }
@@ -50,13 +64,13 @@ class PaymentGatewayAccountController extends Controller
             $q->where('owner_id', $request->owner_id);
         }
         if ($request->filled('gateway')) {
-            $q->where('gateway', $request->gateway);
+            $q->where('gateway', strtolower((string) $request->gateway));
         }
 
-        // Branch managers only see their branch
-        if (! ($user->isSuperAdmin() ?? false) && ! $user->hasRole(['super_admin', 'main_admin', 'admin'])) {
+        // Branch-scoped users only see their branch accounts
+        if (! $this->isHqUser($user)) {
             $branchId = $user->branch_id ?? null;
-            abort_unless($branchId, 403);
+            abort_unless($branchId, 403, 'Branch context required.');
             $q->where('owner_type', 'branch')->where('owner_id', $branchId);
         }
 
@@ -69,8 +83,10 @@ class PaymentGatewayAccountController extends Controller
     {
         $this->assertCanManageCompany($request);
 
+        $codes = implode(',', PaymentGatewayCatalog::codes());
+
         $data = $request->validate([
-            'gateway' => ['required', 'string', 'in:hamropay,esewa,khalti,connectips'],
+            'gateway' => ['required', 'string', 'in:'.$codes],
             'label' => ['nullable', 'string', 'max:64'],
             'is_enabled' => ['nullable', 'boolean'],
             'is_default' => ['nullable', 'boolean'],
@@ -81,7 +97,7 @@ class PaymentGatewayAccountController extends Controller
             'company',
             null,
             $data['gateway'],
-            $data['credentials'],
+            $this->accounts->filterCredentials($data['gateway'], $data['credentials']),
             [
                 'label' => $data['label'] ?? 'default',
                 'is_enabled' => $data['is_enabled'] ?? true,
@@ -95,13 +111,14 @@ class PaymentGatewayAccountController extends Controller
     public function upsertBranch(Request $request, int $branchId)
     {
         $user = $request->user();
-        $isHq = ($user->isSuperAdmin() ?? false) || $user->hasRole(['super_admin', 'main_admin', 'admin']);
-        if (! $isHq) {
-            abort_unless((int) ($user->branch_id ?? 0) === (int) $branchId, 403);
+        if (! $this->isHqUser($user)) {
+            abort_unless((int) ($user->branch_id ?? 0) === (int) $branchId, 403, 'You can only manage your own branch account.');
         }
 
+        $codes = implode(',', PaymentGatewayCatalog::codes());
+
         $data = $request->validate([
-            'gateway' => ['required', 'string', 'in:hamropay,esewa,khalti,connectips'],
+            'gateway' => ['required', 'string', 'in:'.$codes],
             'label' => ['nullable', 'string', 'max:64'],
             'is_enabled' => ['nullable', 'boolean'],
             'is_default' => ['nullable', 'boolean'],
@@ -112,7 +129,7 @@ class PaymentGatewayAccountController extends Controller
             'branch',
             $branchId,
             $data['gateway'],
-            $data['credentials'],
+            $this->accounts->filterCredentials($data['gateway'], $data['credentials']),
             [
                 'label' => $data['label'] ?? 'default',
                 'is_enabled' => $data['is_enabled'] ?? true,

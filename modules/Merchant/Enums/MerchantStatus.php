@@ -5,6 +5,7 @@ namespace Modules\Merchant\Enums;
 enum MerchantStatus: string
 {
     case Pending = 'pending';
+    case PendingVerification = 'pending_verification';
     case Active = 'active';
     case Approved = 'approved';
     case Rejected = 'rejected';
@@ -24,5 +25,10 @@ enum MerchantStatus: string
             static fn (self $status): string => $status->value,
             self::cases()
         );
+    }
+
+    public function isApplicationQueue(): bool
+    {
+        return in_array($this, [self::Pending, self::PendingVerification], true);
     }
 }

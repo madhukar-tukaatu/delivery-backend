@@ -11,7 +11,7 @@ final class MerchantShipmentGateService
         Merchant $merchant
     ): void {
 
-        if ($merchant->status !== 'active') {
+        if (! $merchant->isActive()) {
             throw ValidationException::withMessages([
                 'merchant' =>
                     'Your merchant account is not active.',

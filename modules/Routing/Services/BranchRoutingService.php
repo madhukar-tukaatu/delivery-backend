@@ -90,11 +90,12 @@ class BranchRoutingService
         }
 
         $matched = $nearest['branch_model'];
-        $parent = $matched->type === 'sub_branch' && $matched->parent ? $matched->parent : $matched;
+        $isSubBranch = $matched->is_sub_branch;
+        $parent = $isSubBranch && $matched->parent ? $matched->parent : $matched;
 
         return [
             'branch' => $parent,
-            'sub_branch' => $matched->type === 'sub_branch' ? $matched : null,
+            'sub_branch' => $isSubBranch ? $matched : null,
             'distance_km' => $nearest['distance_km'],
             'service_area' => null,
         ];

@@ -27,6 +27,11 @@ enum MerchantStatus: string
         );
     }
 
+    public function isActive(): bool
+    {
+        return $this === self::Active;
+    }
+
     public function isApplicationQueue(): bool
     {
         return in_array($this, [self::Pending, self::PendingVerification], true);

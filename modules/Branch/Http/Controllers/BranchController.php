@@ -1960,13 +1960,17 @@ class BranchController extends Controller
         ]));
     }
 
-    private function normalizeBranchType(?string $type): ?string
+    private function normalizeBranchType(mixed $type): ?string
     {
-        if (!$type) {
+        if ($type instanceof \Modules\Branch\Enums\BranchType) {
+            $type = $type->value;
+        }
+
+        if ($type === null || $type === '') {
             return null;
         }
 
-        $type = strtolower(trim($type));
+        $type = strtolower(trim((string) $type));
 
         return match ($type) {
             'main', 'main_branch', 'head', 'head_branch' => Branch::TYPE_HEAD_BRANCH,

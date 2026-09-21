@@ -230,10 +230,20 @@ class Branch extends Model
 
     public function getIsMainBranchAttribute(): bool
     {
-        return in_array($this->type, [
-            self::TYPE_HEAD_BRANCH,
-            self::TYPE_FRANCHISE_BRANCH,
-        ], true);
+        $type = $this->type instanceof BranchType
+            ? $this->type
+            : BranchType::resolve($this->type);
+
+        return $type->isMainBranch();
+    }
+
+    public function isActive(): bool
+    {
+        $status = $this->status instanceof BranchStatus
+            ? $this->status
+            : BranchStatus::resolve($this->status);
+
+        return $status->isOperable();
     }
 
     public function getIsSubBranchAttribute(): bool

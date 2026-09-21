@@ -302,4 +302,19 @@ class Merchant extends Model
     {
         return $this->pendingChangeRequest;
     }
+
+    /**
+     * Whether the merchant account can use gateway/API integrations.
+     */
+    public function isActive(): bool
+    {
+        $status = $this->status;
+
+        if ($status instanceof MerchantStatus) {
+            return $status->isActive();
+        }
+
+        return MerchantStatus::resolve($status)->isActive();
+    }
+
 }

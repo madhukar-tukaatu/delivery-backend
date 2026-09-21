@@ -26,7 +26,7 @@ class MerchantPickupLocationController extends Controller
     public function store(Request $request, BranchLocatorService $branchLocator)
     {
         $merchant = $request->user()->merchant;
-        abort_unless($merchant && $merchant->status === 'active', 403, 'Merchant account is not active.');
+        abort_unless($merchant && $merchant->isActive(), 403, 'Merchant account is not active.');
 
         $data = $this->validatePayload($request);
         $nearest = $branchLocator->nearestBranchSet((float) $data['latitude'], (float) $data['longitude']);

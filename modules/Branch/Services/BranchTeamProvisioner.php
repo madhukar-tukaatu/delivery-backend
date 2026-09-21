@@ -30,7 +30,7 @@ class BranchTeamProvisioner
         array $branchData
     ): User {
         $managerRole =
-            $branch->type === Branch::TYPE_SUB_BRANCH
+            $branch->is_sub_branch
                 ? 'sub_branch_manager'
                 : 'branch_manager';
 
@@ -192,7 +192,7 @@ class BranchTeamProvisioner
 
     private function teamTemplate(Branch $branch): array
     {
-        if ($branch->type === Branch::TYPE_SUB_BRANCH) {
+        if ($branch->is_sub_branch) {
             return [
                 ['role' => 'booking_staff', 'code' => 'BOOKING', 'quantity' => 1],
                 ['role' => 'pickup_staff', 'code' => 'PICKUP', 'quantity' => 1],

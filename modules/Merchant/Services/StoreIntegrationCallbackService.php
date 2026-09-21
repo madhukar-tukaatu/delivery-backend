@@ -29,7 +29,7 @@ class StoreIntegrationPostApprovalService
                 ->lockForUpdate()
                 ->findOrFail($merchant->id);
 
-            if ($merchant->status !== 'active') {
+            if (! $merchant->isActive()) {
                 throw ValidationException::withMessages([
                     'merchant' => [
                         'The merchant must be active before completing Store Manager integration approval.',

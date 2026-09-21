@@ -110,10 +110,7 @@ final class MerchantApiKeyGuard
             ]);
         }
 
-        if (
-            isset($merchant->status)
-            && $merchant->status !== 'active'
-        ) {
+        if (! $merchant->isActive()) {
             throw ValidationException::withMessages([
                 'api_key' => 'Merchant account is not active.',
             ]);

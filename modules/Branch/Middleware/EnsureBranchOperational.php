@@ -34,12 +34,14 @@ final class EnsureBranchOperational
             ], 403);
         }
 
-        if ($branch->status !== Branch::STATUS_ACTIVE) {
+        if (! $branch->isActive()) {
             return response()->json([
                 'message' =>
                     'The branch must be active before operational features can be used.',
                 'code' => 'BRANCH_NOT_ACTIVE',
-                'branch_status' => $branch->status,
+                'branch_status' => $branch->status instanceof \BackedEnum
+                    ? $branch->status->value
+                    : $branch->status,
             ], 403);
         }
 

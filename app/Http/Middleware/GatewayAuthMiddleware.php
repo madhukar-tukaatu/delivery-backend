@@ -26,7 +26,7 @@ class GatewayAuthMiddleware
             ->with('merchant')
             ->first();
 
-        if (!$key || !$key->merchant || $key->merchant->status !== 'active') {
+        if (!$key || !$key->merchant || ! $key->merchant->isActive()) {
             return response()->json(['success' => false, 'message' => 'Invalid or inactive API key.'], 401);
         }
 

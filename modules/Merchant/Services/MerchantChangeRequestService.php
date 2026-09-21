@@ -40,7 +40,7 @@ class MerchantChangeRequestService
     ): MerchantChangeRequest {
         return DB::transaction(function () use ($merchant, $requestedByUser, $changeType, $data) {
             // Validate merchant is active
-            if ($merchant->status !== 'active') {
+            if (! $merchant->isActive()) {
                 throw new \Exception(
                     'Change requests can only be submitted by active merchants.'
                 );

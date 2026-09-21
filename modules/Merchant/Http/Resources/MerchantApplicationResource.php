@@ -9,9 +9,15 @@ class MerchantApplicationResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
-        $resolvedStatus = $this->status === 'active'
+        $statusValue = $this->status instanceof \Modules\Merchant\Enums\MerchantStatus
+            ? $this->status->value
+            : (string) $this->status;
+
+        $resolvedStatus = ($this->resource instanceof \Modules\Merchant\Models\Merchant
+            ? $this->resource->isActive()
+            : ($statusValue === 'active'))
             ? 'active'
-            : ($this->verification_status ?: $this->status);
+            : ($this->verification_status ?: $statusValue);
 
         return [
             'id' => $this->id,

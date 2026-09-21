@@ -28,8 +28,7 @@ final class BranchManagerPortalController extends Controller
             'manager:id,name,email,phone,username,account_setup_completed_at',
         ]);
 
-        $operationsEnabled =
-            $branch->status === Branch::STATUS_ACTIVE;
+        $operationsEnabled = $branch->isActive();
 
         return response()->json([
             'data' => [

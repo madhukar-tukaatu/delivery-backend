@@ -62,7 +62,7 @@ final class ShipmentService
             ]);
         }
 
-        if ($merchant->status !== 'active') {
+        if (! $merchant->isActive()) {
             throw ValidationException::withMessages([
                 'merchant' => [
                     'Merchant account is not active.',

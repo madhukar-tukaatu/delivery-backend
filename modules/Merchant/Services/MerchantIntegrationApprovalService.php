@@ -29,7 +29,7 @@ class MerchantIntegrationApprovalService
                 ->findOrFail($merchant->id);
 
             // MerchantOnboardingService already set status=active/approved before this runs
-            if ($merchant->status !== 'active') {
+            if (! $merchant->isActive()) {
                 throw ValidationException::withMessages([
                     'merchant' => ['Merchant must be active before issuing integration credentials.'],
                 ]);

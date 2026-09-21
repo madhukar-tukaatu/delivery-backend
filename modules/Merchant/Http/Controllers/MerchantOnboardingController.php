@@ -238,7 +238,7 @@ class MerchantOnboardingController extends Controller
             ], 422);
         }
 
-        if ($merchant->status === 'active') {
+        if ($merchant->isActive()) {
             return response()->json([
                 'message' => 'Approved merchant documents cannot be changed from onboarding.',
             ], 422);

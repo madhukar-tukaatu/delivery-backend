@@ -87,6 +87,9 @@ Route::prefix('v1/admin')
             |--------------------------------------------------------------------------
             */
 
+            Route::post('menus/reorder', [MenuController::class, 'reorder'])
+                ->name('menus.reorder');
+
             Route::apiResource('menus', MenuController::class)
                 ->except(['show'])
                 ->names([

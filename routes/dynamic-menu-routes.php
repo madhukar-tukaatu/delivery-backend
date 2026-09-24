@@ -32,12 +32,16 @@ Route::prefix('v1/admin')
 /*
 | Admin Menu CRUD - protected by automatic route permission.
 | Permissions generated:
-| menus.view, menus.create, menus.edit, menus.delete
+| menus.view, menus.create, menus.update, menus.delete
+| reorder maps to menus.update via RoutePermissionMapper.
 */
 Route::prefix('v1/admin')
     ->name('admin.')
     ->middleware(['auth:sanctum', 'route.permission'])
     ->group(function () {
+        Route::post('menus/reorder', [MenuController::class, 'reorder'])
+            ->name('menus.reorder');
+
         Route::apiResource('menus', MenuController::class)
             ->except(['show'])
             ->names([

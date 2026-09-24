@@ -3,7 +3,9 @@ namespace Modules\Access\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Modules\Access\Models\MenuItem;
 
 class MenuController extends Controller
@@ -117,6 +119,9 @@ class MenuController extends Controller
         $query = MenuItem::query()
             ->with([
                 'parent:id,label,path,section',
+                'children' => function ($query) {
+                    $query->orderBy('sort_order')->orderBy('id');
+                },
             ])
             ->orderBy('section')
             ->orderBy('sort_order')
@@ -160,6 +165,164 @@ class MenuController extends Controller
                     50
                 )
             ),
+        ]);
+    }
+
+    /**
+     * Bulk reorder / re-parent menus for a section.
+     *
+     * Body: { section?: string, items: [{ id, parent_id, sort_order }, ...] }
+     */
+    public function reorder(Request $request)
+    {
+        $data = $request->validate([
+            'section' => [
+                'nullable',
+                'string',
+                Rule::in(['admin', 'merchant', 'staff']),
+            ],
+            'items' => ['required', 'array', 'min:1'],
+            'items.*.id' => [
+                'required',
+                'integer',
+                'distinct',
+                'exists:menu_items,id',
+            ],
+            'items.*.parent_id' => [
+                'nullable',
+                'integer',
+                'exists:menu_items,id',
+            ],
+            'items.*.sort_order' => [
+                'required',
+                'integer',
+                'min:0',
+            ],
+        ]);
+
+        $items = collect($data['items']);
+        $ids = $items->pluck('id')->all();
+        $menus = MenuItem::query()
+            ->whereIn('id', $ids)
+            ->get()
+            ->keyBy('id');
+
+        if ($menus->count() !== count($ids)) {
+            throw ValidationException::withMessages([
+                'items' => 'One or more menu items were not found.',
+            ]);
+        }
+
+        $section = $data['section'] ?? null;
+
+        if ($section) {
+            $mismatched = $menus->first(function (MenuItem $menu) use ($section) {
+                $menuSection = $menu->section instanceof \BackedEnum
+                    ? $menu->section->value
+                    : (string) $menu->section;
+
+                return $menuSection !== $section;
+            });
+
+            if ($mismatched) {
+                throw ValidationException::withMessages([
+                    'section' => 'All items must belong to the same section.',
+                ]);
+            }
+        } else {
+            $sections = $menus->map(function (MenuItem $menu) {
+                return $menu->section instanceof \BackedEnum
+                    ? $menu->section->value
+                    : (string) $menu->section;
+            })->unique()->values();
+
+            if ($sections->count() > 1) {
+                throw ValidationException::withMessages([
+                    'items' => 'All items in a reorder request must belong to the same section.',
+                ]);
+            }
+
+            $section = $sections->first();
+        }
+
+        // parent_id must reference an item in the same section (when provided)
+        $parentIds = $items
+            ->pluck('parent_id')
+            ->filter()
+            ->unique()
+            ->values();
+
+        if ($parentIds->isNotEmpty()) {
+            $parents = MenuItem::query()
+                ->whereIn('id', $parentIds->all())
+                ->get()
+                ->keyBy('id');
+
+            foreach ($parentIds as $parentId) {
+                $parent = $parents->get($parentId);
+
+                if (! $parent) {
+                    throw ValidationException::withMessages([
+                        'items' => "Parent menu {$parentId} was not found.",
+                    ]);
+                }
+
+                $parentSection = $parent->section instanceof \BackedEnum
+                    ? $parent->section->value
+                    : (string) $parent->section;
+
+                if ($parentSection !== $section) {
+                    throw ValidationException::withMessages([
+                        'items' => 'Parent menu must belong to the same section.',
+                    ]);
+                }
+            }
+        }
+
+        // Reject cycles: parent_id cannot be self or a descendant
+        $proposedParent = [];
+        foreach ($items as $row) {
+            $proposedParent[(int) $row['id']] = isset($row['parent_id'])
+                ? (int) $row['parent_id']
+                : null;
+        }
+
+        foreach ($proposedParent as $id => $parentId) {
+            if ($parentId === null) {
+                continue;
+            }
+
+            if ($parentId === $id) {
+                throw ValidationException::withMessages([
+                    'items' => 'A menu cannot be its own parent.',
+                ]);
+            }
+
+            if ($this->wouldCreateCycle($id, $parentId, $proposedParent, $menus)) {
+                throw ValidationException::withMessages([
+                    'items' => 'Reorder would create a circular parent relationship.',
+                ]);
+            }
+        }
+
+        $updated = 0;
+
+        DB::transaction(function () use ($items, &$updated) {
+            foreach ($items as $row) {
+                $affected = MenuItem::query()
+                    ->where('id', $row['id'])
+                    ->update([
+                        'parent_id' => $row['parent_id'] ?? null,
+                        'sort_order' => $row['sort_order'],
+                    ]);
+
+                $updated += $affected;
+            }
+        });
+
+        return response()->json([
+            'message' => 'Menus reordered successfully.',
+            'updated' => $updated,
         ]);
     }
 
@@ -290,6 +453,48 @@ class MenuController extends Controller
                 'boolean',
             ],
         ]);
+    }
+
+    /**
+     * Walk proposed / existing parents to detect a cycle.
+     */
+    private function wouldCreateCycle(
+        int $itemId,
+        int $newParentId,
+        array $proposedParent,
+        $menus
+    ): bool {
+        $visited = [];
+        $current = $newParentId;
+
+        while ($current !== null) {
+            if ($current === $itemId) {
+                return true;
+            }
+
+            if (isset($visited[$current])) {
+                return true;
+            }
+
+            $visited[$current] = true;
+
+            if (array_key_exists($current, $proposedParent)) {
+                $current = $proposedParent[$current];
+                continue;
+            }
+
+            $existing = $menus->get($current);
+
+            if (! $existing) {
+                $existing = MenuItem::query()->find($current);
+            }
+
+            $current = $existing?->parent_id !== null
+                ? (int) $existing->parent_id
+                : null;
+        }
+
+        return false;
     }
 
     /**

@@ -90,7 +90,8 @@ class RoutePermissionMapper
             'download' => 'download',
 
             'edit',
-            'update' => 'update',
+            'update',
+            'reorder' => 'update',
 
             'destroy',
             'delete' => 'delete',

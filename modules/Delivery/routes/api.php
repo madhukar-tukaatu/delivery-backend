@@ -9,7 +9,7 @@ use Modules\Delivery\Http\Controllers\StaffDeliveryController;
 | Admin / Branch Delivery Routes
 |--------------------------------------------------------------------------
 | NOTE: the route.permission middleware derives the required permission from
-| the ROUTE NAME (via RoutePermissionMapper), not from any argument. So the
+| the ROUTE NAME (via RoutePermissionMapper), not from any argument. So he
 | route name's last segment must map to an existing permission:
 |   deliveries.index / summary        -> deliveries.view
 |   deliveries.bulk-assign             -> deliveries.assign

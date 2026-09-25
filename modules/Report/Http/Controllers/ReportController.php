@@ -8,7 +8,7 @@ use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Modules\Branch\Models\Branch;
-use Modules\POD\Models\CodRecord;
+use Modules\POD\Models\PodRecord;
 use Modules\Delivery\Models\DeliveryAssignment;
 use Modules\Merchant\Models\Merchant;
 use Modules\Settlement\Models\MerchantSettlement;
@@ -80,7 +80,7 @@ class ReportController extends Controller
     {
         // POD Records mapped by matching scoped shipment networks
         $user = Auth::user();
-        $codQuery = CodRecord::query();
+        $codQuery = PodRecord::query();
 
         if (!$user->hasRole('super_admin') && $user->branch_type !== 'main') {
             $codQuery->whereHas('shipment', function ($q) use ($user) {

@@ -93,11 +93,17 @@ Route::prefix('v1/admin')
             Route::get('transfers/history', [TransferController::class, 'history'])
                 ->name('transfers.history');
 
+            Route::get('transfers/available-routes', [TransferController::class, 'availableRoutes'])
+                ->name('transfers.available-routes');
+
             Route::post('transfers/dispatch', [TransferController::class, 'dispatch'])
                 ->name('transfers.dispatch');
 
             Route::post('transfers/{shipment}/receive', [TransferController::class, 'receive'])
                 ->name('transfers.receive');
+
+            Route::post('transfers/{shipment}/receive-transit', [TransferController::class, 'receiveAtTransitHub'])
+                ->name('transfers.receive-transit');
 
             /*
             |--------------------------------------------------------------------------

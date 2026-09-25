@@ -107,7 +107,118 @@ final class TransferController extends Controller
 
         $perPage = min(max((int) $request->input('per_page', 20), 1), 100);
 
+        // If grouping by route is requested (for outbound board)
+        if ($direction === 'outbound' && $request->boolean('group_by_route')) {
+            return $this->getOutboundGroupedByRoute($query, $branchId, $perPage);
+        }
+
         return ApiResponse::success($query->latest('id')->paginate($perPage));
+    }
+
+    /**
+     * Get outbound transfers grouped by route for dispatch planning.
+     * Returns: { routes: [{ route_info, shipments: [...], count: N }], unmatched: [...] }
+     */
+    private function getOutboundGroupedByRoute($query, int $branchId, int $perPage): \Illuminate\Http\JsonResponse
+    {
+        $shipments = $query->with(['routeSteps'])->get();
+
+        // Group by destination branch (and transit path if available)
+        $groups = [];
+        $unmatched = [];
+
+        foreach ($shipments as $shipment) {
+            $originNode = $shipment->origin_sub_branch_id ?? $shipment->origin_branch_id;
+            $destNode = $shipment->destination_sub_branch_id ?? $shipment->destination_branch_id;
+
+            if (!$originNode || !$destNode) {
+                $unmatched[] = $shipment;
+                continue;
+            }
+
+            // Try to find a configured route for this origin-destination pair
+            $route = $this->findMatchingRoute($branchId, $destNode, $shipment->service_type ?? 'standard');
+
+            if ($route) {
+                $routeKey = $route['id'];
+                if (!isset($groups[$routeKey])) {
+                    $groups[$routeKey] = [
+                        'route' => $route,
+                        'shipments' => [],
+                        'count' => 0,
+                    ];
+                }
+                $groups[$routeKey]['shipments'][] = $shipment;
+                $groups[$routeKey]['count']++;
+            } else {
+                // No configured route - group by destination branch as fallback
+                $fallbackKey = "fallback_{$destNode}";
+                if (!isset($groups[$fallbackKey])) {
+                    $destBranch = \Modules\Branch\Models\Branch::find($destNode);
+                    $groups[$fallbackKey] = [
+                        'route' => [
+                            'id' => null,
+                            'route_code' => 'AUTO',
+                            'route_name' => 'Auto: ' . ($destBranch?->name ?? "Branch #{$destNode}"),
+                            'service_type' => $shipment->service_type ?? 'standard',
+                            'origin_branch_id' => $branchId,
+                            'destination_branch_id' => $destNode,
+                            'transit_count' => 0,
+                            'transfer_count' => 1,
+                            'path_text' => ($shipment->originBranch?->name ?? 'Origin') . ' → ' . ($destBranch?->name ?? 'Destination'),
+                            'is_configured' => false,
+                        ],
+                        'shipments' => [],
+                        'count' => 0,
+                    ];
+                }
+                $groups[$fallbackKey]['shipments'][] = $shipment;
+                $groups[$fallbackKey]['count']++;
+            }
+        }
+
+        // Paginate each group's shipments
+        $paginatedGroups = [];
+        foreach ($groups as $group) {
+            $paginatedGroups[] = [
+                'route' => $group['route'],
+                'count' => $group['count'],
+                'shipments' => array_slice($group['shipments'], 0, $perPage), // First page
+                'has_more' => count($group['shipments']) > $perPage,
+            ];
+        }
+
+        return ApiResponse::success([
+            'routes' => array_values($paginatedGroups),
+            'unmatched' => array_slice($unmatched, 0, $perPage),
+            'total_shipments' => $shipments->count(),
+        ]);
+    }
+
+    /**
+     * Find a configured transfer route matching origin->destination.
+     */
+    private function findMatchingRoute(int $originBranchId, int $destinationBranchId, string $serviceType): ?array
+    {
+        $routes = \Modules\Rate\Models\BranchTransferRoute::query()
+            ->where('service_type', $serviceType)
+            ->where('is_active', true)
+            ->with(['routeLanes.lane.fromBranch', 'routeLanes.lane.toBranch'])
+            ->orderByDesc('is_default')
+            ->orderBy('priority')
+            ->orderBy('id')
+            ->get();
+
+        foreach ($routes as $route) {
+            $path = $route->getPathBranchIds();
+            if (empty($path)) continue;
+
+            if ((int) $path[0] === $originBranchId && (int) end($path) === $destinationBranchId) {
+                return $this->formatRouteForDispatch($route);
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -420,40 +531,399 @@ final class TransferController extends Controller
     }
 
     /**
-     * Dispatch transfers (bulk or single)
+     * Get available transfer routes from the current branch.
+     * Returns all configured routes originating from this branch, grouped by destination.
+     * Used by the frontend to show route options for dispatch.
+     * 
+     * For admin users (branch_id = 0), they can specify a branch_id via query parameter.
+     * If not specified, returns all routes grouped by origin branch.
+     */
+    public function availableRoutes(Request $request)
+    {
+        $user = $request->user();
+        $branchId = $this->getBranchScope($user);
+        $serviceType = $request->string('service_type')->toString() ?: 'standard';
+
+        // For admin users, allow specifying branch_id via query parameter
+        if ($branchId === 0) {
+            $branchId = $request->integer('branch_id');
+        }
+
+        // Get all active routes for the service type
+        $routesQuery = \Modules\Rate\Models\BranchTransferRoute::query()
+            ->where('service_type', $serviceType)
+            ->where('is_active', true)
+            ->with(['routeLanes.lane.fromBranch', 'routeLanes.lane.toBranch'])
+            ->orderByDesc('is_default')
+            ->orderBy('priority')
+            ->orderBy('id');
+
+        // If branch_id is specified, filter routes originating from that branch
+        if ($branchId !== 0) {
+            $routes = $routesQuery->get();
+            
+            $formattedRoutes = [];
+            $routesByDestination = [];
+
+            foreach ($routes as $route) {
+                $path = $route->getPathBranchIds();
+                if (empty($path)) {
+                    continue;
+                }
+
+                // Only include routes that originate from the current branch
+                if ((int) $path[0] !== $branchId) {
+                    continue;
+                }
+
+                $destinationBranchId = (int) end($path);
+                $destinationBranch = \Modules\Branch\Models\Branch::find($destinationBranchId);
+
+                $formatted = $this->formatRouteForDispatch($route);
+                $formattedRoutes[] = $formatted;
+
+                // Group by destination for easy UI consumption
+                $destKey = $destinationBranchId;
+                if (!isset($routesByDestination[$destKey])) {
+                    $routesByDestination[$destKey] = [
+                        'destination_branch_id' => $destinationBranchId,
+                        'destination_branch_name' => $destinationBranch?->name ?? 'Unknown',
+                        'destination_branch_code' => $destinationBranch?->code ?? '',
+                        'routes' => [],
+                    ];
+                }
+                $routesByDestination[$destKey]['routes'][] = $formatted;
+            }
+
+            return ApiResponse::success([
+                'routes' => array_values($formattedRoutes),
+                'routes_by_destination' => array_values($routesByDestination),
+                'branch_id' => $branchId,
+                'service_type' => $serviceType,
+            ]);
+        }
+
+        // For admin without branch_id specified, return all routes grouped by origin branch
+        $routes = $routesQuery->get();
+        
+        $routesByOrigin = [];
+        
+        foreach ($routes as $route) {
+            $path = $route->getPathBranchIds();
+            if (empty($path)) {
+                continue;
+            }
+
+            $originBranchId = (int) $path[0];
+            $originBranch = \Modules\Branch\Models\Branch::find($originBranchId);
+
+            $formatted = $this->formatRouteForDispatch($route);
+
+            $originKey = $originBranchId;
+            if (!isset($routesByOrigin[$originKey])) {
+                $routesByOrigin[$originKey] = [
+                    'origin_branch_id' => $originBranchId,
+                    'origin_branch_name' => $originBranch?->name ?? 'Unknown',
+                    'origin_branch_code' => $originBranch?->code ?? '',
+                    'routes' => [],
+                ];
+            }
+            $routesByOrigin[$originKey]['routes'][] = $formatted;
+        }
+
+        return ApiResponse::success([
+            'routes' => array_values($routesByOrigin), // Flattened for backward compatibility
+            'routes_by_origin' => array_values($routesByOrigin),
+            'branch_id' => null,
+            'service_type' => $serviceType,
+        ]);
+    }
+
+    /**
+     * Format a route for the dispatch UI.
+     */
+    private function formatRouteForDispatch(\Modules\Rate\Models\BranchTransferRoute $route): array
+    {
+        $route->loadMissing('routeLanes.lane.fromBranch', 'routeLanes.lane.toBranch');
+        $lanes = $route->orderedLanes();
+
+        $path = [];
+        $transitBranches = [];
+
+        if ($lanes->isNotEmpty()) {
+            $first = $lanes->first();
+            $path[] = [
+                'branch_id' => (int) $first->from_branch_id,
+                'branch_name' => $first->fromBranch?->name ?? 'Unknown',
+                'branch_code' => $first->fromBranch?->code ?? '',
+                'is_origin' => true,
+                'is_transit' => false,
+                'is_destination' => false,
+            ];
+
+            foreach ($lanes as $index => $lane) {
+                $isLast = $index === $lanes->count() - 1;
+                $path[] = [
+                    'branch_id' => (int) $lane->to_branch_id,
+                    'branch_name' => $lane->toBranch?->name ?? 'Unknown',
+                    'branch_code' => $lane->toBranch?->code ?? '',
+                    'is_origin' => false,
+                    'is_transit' => !$isLast,
+                    'is_destination' => $isLast,
+                    'lane_id' => (int) $lane->id,
+                    'lane_name' => $lane->variant_name ?? 'Direct',
+                    'distance_km' => (float) $lane->distance_km,
+                    'estimated_hours' => (float) $lane->estimated_hours,
+                    'transport_mode' => $lane->transport_mode ?? 'road',
+                ];
+
+                if (!$isLast) {
+                    $transitBranches[] = [
+                        'branch_id' => (int) $lane->to_branch_id,
+                        'branch_name' => $lane->toBranch?->name ?? 'Unknown',
+                        'branch_code' => $lane->toBranch?->code ?? '',
+                        'sequence' => $index + 1,
+                    ];
+                }
+            }
+        }
+
+        $originBranchId = (int) ($lanes->first()?->from_branch_id ?? 0);
+        $destinationBranchId = (int) ($lanes->last()?->to_branch_id ?? 0);
+
+        return [
+            'id' => (int) $route->id,
+            'route_id' => (int) $route->id,
+            'route_code' => (string) $route->route_code,
+            'route_name' => (string) $route->name,
+            'service_type' => (string) $route->service_type,
+            'origin_branch_id' => $originBranchId,
+            'destination_branch_id' => $destinationBranchId,
+            'transit_branch_ids' => array_column($transitBranches, 'branch_id'),
+            'transit_branches' => $transitBranches,
+            'transit_count' => count($transitBranches),
+            'transfer_count' => max(1, $lanes->count()),
+            'total_distance_km' => (float) $route->getTotalDistanceKm(),
+            'total_estimated_hours' => (int) round($route->getTotalEstimatedHours()),
+            'base_rate' => (float) ($route->base_rate ?? 0),
+            'currency' => (string) ($route->currency ?? 'NPR'),
+            'path' => $path,
+            'path_text' => implode(' → ', array_column($path, 'branch_name')),
+            'is_default' => (bool) $route->is_default,
+            'priority' => (int) $route->priority,
+        ];
+    }
+
+    /**
+     * Dispatch transfers (bulk or single) - creates DispatchManifest per route
      */
     public function dispatch(Request $request)
     {
         $data = $request->validate([
             'shipment_ids' => ['required', 'array', 'min:1'],
             'shipment_ids.*' => ['integer'],
+            'transfer_route_id' => ['nullable', 'integer', 'exists:branch_transfer_routes,id'],
+            'vehicle_number' => ['nullable', 'string', 'max:50'],
+            'driver_name' => ['nullable', 'string', 'max:100'],
+            'driver_phone' => ['nullable', 'string', 'max:20'],
+            'seal_number' => ['nullable', 'string', 'max:50'],
+            'notes' => ['nullable', 'string'],
         ]);
 
         $user = $request->user();
         $branchId = $this->getBranchScope($user);
         $shipmentIds = array_values(array_unique(array_map(fn($id) => (int) $id, $data['shipment_ids'])));
 
-        // Verify shipments are cross-branch parcels ready for transfer, using
-        // the exact same scope as the Outbound board.
+        // Verify shipments are cross-branch parcels ready for transfer
         $availableQuery = Shipment::query()->whereIn('id', $shipmentIds);
         $this->applyOutboundScope($availableQuery, $branchId);
         $available = $availableQuery->pluck('id')->all();
 
         $skipped = array_diff($shipmentIds, $available);
 
-        $result = $this->service->bulkDispatch($available, $user->id);
+        if (empty($available)) {
+            return ApiResponse::error('No valid shipments to dispatch.', 422);
+        }
+
+        // Load shipments with route info to group by route
+        $shipments = Shipment::query()
+            ->whereIn('id', $available)
+            ->with(['originBranch', 'destinationBranch', 'routeSteps'])
+            ->get();
+
+        // If transfer_route_id provided, use it; otherwise group by destination
+        $routeId = $data['transfer_route_id'] ?? null;
+        $route = $routeId ? \Modules\Rate\Models\BranchTransferRoute::find($routeId) : null;
+
+        $manifests = [];
+        $dispatchedCount = 0;
+
+        if ($route) {
+            // Single route specified - create one manifest for all shipments
+            $manifest = $this->createManifestForRoute($route, $shipments, $data, $user);
+            $manifests[] = $manifest;
+            $dispatchedCount = $manifest->items->count();
+        } else {
+            // Group shipments by destination branch (and transit path)
+            $groups = $this->groupShipmentsByRoute($shipments, $branchId);
+
+            foreach ($groups as $group) {
+                if (empty($group['shipments'])) continue;
+                
+                $groupRoute = $group['route'];
+                $groupShipments = collect($group['shipments']);
+                
+                $manifest = $this->createManifestForRoute($groupRoute, $groupShipments, $data, $user);
+                $manifests[] = $manifest;
+                $dispatchedCount += $manifest->items->count();
+            }
+        }
 
         foreach ($skipped as $id) {
             $result['skipped'][(int) $id] = 'Shipment not ready for dispatch (must be sorted first)';
         }
+
+        $result['manifests'] = $manifests;
+        $result['dispatched_count'] = $dispatchedCount;
 
         $ok = count($result['dispatched'] ?? []);
         $fail = count($result['skipped'] ?? []);
 
         return ApiResponse::success(
             $result,
-            $fail === 0 ? "{$ok} dispatched." : "{$ok} dispatched, {$fail} skipped."
+            $fail === 0 ? "{$ok} shipments dispatched in " . count($manifests) . " manifest(s)." : "{$ok} dispatched, {$fail} skipped."
         );
+    }
+
+    /**
+     * Group shipments by their matching configured route.
+     */
+    private function groupShipmentsByRoute($shipments, int $branchId): array
+    {
+        $groups = [];
+
+        foreach ($shipments as $shipment) {
+            $destNode = $shipment->destination_sub_branch_id ?? $shipment->destination_branch_id;
+            $serviceType = $shipment->service_type ?? 'standard';
+
+            if (!$destNode) {
+                // No destination - put in unmatched
+                $key = 'unmatched';
+                if (!isset($groups[$key])) {
+                    $groups[$key] = [
+                        'route' => null,
+                        'shipments' => [],
+                    ];
+                }
+                $groups[$key]['shipments'][] = $shipment;
+                continue;
+            }
+
+            // Try to find configured route
+            $route = $this->findMatchingRoute($branchId, $destNode, $serviceType);
+
+            if ($route) {
+                $key = "route_{$route['id']}";
+                if (!isset($groups[$key])) {
+                    $groups[$key] = [
+                        'route' => (object) $route, // Cast to object for createManifestForRoute
+                        'shipments' => [],
+                    ];
+                }
+                $groups[$key]['shipments'][] = $shipment;
+            } else {
+                // Fallback: group by destination branch
+                $key = "fallback_{$destNode}";
+                if (!isset($groups[$key])) {
+                    $destBranch = \Modules\Branch\Models\Branch::find($destNode);
+                    $groups[$key] = [
+                        'route' => (object) [
+                            'id' => null,
+                            'route_code' => 'AUTO',
+                            'route_name' => 'Auto: ' . ($destBranch?->name ?? "Branch #{$destNode}"),
+                            'service_type' => $serviceType,
+                            'origin_branch_id' => $branchId,
+                            'destination_branch_id' => $destNode,
+                            'transit_branch_ids' => [],
+                            'transit_count' => 0,
+                            'transfer_count' => 1,
+                            'path_text' => ($shipment->originBranch?->name ?? 'Origin') . ' → ' . ($destBranch?->name ?? 'Destination'),
+                            'is_configured' => false,
+                        ],
+                        'shipments' => [],
+                    ];
+                }
+                $groups[$key]['shipments'][] = $shipment;
+            }
+        }
+
+        return $groups;
+    }
+
+    /**
+     * Create a DispatchManifest for a route with the given shipments.
+     */
+    private function createManifestForRoute($route, $shipments, array $data, $user): \Modules\Dispatch\Models\DispatchManifest
+    {
+        $originBranchId = $route->origin_branch_id ?? $branchId;
+        $destinationBranchId = $route->destination_branch_id ?? 0;
+        $transitBranchIds = $route->transit_branch_ids ?? [];
+
+        // For multi-hop routes, the first leg goes to the first transit branch
+        // or directly to destination if no transit
+        $firstHopBranchId = $transitBranchIds[0] ?? $destinationBranchId;
+
+        return \Illuminate\Support\Facades\DB::transaction(function () use ($route, $shipments, $data, $user, $originBranchId, $firstHopBranchId, $destinationBranchId, $transitBranchIds) {
+            $manifestNumber = 'MF-' . now()->format('YmdHis') . '-' . random_int(100, 999);
+
+            $manifest = \Modules\Dispatch\Models\DispatchManifest::create([
+                'manifest_number' => $manifestNumber,
+                'from_branch_id' => $originBranchId,
+                'from_sub_branch_id' => null,
+                'to_branch_id' => $firstHopBranchId,
+                'to_sub_branch_id' => null,
+                'vehicle_number' => $data['vehicle_number'] ?? null,
+                'driver_name' => $data['driver_name'] ?? null,
+                'driver_phone' => $data['driver_phone'] ?? null,
+                'seal_number' => $data['seal_number'] ?? null,
+                'notes' => $data['notes'] ?? null,
+                'status' => 'dispatched',
+                'created_by' => $user->id,
+                'dispatched_at' => now(),
+                // Store route info in notes or add columns later
+                'route_id' => $route->id ?? null,
+                'route_code' => $route->route_code ?? 'AUTO',
+                'is_multi_hop' => ($route->transit_count ?? 0) > 0,
+                'transit_branch_ids' => $transitBranchIds,
+                'final_destination_branch_id' => $destinationBranchId,
+            ]);
+
+            foreach ($shipments as $shipment) {
+                \Modules\Dispatch\Models\DispatchManifestItem::create([
+                    'dispatch_manifest_id' => $manifest->id,
+                    'shipment_id' => $shipment->id,
+                    'status' => 'sent',
+                ]);
+
+                // Update shipment status to IN_TRANSIT
+                $shipment->update([
+                    'status' => \App\Support\CourierStatus::IN_TRANSIT,
+                    'merchant_status' => \App\Support\CourierStatus::merchantStatus(\App\Support\CourierStatus::IN_TRANSIT),
+                    'current_branch_id' => null, // Between branches
+                    'current_sub_branch_id' => null,
+                ]);
+
+                // Record tracking event
+                \Modules\Tracking\Services\TrackingService::record(
+                    $shipment->fresh(),
+                    \App\Support\CourierStatus::IN_TRANSIT,
+                    "Dispatched on manifest {$manifestNumber}" . ($route->route_code ? " (Route: {$route->route_code})" : ''),
+                    $user->id
+                );
+            }
+
+            return $manifest->load('items.shipment');
+        });
     }
 
     /**
@@ -484,6 +954,133 @@ final class TransferController extends Controller
         } catch (\Exception $e) {
             return ApiResponse::error($e->getMessage(), 422);
         }
+    }
+
+    /**
+     * Receive transfer at a transit hub (intermediate branch) and optionally re-dispatch to next hop.
+     * 
+     * This handles multi-hop routes where a shipment arrives at an intermediate hub
+     * and needs to be forwarded to the next leg of the journey.
+     */
+    public function receiveAtTransitHub(Request $request, Shipment $shipment)
+    {
+        $user = $request->user();
+        $branchId = $this->getBranchScope($user);
+
+        // Validate: this must be a transfer currently at this branch as a transit hub
+        if (
+            (int) ($shipment->current_branch_id ?? 0) !== $branchId ||
+            !in_array($shipment->status, [
+                CourierStatus::IN_TRANSIT,
+                CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
+                CourierStatus::RECEIVED_AT_TRANSIT_HUB,
+            ])
+        ) {
+            return ApiResponse::error(
+                'This shipment is not at your branch as a transit hub or not in transit.',
+                403
+            );
+        }
+
+        $data = $request->validate([
+            'received_shipment_ids' => ['nullable', 'array'],
+            'received_shipment_ids.*' => ['integer'],
+            're_dispatch' => ['boolean'],
+            'next_hop_route_id' => ['nullable', 'integer', 'exists:branch_transfer_routes,id'],
+            'vehicle_number' => ['nullable', 'string', 'max:50'],
+            'driver_name' => ['nullable', 'string', 'max:100'],
+            'driver_phone' => ['nullable', 'string', 'max:20'],
+            'seal_number' => ['nullable', 'string', 'max:50'],
+            'notes' => ['nullable', 'string'],
+        ]);
+
+        $receivedIds = $data['received_shipment_ids'] ?? [$shipment->id];
+        $reDispatch = $data['re_dispatch'] ?? false;
+
+        try {
+            $result = \Illuminate\Support\Facades\DB::transaction(function () use ($shipment, $receivedIds, $reDispatch, $data, $user, $branchId) {
+                $receivedShipments = [];
+                $reDispatchedManifests = [];
+
+                foreach ($receivedIds as $id) {
+                    $s = Shipment::query()->lockForUpdate()->findOrFail($id);
+                    
+                    // Verify this shipment is at this branch as transit
+                    if ((int) ($s->current_branch_id ?? 0) !== $branchId) {
+                        continue;
+                    }
+
+                    // Mark as received at transit hub
+                    $oldStatus = $s->status;
+                    $s->update([
+                        'status' => CourierStatus::RECEIVED_AT_TRANSIT_HUB,
+                        'merchant_status' => CourierStatus::merchantStatus(CourierStatus::RECEIVED_AT_TRANSIT_HUB),
+                        'current_branch_id' => $branchId,
+                        'current_sub_branch_id' => null,
+                    ]);
+
+                    \Modules\Tracking\Services\TrackingService::record(
+                        $s->fresh(),
+                        CourierStatus::RECEIVED_AT_TRANSIT_HUB,
+                        "Received at transit hub: " . ($s->currentBranch?->name ?? "Branch #{$branchId}"),
+                        $user->id
+                    );
+
+                    $receivedShipments[] = $s->fresh();
+
+                    // If re-dispatch is requested, create manifest for next hop
+                    if ($reDispatch) {
+                        $nextRouteId = $data['next_hop_route_id'];
+                        $nextRoute = $nextRouteId ? \Modules\Rate\Models\BranchTransferRoute::find($nextRouteId) : null;
+
+                        if (!$nextRoute) {
+                            // Try to auto-find the next route based on the shipment's route steps
+                            $nextRoute = $this->findNextRouteForShipment($s, $branchId);
+                        }
+
+                        if ($nextRoute) {
+                            $manifest = $this->createManifestForRoute(
+                                (object) $nextRoute,
+                                collect([$s]),
+                                $data,
+                                $user
+                            );
+                            $reDispatchedManifests[] = $manifest;
+                        }
+                    }
+                }
+
+                return [
+                    'received' => $receivedShipments,
+                    're_dispatched_manifests' => $reDispatchedManifests,
+                ];
+            });
+
+            return ApiResponse::success($result, 'Transfer received at transit hub' . ($reDispatch ? ' and re-dispatched' : ''));
+        } catch (\Exception $e) {
+            return ApiResponse::error($e->getMessage(), 422);
+        }
+    }
+
+    /**
+     * Find the next route for a shipment at a transit hub.
+     */
+    private function findNextRouteForShipment(Shipment $shipment, int $currentBranchId): ?array
+    {
+        $destNode = $shipment->destination_sub_branch_id ?? $shipment->destination_branch_id;
+        $serviceType = $shipment->service_type ?? 'standard';
+
+        if (!$destNode) {
+            return null;
+        }
+
+        // If the current branch is the destination, no next route needed
+        if ((int) $destNode === $currentBranchId) {
+            return null;
+        }
+
+        // Try to find configured route from current branch to destination
+        return $this->findMatchingRoute($currentBranchId, $destNode, $serviceType);
     }
 
     /**

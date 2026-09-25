@@ -11,6 +11,8 @@ class DispatchManifest extends Model
     protected $casts = [
         'dispatched_at' => 'datetime',
         'received_at' => 'datetime',
+        'is_multi_hop' => 'boolean',
+        'transit_branch_ids' => 'array',
     ];
 
     public function items()

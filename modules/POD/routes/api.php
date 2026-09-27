@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\POD\Http\Controllers\GatewayPodPaymentController;
 use Modules\POD\Http\Controllers\PodController;
 use Modules\POD\Http\Controllers\StoreManagerPaymentWebhookController;
 
@@ -15,6 +16,26 @@ use Modules\POD\Http\Controllers\StoreManagerPaymentWebhookController;
 
 Route::post('v1/integrations/store-manager/payment-events', [StoreManagerPaymentWebhookController::class, 'handle'])
     ->name('integrations.store-manager.payment-events');
+
+/*
+|--------------------------------------------------------------------------
+| EXTERNAL STORE MANAGER / GATEWAY — POD QR (HamroPay)
+|--------------------------------------------------------------------------
+| Auth: merchant.api-key (X-Tukaatu-Key / X-Tukaatu-Secret)
+| Express fetches HamroPay createSession for the store sub-merchant.
+|--------------------------------------------------------------------------
+*/
+
+Route::prefix('v1/gateway')
+    ->name('gateway.')
+    ->middleware(['merchant.api-key'])
+    ->group(function () {
+        Route::post('payments/pod-qr', [GatewayPodPaymentController::class, 'createQr'])
+            ->name('payments.pod-qr');
+
+        Route::post('payments/pod-qr/verify', [GatewayPodPaymentController::class, 'verify'])
+            ->name('payments.pod-qr.verify');
+    });
 
 /*
 |--------------------------------------------------------------------------

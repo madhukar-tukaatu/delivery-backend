@@ -101,21 +101,28 @@ final class TransferService
             return false;
         }
 
-        // Fast path: the canonical ready-to-transfer status.
+        // Must not already be sitting at the final destination.
+        if ($shipment->current_branch_id !== null
+            && (int) $shipment->current_branch_id === (int) $shipment->destination_branch_id) {
+            return false;
+        }
+
+        // Canonical ready-to-transfer statuses (origin or transit hub).
         if (in_array($shipment->status, [
             CourierStatus::SORTED_FOR_TRANSFER,
             CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+            CourierStatus::RECEIVED_AT_TRANSIT_HUB,
             CourierStatus::PICKED_UP,
         ], true)) {
             return true;
         }
 
-        // Mis-sorted cross-branch parcel that is still at its origin.
+        // Mis-sorted cross-branch parcel that is still away from destination.
         if ($shipment->status === CourierStatus::SORTED_FOR_DELIVERY) {
-            $atOrigin = $shipment->current_branch_id === null
-                || (int) $shipment->current_branch_id === (int) $shipment->origin_branch_id;
+            $atDestination = $shipment->current_branch_id !== null
+                && (int) $shipment->current_branch_id === (int) $shipment->destination_branch_id;
 
-            return $atOrigin;
+            return ! $atDestination;
         }
 
         return false;
@@ -177,6 +184,9 @@ final class TransferService
             }
             if ($this->shipmentHasColumn('current_sub_branch_id')) {
                 $shipment->current_sub_branch_id = $shipment->destination_sub_branch_id;
+            }
+            if ($this->shipmentHasColumn('next_hop_branch_id')) {
+                $shipment->next_hop_branch_id = null;
             }
 
             // Track received timestamp

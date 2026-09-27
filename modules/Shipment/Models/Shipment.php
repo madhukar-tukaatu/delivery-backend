@@ -31,6 +31,8 @@ class Shipment extends Model
         'is_transfer',
         'transfer_stage',
         'transfer_stage_label',
+        'hop_meta',
+        'route_progress',
     ];
 
     /**
@@ -124,6 +126,93 @@ class Shipment extends Model
         };
     }
 
+    /**
+     * Hop-by-hop display metadata for transfer boards.
+     * Prefer persisted next_hop / path columns; fall back to open manifest.
+     */
+    public function getHopMetaAttribute(): ?array
+    {
+        if (! $this->is_transfer) {
+            return null;
+        }
+
+        $nextHopId = $this->attributes['next_hop_branch_id'] ?? null;
+        $pathText = $this->attributes['path_text'] ?? null;
+        $routeId = $this->attributes['transfer_route_id'] ?? null;
+        $legIndex = $this->attributes['transfer_leg_index'] ?? null;
+
+        if ($nextHopId === null && $this->status === CourierStatus::IN_TRANSIT) {
+            try {
+                $item = \Modules\Dispatch\Models\DispatchManifestItem::query()
+                    ->where('shipment_id', $this->id)
+                    ->whereIn('status', ['sent', 'dispatched', 'in_transit'])
+                    ->with('manifest')
+                    ->latest('id')
+                    ->first();
+                if ($item?->manifest) {
+                    $nextHopId = $item->manifest->to_branch_id;
+                    $routeId = $routeId ?? $item->manifest->route_id;
+                }
+            } catch (\Throwable $e) {
+                // Schema may lack manifests on some environments.
+            }
+        }
+
+        $nextHopName = null;
+        if ($nextHopId) {
+            $nextHopName = $this->relationLoaded('nextHopBranch')
+                ? $this->nextHopBranch?->name
+                : \Modules\Branch\Models\Branch::query()->whereKey($nextHopId)->value('name');
+            if (!$nextHopName) {
+                try {
+                    $nextHopName = \Modules\Branch\Models\CoverageLocation::query()->whereKey($nextHopId)->value('name');
+                } catch (\Throwable $e) {
+                    $nextHopName = null;
+                }
+            }
+        }
+
+        $inTransitLabel = null;
+        if ($this->status === CourierStatus::IN_TRANSIT && $nextHopName) {
+            $inTransitLabel = "In transit to {$nextHopName}";
+        } elseif ($this->status === CourierStatus::IN_TRANSIT && $this->destinationBranch) {
+            $inTransitLabel = "In transit toward {$this->destinationBranch->name}";
+        }
+
+        return [
+            'origin_name' => $this->originBranch?->name,
+            'destination_name' => $this->destinationBranch?->name,
+            'current_name' => $this->currentBranch?->name,
+            'next_hop_branch_id' => $nextHopId !== null ? (int) $nextHopId : null,
+            'next_hop_name' => $nextHopName,
+            'transfer_route_id' => $routeId !== null ? (int) $routeId : null,
+            'transfer_leg_index' => $legIndex !== null ? (int) $legIndex : null,
+            'path_text' => $pathText,
+            'route_code' => $this->attributes['route_code'] ?? null,
+            'route_name' => $this->attributes['route_name'] ?? null,
+            'service_type' => $this->service_type ?? null,
+            'in_transit_label' => $inTransitLabel,
+        ];
+    }
+
+
+
+    /**
+     * Route hop progress for shipment detail (assigned transfer route).
+     */
+    public function getRouteProgressAttribute(): ?array
+    {
+        if (! $this->is_transfer) {
+            return null;
+        }
+
+        try {
+            return app(\Modules\Shipment\Services\TransferRouteProgressService::class)
+                ->progressPayload($this);
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
     protected $casts = [
 
         /*

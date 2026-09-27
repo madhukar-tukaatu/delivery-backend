@@ -13,23 +13,22 @@ use Modules\Shipment\Models\Shipment;
  * ShipmentSortingService
  * -----------------------
  *
- * Runs at the ORIGIN branch, immediately after a shipment has been received
- * (CourierStatus::RECEIVED_AT_ORIGIN_BRANCH). It decides where the shipment
- * goes next and moves it into the correct "ready" hand-off state:
+ * Runs after a shipment has been received at a branch hub (origin or transit).
+ * It decides where the shipment goes next and moves it into the correct
+ * "ready" hand-off state based on CURRENT branch vs DESTINATION:
  *
- *   - Same branch  (origin node == destination node)
+ *   - Same branch  (current node == destination node)
  *         => SORTED_FOR_DELIVERY  (ready for last-mile delivery here)
  *
- *   - Other branch (origin node != destination node)
+ *   - Other branch (current node != destination node)
  *         => SORTED_FOR_TRANSFER  (ready to be added to a transfer batch)
  *
  * The "node" of a branch is its sub-branch id when present, otherwise the main
  * branch id. This mirrors BranchAssignmentService::buildRoute()'s
- * requires_transfer logic, which is the single source of truth for routing.
+ * requires_transfer logic.
  *
- * The service does NOT create delivery assignments or transfer batches - those
- * belong to the delivery / transfer phases. It only records the sort decision
- * so the next phase can pick the shipment up cleanly.
+ * Accepts RECEIVED_AT_ORIGIN_BRANCH and RECEIVED_AT_TRANSIT_HUB so hop-by-hop
+ * transfers can re-sort after each transit receive.
  */
 final class ShipmentSortingService
 {
@@ -39,9 +38,6 @@ final class ShipmentSortingService
 
     /**
      * Sort a single received shipment into its next leg.
-     *
-     * @param  Shipment  $shipment  The shipment received at the origin branch.
-     * @param  int|null  $actorId   The branch staff who performed the sort.
      */
     public function sort(
         Shipment $shipment,
@@ -62,8 +58,8 @@ final class ShipmentSortingService
                     : CourierStatus::SORTED_FOR_TRANSFER;
 
                 $note = $mode === self::MODE_LAST_MILE
-                    ? 'Sorted for last-mile delivery at origin branch.'
-                    : 'Sorted for branch-to-branch transfer.';
+                    ? 'Sorted for last-mile delivery at current branch.'
+                    : 'Sorted for branch-to-branch transfer (next hop).';
 
                 $oldStatus = $shipment->status;
 
@@ -88,6 +84,19 @@ final class ShipmentSortingService
 
                 $shipment->save();
 
+                // Persist next-hop / clear when ready for last-mile (route progression).
+                try {
+                    $freshForProgress = $shipment->fresh();
+                    app(\Modules\Shipment\Services\TransferRouteProgressService::class)
+                        ->applyProgressToShipment(
+                            $freshForProgress,
+                            (int) ($freshForProgress->current_branch_id ?? 0) ?: null
+                        );
+                    $shipment = $shipment->fresh();
+                } catch (\Throwable $e) {
+                    // Progress helper is additive; sorting must still succeed.
+                }
+
                 $this->recordTrackingEvent(
                     shipment: $shipment,
                     oldStatus: $oldStatus,
@@ -96,24 +105,11 @@ final class ShipmentSortingService
                     createdBy: $actorId
                 );
 
-                /*
-                |--------------------------------------------------------------------------
-                | Last-mile: open a pending delivery so the branch manager can
-                | immediately see it on the deliveries board and assign a rider.
-                | Transfers are handled by the transfer/batch flow, not here.
-                |--------------------------------------------------------------------------
-                */
                 if ($mode === self::MODE_LAST_MILE) {
                     app(\Modules\Delivery\Services\DeliveryWorkflowService::class)
                         ->createPendingForShipment($shipment->fresh(), $actorId);
                 }
 
-                /*
-                |--------------------------------------------------------------------------
-                | Notify the merchant that the parcel has been sorted and is now
-                | either ready for last-mile delivery or queued for transfer.
-                |--------------------------------------------------------------------------
-                */
                 $fresh = $shipment->fresh();
 
                 app(\Modules\Webhook\Services\WebhookService::class)
@@ -124,7 +120,6 @@ final class ShipmentSortingService
                             : 'shipment.sorted_for_transfer'
                     );
 
-                // Store-integration callback (integration_callback_url).
                 $callbacks = app(\Modules\Shipment\Services\ShipmentCallbackService::class);
                 if ($mode === self::MODE_LAST_MILE) {
                     $callbacks->sortedForDelivery($fresh);
@@ -138,35 +133,33 @@ final class ShipmentSortingService
     }
 
     /**
-     * Classify a shipment as last-mile (same branch) or transfer.
-     *
-     * node = sub_branch_id ?? branch_id.
-     * Same origin/destination node => last mile, else transfer.
+     * Classify a shipment as last-mile or transfer based on CURRENT location
+     * vs destination (not origin). Falls back to origin when current is unset
+     * (pre-receive / legacy rows).
      */
     public function classify(Shipment $shipment): string
     {
-        $originNode =
-            $shipment->origin_sub_branch_id
+        $currentNode =
+            $shipment->current_sub_branch_id
+            ?? $shipment->current_branch_id
+            ?? $shipment->origin_sub_branch_id
             ?? $shipment->origin_branch_id;
 
         $destinationNode =
             $shipment->destination_sub_branch_id
             ?? $shipment->destination_branch_id;
 
-        // If either side is unknown we cannot safely say a transfer is needed,
-        // so default to local last-mile handling at the current branch.
-        if ($originNode === null || $destinationNode === null) {
+        if ($currentNode === null || $destinationNode === null) {
             return self::MODE_LAST_MILE;
         }
 
-        return (int) $originNode === (int) $destinationNode
+        return (int) $currentNode === (int) $destinationNode
             ? self::MODE_LAST_MILE
             : self::MODE_TRANSFER;
     }
 
     /**
-     * A shipment can only be sorted once it has been received at the origin
-     * branch, and it must not already be sorted or closed.
+     * Sortable after origin receive OR after transit-hub receive.
      */
     private function guardSortable(Shipment $shipment): void
     {
@@ -178,22 +171,20 @@ final class ShipmentSortingService
             ]);
         }
 
-        if (
-            $shipment->status !==
-            CourierStatus::RECEIVED_AT_ORIGIN_BRANCH
-        ) {
+        $allowed = [
+            CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+            CourierStatus::RECEIVED_AT_TRANSIT_HUB,
+        ];
+
+        if (! in_array($shipment->status, $allowed, true)) {
             throw ValidationException::withMessages([
                 'shipment' => [
-                    'Shipment must be received at the origin branch before it can be sorted.',
+                    'Shipment must be received at a branch hub before it can be sorted.',
                 ],
             ]);
         }
     }
 
-    /**
-     * Write a public tracking event using only columns that exist.
-     * Mirrors the schema-safe approach used across the pickup workflow.
-     */
     private function recordTrackingEvent(
         Shipment $shipment,
         ?string $oldStatus,

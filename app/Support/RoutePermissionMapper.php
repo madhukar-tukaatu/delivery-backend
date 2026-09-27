@@ -82,6 +82,7 @@ class RoutePermissionMapper
             'received',
             'completed',
             'history',
+            'available_routes',
             'permissions' => 'view',
 
             'create',

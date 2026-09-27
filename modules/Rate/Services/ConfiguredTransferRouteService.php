@@ -212,6 +212,58 @@ final class ConfiguredTransferRouteService
         ];
     }
 
+    /**
+     * Next hop after $currentBranchId along the route path.
+     * Returns null when current is missing from path or is already the final destination.
+     */
+    public function nextHopBranchId(BranchTransferRoute $route, int $currentBranchId): ?int
+    {
+        $path = $route->getPathBranchIds();
+        if ($path === []) {
+            return null;
+        }
+
+        $idx = array_search($currentBranchId, $path, true);
+        if ($idx === false) {
+            return null;
+        }
+
+        $nextIdx = $idx + 1;
+        if (!isset($path[$nextIdx])) {
+            return null;
+        }
+
+        return (int) $path[$nextIdx];
+    }
+
+    /**
+     * Zero-based leg index for a parcel currently at $currentBranchId.
+     */
+    public function legIndex(BranchTransferRoute $route, int $currentBranchId): ?int
+    {
+        $path = $route->getPathBranchIds();
+        if ($path === []) {
+            return null;
+        }
+
+        $idx = array_search($currentBranchId, $path, true);
+        return $idx === false ? null : (int) $idx;
+    }
+
+    /**
+     * Whether $branchId is an intermediate transit hub on the route (not origin/destination).
+     */
+    public function isTransitHub(BranchTransferRoute $route, int $branchId): bool
+    {
+        $path = $route->getPathBranchIds();
+        if (count($path) < 3) {
+            return false;
+        }
+
+        $idx = array_search($branchId, $path, true);
+        return $idx !== false && $idx > 0 && $idx < count($path) - 1;
+    }
+
     private function branchName(int $id): string
     {
         $name = CoverageLocation::query()->whereKey($id)->value('name');

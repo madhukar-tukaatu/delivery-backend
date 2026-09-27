@@ -752,27 +752,34 @@ final class TransferController extends Controller
             ]);
         }
 
-        // For admin without branch_id specified, return all routes grouped by origin branch
+        // For admin without branch_id: return FLAT route cards (same shape as
+        // branch-scoped) plus optional routes_by_origin grouping. Nested groups
+        // in `routes` previously broke FE shipmentMatchesRoute / unmatched.
         $routes = $routesQuery->get();
-        
+
+        $formattedRoutes = [];
         $routesByOrigin = [];
-        
+
         foreach ($routes as $route) {
             $path = $route->getPathBranchIds();
             if (empty($path)) {
                 continue;
             }
 
-            $originBranchId = (int) $path[0];
-            $originBranch = \Modules\Branch\Models\Branch::find($originBranchId);
+            $path = array_map('intval', $path);
+            $originCoverageId = (int) $path[0];
+            $operationalOrigin = $this->branchIdForCoverage($originCoverageId) ?? $originCoverageId;
+            $formatted = $this->formatRouteForDispatch($route, $originCoverageId, $operationalOrigin);
+            $formattedRoutes[] = $formatted;
 
-            $formatted = $this->formatRouteForDispatch($route);
-
-            $originKey = $originBranchId;
+            $originKey = (int) $operationalOrigin;
             if (!isset($routesByOrigin[$originKey])) {
+                $originBranch = \Modules\Branch\Models\Branch::find($operationalOrigin);
                 $routesByOrigin[$originKey] = [
-                    'origin_branch_id' => $originBranchId,
-                    'origin_branch_name' => $originBranch?->name ?? 'Unknown',
+                    'origin_branch_id' => $originKey,
+                    'origin_coverage_id' => $originCoverageId,
+                    'origin_branch_name' => $originBranch?->name
+                        ?? ($formatted['origin_branch_name'] ?? 'Unknown'),
                     'origin_branch_code' => $originBranch?->code ?? '',
                     'routes' => [],
                 ];
@@ -781,10 +788,11 @@ final class TransferController extends Controller
         }
 
         return ApiResponse::success([
-            'routes' => array_values($routesByOrigin), // Flattened for backward compatibility
+            'routes' => array_values($formattedRoutes),
             'routes_by_origin' => array_values($routesByOrigin),
             'branch_id' => null,
             'service_type' => $serviceType,
+            'routes_count' => count($formattedRoutes),
         ]);
     }
 

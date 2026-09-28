@@ -141,6 +141,63 @@ class Shipment extends Model
         $routeId = $this->attributes['transfer_route_id'] ?? null;
         $legIndex = $this->attributes['transfer_leg_index'] ?? null;
 
+        // Prefer live progress injected by TransferController (group_by_next_hop)
+        // so stale next_hop_branch_id (often final dest after pre-route sort) cannot win.
+        $live = $this->attributes['_hop_progress'] ?? null;
+        if (is_array($live) && !empty($live['next_hop_branch_id'])) {
+            $nextHopId = $live['next_hop_branch_id'];
+            $routeId = $live['transfer_route_id'] ?? $routeId;
+            $legIndex = $live['transfer_leg_index'] ?? $legIndex;
+            $pathText = $live['path_text'] ?? $pathText;
+            if (!empty($live['route_code'])) {
+                $this->attributes['route_code'] = $live['route_code'];
+            }
+            if (!empty($live['route_name'])) {
+                $this->attributes['route_name'] = $live['route_name'];
+            }
+        } else {
+            // Re-resolve only when persisted next hop looks like a skip to final
+            // (common when route was matched/added after sort). Avoids N+1 on every row.
+            $destId = (int) ($this->attributes['destination_branch_id']
+                ?? $this->attributes['destination_sub_branch_id']
+                ?? 0);
+            $looksStale = $nextHopId !== null && $destId > 0 && (int) $nextHopId === $destId;
+            $hasRouteHint = !empty($this->attributes['transfer_route_id'])
+                || !empty($this->attributes['route_code']);
+            if ($looksStale || ($hasRouteHint && $nextHopId === null)) {
+                try {
+                    $progressSvc = app(\Modules\Shipment\Services\TransferRouteProgressService::class);
+                    $progress = $progressSvc->resolveForShipment($this);
+                    if (!empty($progress['has_route']) && !empty($progress['next_hop_branch_id'])) {
+                        $pathBranches = array_map('intval', $progress['path_branch_ids'] ?? []);
+                        $skips = $progressSvc->nextHopSkipsPath(
+                            $nextHopId !== null ? (int) $nextHopId : null,
+                            $pathBranches,
+                            isset($this->attributes['current_branch_id'])
+                                ? (int) $this->attributes['current_branch_id']
+                                : null,
+                            $destId ?: null,
+                        );
+                        if ($skips || $nextHopId === null
+                            || (int) $nextHopId !== (int) $progress['next_hop_branch_id']) {
+                            $nextHopId = $progress['next_hop_branch_id'];
+                            $routeId = $progress['transfer_route_id'] ?? $routeId;
+                            $legIndex = $progress['transfer_leg_index'] ?? $legIndex;
+                            $pathText = $progress['path_text'] ?? $pathText;
+                            if (!empty($progress['route_code'])) {
+                                $this->attributes['route_code'] = $progress['route_code'];
+                            }
+                            if (!empty($progress['route_name'])) {
+                                $this->attributes['route_name'] = $progress['route_name'];
+                            }
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    // Keep persisted hop_meta on resolver failure.
+                }
+            }
+        }
+
         if ($nextHopId === null && $this->status === CourierStatus::IN_TRANSIT) {
             try {
                 $item = \Modules\Dispatch\Models\DispatchManifestItem::query()

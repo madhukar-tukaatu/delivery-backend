@@ -104,20 +104,14 @@ final class TransferRouteProgressService
         }
 
         $pathCoverage = array_map('intval', $route->getPathBranchIds());
-        $pathBranches = array_values(array_filter(array_map(
-            fn (int $cov): ?int => $this->branchIdForCoverage($cov),
-            $pathCoverage,
-        )));
+        $pathBranches = [];
+        foreach ($pathCoverage as $cov) {
+            $pathBranches[] = $this->branchIdForCoverage((int) $cov) ?? (int) $cov;
+        }
+        $pathBranches = array_map('intval', $pathBranches);
 
         $currentCoverageId = $this->coverageIdForBranch($currentBranchId);
-        $idx = $currentCoverageId !== null
-            ? array_search((int) $currentCoverageId, $pathCoverage, true)
-            : false;
-
-        // If coverage not on path, try matching operational branch ids.
-        if ($idx === false && $currentBranchId !== null) {
-            $idx = array_search((int) $currentBranchId, $pathBranches, true);
-        }
+        $idx = $this->indexOnPath($pathCoverage, $pathBranches, $currentBranchId, $currentCoverageId);
 
         $isAtDestination = false;
         $nextHopCoverageId = null;
@@ -129,14 +123,14 @@ final class TransferRouteProgressService
         if ($idx !== false) {
             $legIndex = (int) $idx;
             $isAtDestination = $idx >= count($pathCoverage) - 1;
+            // Next hop is ALWAYS the immediate next stop on the path — never jump to final
+            // while transit hubs remain (e.g. ITA→BHA→BRN at ITA must yield BHA, not BRN).
             if (!$isAtDestination && isset($pathCoverage[$idx + 1])) {
                 $nextHopCoverageId = (int) $pathCoverage[$idx + 1];
-                $nextHopBranchId = $this->branchIdForCoverage($nextHopCoverageId) ?? $nextHopCoverageId;
+                $nextHopBranchId = $this->branchIdForCoverage($nextHopCoverageId)
+                    ?? (isset($pathBranches[$idx + 1]) ? (int) $pathBranches[$idx + 1] : $nextHopCoverageId);
                 $remainingCoverage = array_values(array_slice($pathCoverage, $idx + 1));
-                $remainingBranches = array_values(array_filter(array_map(
-                    fn (int $cov): ?int => $this->branchIdForCoverage($cov),
-                    $remainingCoverage,
-                )));
+                $remainingBranches = array_values(array_slice($pathBranches, $idx + 1));
             }
         } elseif ($destinationBranchId !== null && $currentBranchId !== null
             && (int) $currentBranchId === (int) $destinationBranchId) {
@@ -152,6 +146,14 @@ final class TransferRouteProgressService
             $nextHopCoverageId = null;
             $remainingCoverage = [];
             $remainingBranches = [];
+        }
+
+        // Guard: never report final destination as next hop while an earlier path stop remains.
+        if ($nextHopBranchId !== null && $destinationBranchId !== null
+            && (int) $nextHopBranchId === (int) $destinationBranchId
+            && count($remainingBranches) > 1) {
+            $nextHopBranchId = (int) $remainingBranches[0];
+            $nextHopCoverageId = $remainingCoverage[0] ?? $this->coverageIdForBranch($nextHopBranchId);
         }
 
         $pathText = $this->pathTextFromCoverage($pathCoverage) ?: ($shipment->path_text ?? null);
@@ -394,6 +396,67 @@ final class TransferRouteProgressService
         }
 
         return array_merge($p, ['hops' => $hops]);
+    }
+
+
+    /**
+     * Locate current branch on a coverage/operational path.
+     * Returns int index or false.
+     *
+     * @param  int[]  $pathCoverage
+     * @param  int[]  $pathBranches
+     */
+    public function indexOnPath(array $pathCoverage, array $pathBranches, ?int $currentBranchId, ?int $currentCoverageId): int|false
+    {
+        if ($currentCoverageId !== null) {
+            $idx = array_search((int) $currentCoverageId, array_map('intval', $pathCoverage), true);
+            if ($idx !== false) {
+                return (int) $idx;
+            }
+        }
+
+        if ($currentBranchId !== null) {
+            $idx = array_search((int) $currentBranchId, array_map('intval', $pathBranches), true);
+            if ($idx !== false) {
+                return (int) $idx;
+            }
+            // Path nodes may store coverage ids that map to the operational branch.
+            foreach ($pathCoverage as $i => $cov) {
+                $op = $this->branchIdForCoverage((int) $cov);
+                if ($op !== null && (int) $op === (int) $currentBranchId) {
+                    return (int) $i;
+                }
+            }
+            $idx = array_search((int) $currentBranchId, array_map('intval', $pathCoverage), true);
+            if ($idx !== false) {
+                return (int) $idx;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * True when candidate next hop equals the path final while an intermediate stop remains after current.
+     *
+     * @param  int[]  $pathBranchIds  operational branch ids along the route
+     */
+    public function nextHopSkipsPath(?int $candidateNextHopId, array $pathBranchIds, ?int $currentBranchId, ?int $finalBranchId): bool
+    {
+        if (!$candidateNextHopId || count($pathBranchIds) < 3) {
+            return false;
+        }
+        $path = array_map('intval', $pathBranchIds);
+        $final = (int) ($finalBranchId ?? end($path));
+        if ((int) $candidateNextHopId !== $final && (int) $candidateNextHopId !== (int) end($path)) {
+            return false;
+        }
+        $idx = $currentBranchId !== null ? array_search((int) $currentBranchId, $path, true) : false;
+        if ($idx === false) {
+            return true; // cannot place current but candidate is final on multi-hop → treat as skip
+        }
+
+        return $idx < count($path) - 2;
     }
 
     public function coverageIdForBranch(?int $branchId): ?int

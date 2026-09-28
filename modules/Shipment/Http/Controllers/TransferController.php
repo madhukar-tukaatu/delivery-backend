@@ -219,7 +219,27 @@ final class TransferController extends Controller
         $unmatched = [];
 
         foreach ($shipments as $shipment) {
-            $progress = $this->progress->resolveForShipment($shipment, $branchId !== 0 ? $branchId : null);
+            $atBranch = $branchId !== 0 ? $branchId : null;
+            $progress = $this->progress->resolveForShipment($shipment, $atBranch);
+
+            // Route may have been added/matched after sort — persist corrected next hop + hop_meta.
+            $persistedHop = (int) ($shipment->next_hop_branch_id ?? 0);
+            $computedHop = (int) ($progress['next_hop_branch_id'] ?? 0);
+            $persistedRoute = (int) ($shipment->transfer_route_id ?? 0);
+            $computedRoute = (int) ($progress['transfer_route_id'] ?? 0);
+            if (
+                !empty($progress['has_route'])
+                && $computedHop > 0
+                && ($persistedHop !== $computedHop || ($computedRoute > 0 && $persistedRoute !== $computedRoute))
+            ) {
+                try {
+                    $shipment = $this->progress->applyProgressToShipment($shipment, $atBranch);
+                    $progress = $this->progress->resolveForShipment($shipment, $atBranch);
+                    $computedHop = (int) ($progress['next_hop_branch_id'] ?? 0);
+                } catch (\Throwable $e) {
+                    // Still serve live progress below even if persist fails.
+                }
+            }
 
             if ($progress['ready_for_last_mile'] || empty($progress['next_hop_branch_id'])) {
                 $unmatched[] = $shipment;
@@ -243,6 +263,23 @@ final class TransferController extends Controller
                 ];
             }
 
+            // Force hop_meta / JSON to reflect live path next hop (not stale destination).
+            $shipment->setAttribute('next_hop_branch_id', $progress['next_hop_branch_id']);
+            if (!empty($progress['transfer_route_id'])) {
+                $shipment->setAttribute('transfer_route_id', $progress['transfer_route_id']);
+            }
+            if (!empty($progress['path_text'])) {
+                $shipment->setAttribute('path_text', $progress['path_text']);
+            }
+            if (!empty($progress['route_code'])) {
+                $shipment->setAttribute('route_code', $progress['route_code']);
+            }
+            if (!empty($progress['route_name'])) {
+                $shipment->setAttribute('route_name', $progress['route_name']);
+            }
+            if (array_key_exists('transfer_leg_index', $progress)) {
+                $shipment->setAttribute('transfer_leg_index', $progress['transfer_leg_index']);
+            }
             $shipment->setAttribute('_hop_progress', $progress);
             $groups[$key]['shipments'][] = $shipment;
             $groups[$key]['count']++;
@@ -849,22 +886,59 @@ final class TransferController extends Controller
         $destinationBranchId = (int) ($lanes->last()?->to_branch_id ?? 0);
 
         $pathIds = array_map(static fn ($n) => (int) $n['branch_id'], $path);
-        $nextHopCoverageId = $destinationBranchId;
+        $nextHopCoverageId = null;
         $remainingTransitIds = array_column($transitBranches, 'branch_id');
         $legIndex = 0;
-
-        if ($fromCoverageId !== null && $pathIds !== []) {
-            $idx = array_search((int) $fromCoverageId, $pathIds, true);
-            if ($idx !== false && isset($pathIds[$idx + 1])) {
-                $nextHopCoverageId = (int) $pathIds[$idx + 1];
-                $remainingTransitIds = array_values(array_slice($pathIds, $idx + 2, -1));
-                $legIndex = (int) $idx;
-            }
-        }
 
         $operationalOrigin = $operationalFromBranchId
             ?? $this->branchIdForCoverage($fromCoverageId ?? $originBranchId)
             ?? $originBranchId;
+
+        $idx = false;
+        if ($fromCoverageId !== null && $pathIds !== []) {
+            $idx = array_search((int) $fromCoverageId, $pathIds, true);
+        }
+        // Also match operational branch against coverage→branch mapped path nodes.
+        if ($idx === false && $operationalOrigin && $pathIds !== []) {
+            foreach ($pathIds as $i => $covId) {
+                $op = $this->branchIdForCoverage((int) $covId);
+                if ($op !== null && (int) $op === (int) $operationalOrigin) {
+                    $idx = $i;
+                    break;
+                }
+                if ((int) $covId === (int) $operationalOrigin) {
+                    $idx = $i;
+                    break;
+                }
+            }
+        }
+        if ($idx !== false && isset($pathIds[$idx + 1])) {
+            // Immediate next stop only — never default to path final while transit remains.
+            $nextHopCoverageId = (int) $pathIds[$idx + 1];
+            $remainingTransitIds = array_values(array_slice($pathIds, $idx + 2, -1));
+            $legIndex = (int) $idx;
+        } elseif ($pathIds !== [] && isset($pathIds[1])) {
+            // At unknown position but path exists: prefer first hop after origin (safe for hub origin),
+            // never jump straight to final on 3+ stop routes.
+            $originOp = $this->branchIdForCoverage((int) $pathIds[0]) ?? (int) $pathIds[0];
+            if ($operationalOrigin && (int) $operationalOrigin === (int) $originOp) {
+                $nextHopCoverageId = (int) $pathIds[1];
+                $remainingTransitIds = array_values(array_slice($pathIds, 2, -1));
+                $legIndex = 0;
+            } elseif (count($pathIds) === 2) {
+                $nextHopCoverageId = (int) $pathIds[1];
+                $remainingTransitIds = [];
+                $legIndex = 0;
+            }
+        }
+        if ($nextHopCoverageId === null) {
+            // Last resort for malformed paths: still avoid skipping when 3+ nodes.
+            $nextHopCoverageId = count($pathIds) >= 2 ? (int) $pathIds[1] : (int) $destinationBranchId;
+            $remainingTransitIds = count($pathIds) > 2
+                ? array_values(array_slice($pathIds, 2, -1))
+                : [];
+        }
+
         $operationalDestination = $this->branchIdForCoverage($destinationBranchId) ?? $destinationBranchId;
         $operationalNextHop = $this->branchIdForCoverage($nextHopCoverageId) ?? $nextHopCoverageId;
         $operationalTransitIds = array_values(array_filter(array_map(

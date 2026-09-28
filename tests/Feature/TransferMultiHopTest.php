@@ -239,4 +239,36 @@ final class TransferMultiHopTest extends TestCase
             $this->assertStringContainsStringIgnoringCase('active transfer manifest', $flat);
         }
     }
+
+
+    /** Scenario 7: Sorted with next_hop stuck on final; after route match, next becomes transit hub. */
+    public function test_scenario7_route_assigned_after_sort_recalculates_next_hop(): void
+    {
+        // Simulate "route added after sort": next_hop wrongly persisted as final destination.
+        $shipment = $this->makeShipment([
+            'transfer_route_id' => null,
+            'next_hop_branch_id' => self::BIRENDRANAGAR,
+            'path_text' => null,
+            'route_code' => null,
+        ]);
+
+        $this->assertSame(self::BIRENDRANAGAR, (int) $shipment->next_hop_branch_id);
+
+        // Matching assigned route (as outbound board / reconcile does) must move next hop to Bharatpur.
+        $shipment->update(['transfer_route_id' => self::ROUTE_ID]);
+        $this->progress->applyProgressToShipment($shipment->fresh(), self::KTM);
+
+        $after = $shipment->fresh();
+        $this->assertSame(self::BHARATPUR, (int) $after->next_hop_branch_id);
+        $this->assertNotSame(self::BIRENDRANAGAR, (int) $after->next_hop_branch_id);
+        $this->assertSame(self::ROUTE_ID, (int) $after->transfer_route_id);
+
+        $skips = $this->progress->nextHopSkipsPath(
+            self::BIRENDRANAGAR,
+            [self::KTM, self::BHARATPUR, self::BIRENDRANAGAR],
+            self::KTM,
+            self::BIRENDRANAGAR,
+        );
+        $this->assertTrue($skips);
+    }
 }

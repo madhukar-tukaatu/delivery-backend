@@ -14,18 +14,13 @@ use Modules\Shipment\Models\Shipment;
  * -----------------------
  *
  * Runs after a shipment has been received at a branch hub (origin or transit).
- * It decides where the shipment goes next and moves it into the correct
- * "ready" hand-off state based on CURRENT branch vs DESTINATION:
+ * Thin BM decision only — CURRENT operational branch vs FINAL destination:
  *
- *   - Same branch  (current node == destination node)
- *         => SORTED_FOR_DELIVERY  (ready for last-mile delivery here)
+ *   - Same branch / coverage  => SORTED_FOR_DELIVERY (last mile here)
+ *   - Different branch        => SORTED_FOR_TRANSFER (Transfers Outbound owns next hop)
  *
- *   - Other branch (current node != destination node)
- *         => SORTED_FOR_TRANSFER  (ready to be added to a transfer batch)
- *
- * The "node" of a branch is its sub-branch id when present, otherwise the main
- * branch id. This mirrors BranchAssignmentService::buildRoute()'s
- * requires_transfer logic.
+ * Does NOT walk multi-hop routes or invent next_hop = final when no route exists.
+ * Optional hop_meta refresh runs only when transfer_route_id is already assigned.
  *
  * Accepts RECEIVED_AT_ORIGIN_BRANCH and RECEIVED_AT_TRANSIT_HUB so hop-by-hop
  * transfers can re-sort after each transit receive.
@@ -59,7 +54,7 @@ final class ShipmentSortingService
 
                 $note = $mode === self::MODE_LAST_MILE
                     ? 'Sorted for last-mile delivery at current branch.'
-                    : 'Sorted for branch-to-branch transfer (next hop).';
+                    : 'Sorted for transfer. Next hop is resolved on Transfers Outbound.';
 
                 $oldStatus = $shipment->status;
 
@@ -82,19 +77,36 @@ final class ShipmentSortingService
                     $shipment->sorted_by = $actorId;
                 }
 
+                // Thin sort: never invent next_hop = final when no route is assigned.
+                $assignedRouteId = (int) ($shipment->transfer_route_id ?? 0);
+                if (
+                    $assignedRouteId <= 0
+                    && $this->shipmentHasColumn('next_hop_branch_id')
+                ) {
+                    $shipment->next_hop_branch_id = null;
+                }
+                if ($mode === self::MODE_LAST_MILE
+                    && $this->shipmentHasColumn('next_hop_branch_id')
+                ) {
+                    $shipment->next_hop_branch_id = null;
+                }
+
                 $shipment->save();
 
-                // Persist next-hop / clear when ready for last-mile (route progression).
-                try {
-                    $freshForProgress = $shipment->fresh();
-                    app(\Modules\Shipment\Services\TransferRouteProgressService::class)
-                        ->applyProgressToShipment(
-                            $freshForProgress,
-                            (int) ($freshForProgress->current_branch_id ?? 0) ?: null
-                        );
-                    $shipment = $shipment->fresh();
-                } catch (\Throwable $e) {
-                    // Progress helper is additive; sorting must still succeed.
+                // Optional light hop_meta refresh ONLY when a route is already assigned.
+                // Sort eligibility must not depend on this; Transfers Outbound owns live next-hop.
+                if ($assignedRouteId > 0) {
+                    try {
+                        $freshForProgress = $shipment->fresh();
+                        app(\Modules\Shipment\Services\TransferRouteProgressService::class)
+                            ->applyProgressToShipment(
+                                $freshForProgress,
+                                (int) ($freshForProgress->current_branch_id ?? 0) ?: null
+                            );
+                        $shipment = $shipment->fresh();
+                    } catch (\Throwable $e) {
+                        // Progress helper is additive; sorting must still succeed.
+                    }
                 }
 
                 $this->recordTrackingEvent(
@@ -133,9 +145,10 @@ final class ShipmentSortingService
     }
 
     /**
-     * Classify a shipment as last-mile or transfer based on CURRENT location
-     * vs destination (not origin). Falls back to origin when current is unset
-     * (pre-receive / legacy rows).
+     * Classify last-mile vs transfer from CURRENT operational location vs FINAL
+     * destination (not origin). Uses resolveOperationalBranchId / coverage
+     * equality — does not require a multi-hop route match.
+     * Falls back to origin when current is unset (pre-receive / legacy rows).
      */
     public function classify(Shipment $shipment): string
     {
@@ -153,9 +166,12 @@ final class ShipmentSortingService
             return self::MODE_LAST_MILE;
         }
 
-        return (int) $currentNode === (int) $destinationNode
-            ? self::MODE_LAST_MILE
-            : self::MODE_TRANSFER;
+        $progress = app(TransferRouteProgressService::class);
+        if ($progress->sameOperationalLocation((int) $currentNode, (int) $destinationNode)) {
+            return self::MODE_LAST_MILE;
+        }
+
+        return self::MODE_TRANSFER;
     }
 
     /**

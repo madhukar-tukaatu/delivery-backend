@@ -76,9 +76,9 @@ final class TransferRouteProgressService
         $route = $this->resolveRouteModel($shipment, $currentBranchId, $destinationBranchId, $serviceType);
 
         if (!$route) {
-            $atDest = $currentBranchId !== null
-                && $destinationBranchId !== null
-                && (int) $currentBranchId === (int) $destinationBranchId;
+            // Thin decision: at-final uses operational/coverage equality only.
+            // Do NOT invent next_hop = final when no route exists - Transfers Outbound owns next-hop resolution.
+            $atDest = $this->sameOperationalLocation($currentBranchId, $destinationBranchId);
 
             return [
                 'transfer_route_id' => null,
@@ -91,10 +91,10 @@ final class TransferRouteProgressService
                 'current_branch_id' => $currentBranchId,
                 'current_coverage_id' => $this->coverageIdForBranch($currentBranchId),
                 'destination_branch_id' => $destinationBranchId,
-                'next_hop_branch_id' => $atDest ? null : $destinationBranchId,
-                'next_hop_coverage_id' => $atDest ? null : $this->coverageIdForBranch($destinationBranchId),
-                'next_hop_name' => $atDest ? null : $this->branchName($destinationBranchId),
-                'remaining_path_branch_ids' => $atDest || !$destinationBranchId ? [] : [$destinationBranchId],
+                'next_hop_branch_id' => null,
+                'next_hop_coverage_id' => null,
+                'next_hop_name' => null,
+                'remaining_path_branch_ids' => [],
                 'remaining_path_coverage_ids' => [],
                 'transfer_leg_index' => null,
                 'is_at_destination' => $atDest,
@@ -132,15 +132,14 @@ final class TransferRouteProgressService
                 $remainingCoverage = array_values(array_slice($pathCoverage, $idx + 1));
                 $remainingBranches = array_values(array_slice($pathBranches, $idx + 1));
             }
-        } elseif ($destinationBranchId !== null && $currentBranchId !== null
-            && (int) $currentBranchId === (int) $destinationBranchId) {
+        } elseif ($this->sameOperationalLocation($currentBranchId, $destinationBranchId)) {
             $isAtDestination = true;
             $legIndex = max(0, count($pathCoverage) - 1);
         }
 
-        // Destination branch wins over coverage final for "at destination".
-        if ($destinationBranchId !== null && $currentBranchId !== null
-            && (int) $currentBranchId === (int) $destinationBranchId) {
+        // Destination branch wins over coverage final for "at destination"
+        // (ID match OR shared coverage / operational mapping).
+        if ($this->sameOperationalLocation($currentBranchId, $destinationBranchId)) {
             $isAtDestination = true;
             $nextHopBranchId = null;
             $nextHopCoverageId = null;
@@ -238,6 +237,7 @@ final class TransferRouteProgressService
 
         $expected = (int) ($progress['next_hop_branch_id'] ?? 0);
         $to = (int) ($this->resolveOperationalBranchId($toBranchId) ?? $toBranchId);
+        $expectedOp = (int) ($this->resolveOperationalBranchId($expected) ?? $expected);
 
         if ($expected <= 0) {
             throw ValidationException::withMessages([
@@ -250,7 +250,7 @@ final class TransferRouteProgressService
             ]);
         }
 
-        if ($to !== $expected) {
+        if ($to !== $expectedOp && !$this->sameOperationalLocation($to, $expectedOp)) {
             throw ValidationException::withMessages([
                 'to_branch_id' => [
                     sprintf(
@@ -505,6 +505,32 @@ final class TransferRouteProgressService
 
         return $this->branchIdForCoverage($id);
     }
+
+    /**
+     * True when two branch/coverage ids refer to the same operational location
+     * (exact id, resolveOperationalBranchId, or shared coverage_location_id).
+     */
+    public function sameOperationalLocation(?int $a, ?int $b): bool
+    {
+        if ($a === null || $b === null) {
+            return false;
+        }
+        if ((int) $a === (int) $b) {
+            return true;
+        }
+
+        $opA = $this->resolveOperationalBranchId((int) $a) ?? (int) $a;
+        $opB = $this->resolveOperationalBranchId((int) $b) ?? (int) $b;
+        if ((int) $opA === (int) $opB) {
+            return true;
+        }
+
+        $covA = $this->coverageIdForBranch((int) $opA) ?? $this->coverageIdForBranch((int) $a);
+        $covB = $this->coverageIdForBranch((int) $opB) ?? $this->coverageIdForBranch((int) $b);
+
+        return $covA !== null && $covB !== null && (int) $covA === (int) $covB;
+    }
+
 
     private function branchName(?int $branchId): ?string
     {

@@ -63,16 +63,16 @@ class StaffDeliveryController extends Controller
     }
 
     /**
-     * Create a Store Manager POD online payment session for this delivery.
+     * Create a HamroPay POD online payment session for this delivery.
      *
      * Request body (all optional):
      * - idempotency_key (string, max 191): retry-safe key; Express generates one when omitted.
      *
-     * Amount, currency, merchant, and QR destination come from the shipment /
-     * Store Manager — do NOT send amount or method here. Empty body `{}` is valid.
+     * Amount, currency, and sub-merchant come from the shipment / merchant KYB
+     * (hamropay_merchant_id). Do NOT send amount or method here. Empty body `{}` is valid.
      *
      * Preconditions: assigned rider, out_for_delivery, arrived_at set, POD with
-     * collectable amount, Store Manager payment enabled + merchant linked.
+     * collectable amount, merchant HamroPay KYB (hamropay_merchant_id), platform HamroPay keys.
      */
     public function createPaymentSession(Request $request, DeliveryAssignment $delivery)
     {
@@ -95,9 +95,9 @@ class StaffDeliveryController extends Controller
     }
 
     /**
-     * Get (and optionally refresh) the current Store Manager payment session.
+     * Get (and optionally refresh) the current HamroPay POD payment session.
      *
-     * Query: refresh=1 to poll Store Manager status for a pending session.
+     * Query: refresh=1 to poll HamroPay getTransaction for a pending session.
      */
     public function paymentSession(Request $request, DeliveryAssignment $delivery)
     {

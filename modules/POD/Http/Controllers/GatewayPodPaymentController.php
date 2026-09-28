@@ -15,9 +15,7 @@ use Modules\Shipment\Models\Shipment;
 use Throwable;
 
 /**
- * Store Manager gateway: POD online QR via Store Manager payment sessions.
- *
- * Express creates the session through StoreManagerPaymentService (not HamroPay).
+ * Store Manager gateway: POD online QR via HamroPay (Express fetches createSession).
  *
  * Auth: merchant.api-key (X-Tukaatu-Key / X-Tukaatu-Secret) — same as shipments/pickups.
  */

@@ -264,9 +264,9 @@ class DeliveryWorkflowService
     }
 
     /**
-     * Create the Store Manager POD payment session used for an online POD payment.
+     * Create the HamroPay POD payment session used for an online POD payment.
      * Only the assigned rider can initiate a session while out for delivery.
-     * HamroPay is not used for doorstep POD (settlements/HQ only).
+     * Uses the store HamroPay KYB sub-merchant (hamropay_merchant_id).
      */
     public function createPaymentSession(
         DeliveryAssignment $delivery,
@@ -285,7 +285,7 @@ class DeliveryWorkflowService
     }
 
     /**
-     * Return the current Store Manager POD payment session for a delivery.
+     * Return the current HamroPay POD payment session for a delivery.
      */
     public function paymentSession(
         DeliveryAssignment $delivery,
@@ -307,7 +307,7 @@ class DeliveryWorkflowService
      * Complete the delivery.
      *
      * A POD shipment is completed only after the customer pays the merchant
-     * directly by cash or through a verified Store Manager payment session. The
+     * directly by cash or through a verified HamroPay payment session. The
      * platform does not collect or settle this payment.
      *
      * @param array{payment_method?: string, payment_session_id?: string, pod_collected_amount?: float, customer_confirmed?: bool, customer_name?: string, customer_signature?: string, remarks?: string} $data
@@ -389,7 +389,7 @@ class DeliveryWorkflowService
                     if ($paymentSessionId === '') {
                         throw ValidationException::withMessages([
                             'payment_session_id' => [
-                                'A verified Store Manager payment session is required for online payment.',
+                                'A verified HamroPay payment session is required for online payment.',
                             ],
                         ]);
                     }

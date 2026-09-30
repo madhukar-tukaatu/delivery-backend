@@ -63,16 +63,18 @@ class StaffDeliveryController extends Controller
     }
 
     /**
-     * Create a HamroPay POD online payment session for this delivery.
+     * Create a Store Manager POD online payment session for this delivery.
      *
      * Request body (all optional):
      * - idempotency_key (string, max 191): retry-safe key; Express generates one when omitted.
      *
-     * Amount, currency, and sub-merchant come from the shipment / merchant KYB
-     * (hamropay_merchant_id). Do NOT send amount or method here. Empty body `{}` is valid.
+     * Amount, currency, merchant, and QR destination come from the shipment /
+     * Store Manager - do NOT send amount or method here. Empty body `{}` is valid.
      *
      * Preconditions: assigned rider, out_for_delivery, arrived_at set, POD with
-     * collectable amount, merchant HamroPay KYB (hamropay_merchant_id), platform HamroPay keys.
+     * collectable amount, and merchant linked (external_store_id). Express always
+     * calls Store Manager - it does not gate on STORE_MANAGER_PAYMENT_ENABLED.
+     * HamroPay KYB is NOT required for doorstep POD.
      */
     public function createPaymentSession(Request $request, DeliveryAssignment $delivery)
     {
@@ -95,9 +97,9 @@ class StaffDeliveryController extends Controller
     }
 
     /**
-     * Get (and optionally refresh) the current HamroPay POD payment session.
+     * Get (and optionally refresh) the current Store Manager payment session.
      *
-     * Query: refresh=1 to poll HamroPay getTransaction for a pending session.
+     * Query: refresh=1 to poll Store Manager status for a pending session.
      */
     public function paymentSession(Request $request, DeliveryAssignment $delivery)
     {
@@ -127,14 +129,30 @@ class StaffDeliveryController extends Controller
         ]);
 
         $data = $request->validate([
-            'payment_method' => ['nullable', 'string', 'in:cash,online'],
-            'payment_session_id' => ['nullable', 'required_if:payment_method,online', 'string', 'max:191'],
+            'payment_method' => ['nullable', 'string', 'in:cash,online,qr'],
+            'payment_session_id' => ['nullable', 'string', 'max:191'],
+            'merchant_txn_id' => ['nullable', 'string', 'max:191'],
             'customer_confirmed' => ['required', 'accepted'],
             'customer_name' => ['required', 'string', 'max:191'],
             'customer_signature' => ['required', 'string', 'max:2097152'],
             'pod_collected_amount' => ['nullable', 'numeric', 'min:0'],
             'remarks' => ['nullable', 'string', 'max:500'],
         ]);
+
+        $method = strtolower((string) ($data['payment_method'] ?? ''));
+        if (in_array($method, ['online', 'qr'], true)) {
+            $txn = trim((string) ($data['merchant_txn_id'] ?? $data['payment_session_id'] ?? ''));
+            if ($txn === '') {
+                throw \Illuminate\Validation\ValidationException::withMessages([
+                    'payment_session_id' => [
+                        'payment_session_id (or merchant_txn_id) is required for online/qr POD payment.',
+                    ],
+                ]);
+            }
+            $data['payment_method'] = $method === 'qr' ? 'qr' : 'online';
+            $data['merchant_txn_id'] = $txn;
+            $data['payment_session_id'] = $txn;
+        }
 
         return ApiResponse::success(
             $this->service->delivered($delivery, $request->user(), $data),

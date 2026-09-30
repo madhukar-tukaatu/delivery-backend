@@ -264,9 +264,9 @@ class DeliveryWorkflowService
     }
 
     /**
-     * Create the HamroPay POD payment session used for an online POD payment.
+     * Create the Store Manager POD payment session used for an online POD payment.
      * Only the assigned rider can initiate a session while out for delivery.
-     * Uses the store HamroPay KYB sub-merchant (hamropay_merchant_id).
+     * HamroPay is not used for doorstep POD (settlements/HQ only).
      */
     public function createPaymentSession(
         DeliveryAssignment $delivery,
@@ -285,7 +285,7 @@ class DeliveryWorkflowService
     }
 
     /**
-     * Return the current HamroPay POD payment session for a delivery.
+     * Return the current Store Manager POD payment session for a delivery.
      */
     public function paymentSession(
         DeliveryAssignment $delivery,
@@ -307,10 +307,10 @@ class DeliveryWorkflowService
      * Complete the delivery.
      *
      * A POD shipment is completed only after the customer pays the merchant
-     * directly by cash or through a verified HamroPay payment session. The
+     * directly by cash or through a verified Store Manager payment session. The
      * platform does not collect or settle this payment.
      *
-     * @param array{payment_method?: string, payment_session_id?: string, pod_collected_amount?: float, customer_confirmed?: bool, customer_name?: string, customer_signature?: string, remarks?: string} $data
+     * @param array{payment_method?: string, payment_session_id?: string, merchant_txn_id?: string, pod_collected_amount?: float, customer_confirmed?: bool, customer_name?: string, customer_signature?: string, remarks?: string} $data
      */
     public function delivered(DeliveryAssignment $delivery, User $user, array $data = []): Shipment
     {
@@ -362,10 +362,10 @@ class DeliveryWorkflowService
             if ($isPod && $collectable > 0) {
                 $paymentMethod = strtolower((string) ($data['payment_method'] ?? ''));
 
-                if (! in_array($paymentMethod, ['cash', 'online'], true)) {
+                if (! in_array($paymentMethod, ['cash', 'online', 'qr'], true)) {
                     throw ValidationException::withMessages([
                         'payment_method' => [
-                            'Choose cash or verified online payment before completing a pay-on-delivery order.',
+                            'Choose cash, online, or qr payment before completing a pay-on-delivery order.',
                         ],
                     ]);
                 }
@@ -383,13 +383,17 @@ class DeliveryWorkflowService
                 $delivery->update(['pod_collected_amount' => $collected]);
                 $podWorkflow = app(PODWorkflowService::class);
 
-                if ($paymentMethod === 'online') {
-                    $paymentSessionId = trim((string) ($data['payment_session_id'] ?? ''));
+                if (in_array($paymentMethod, ['online', 'qr'], true)) {
+                    $paymentSessionId = trim((string) (
+                        $data['merchant_txn_id']
+                        ?? $data['payment_session_id']
+                        ?? ''
+                    ));
 
                     if ($paymentSessionId === '') {
                         throw ValidationException::withMessages([
                             'payment_session_id' => [
-                                'A verified HamroPay payment session is required for online payment.',
+                                'A verified Store Manager payment session is required for online/qr payment.',
                             ],
                         ]);
                     }
@@ -405,7 +409,7 @@ class DeliveryWorkflowService
                         $shipment,
                         null,
                         $collected,
-                        'online',
+                        $paymentMethod === 'qr' ? 'qr' : 'online',
                         $paymentReference,
                         $paymentSessionId,
                     );

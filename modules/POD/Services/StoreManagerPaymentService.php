@@ -664,7 +664,21 @@ final class StoreManagerPaymentService
 
     private function secretFor(Merchant $merchant): string
     {
-        return trim((string) ($merchant->integration_callback_secret ?: config('services.store_manager.payment.shared_secret')));
+        // Prefer merchant callback secret when present and decryptable.
+        // Fall back to STORE_MANAGER_PAYMENT_INTEGRATION_SECRET so doorstep
+        // POD still works if a merchant row has a stale/undecryptable value.
+        $merchantSecret = '';
+        try {
+            $merchantSecret = trim((string) ($merchant->integration_callback_secret ?? ''));
+        } catch (Throwable) {
+            $merchantSecret = '';
+        }
+
+        if ($merchantSecret !== '') {
+            return $merchantSecret;
+        }
+
+        return trim((string) config('services.store_manager.payment.shared_secret'));
     }
 
     private function endpoint(string $path): string
@@ -706,9 +720,15 @@ final class StoreManagerPaymentService
 
     private function providerErrorMessage(int $status, ?array $body = null): string
     {
+        $rawError = data_get($body, 'error');
+        $errorMessage = is_array($rawError)
+            ? trim((string) (data_get($rawError, 'message') ?: data_get($rawError, 'code') ?: ''))
+            : trim((string) ($rawError ?? ''));
+
         $providerMessage = trim((string) (
             data_get($body, 'message')
-            ?: data_get($body, 'error')
+            ?: ($errorMessage !== '' ? $errorMessage : null)
+            ?: data_get($body, 'error.message')
             ?: data_get($body, 'errors.payment.0')
             ?: data_get($body, 'errors.0')
             ?: ''

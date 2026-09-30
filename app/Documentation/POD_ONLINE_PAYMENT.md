@@ -23,6 +23,22 @@ Empty request body `{}` is **valid**. Amount and method are not client-supplied 
 `payment-session`; Express derives amount from the shipment
 (`total_collectable_amount` / `pod_amount`).
 
+## Phase 6 checklist (doorstep online POD)
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Staff `POST .../payment-session` with `{}` creates Store Manager session (no amount/method in body) | Done |
+| 2 | No HamroPay KYB / `createSession` on the staff doorstep path | Done |
+| 3 | Staff `GET .../payment-session?refresh=1` polls Store Manager until `paid` | Done |
+| 4 | Signed webhook `POST /api/v1/integrations/store-manager/payment-events` marks session paid | Done |
+| 5 | QR/checkout returned (`qr_string` / `image_url` / `checkout_url`) for rider UI | Done |
+| 6 | `POST .../delivered` with `payment_method=online|qr` + `payment_session_id` only after paid | Done |
+| 7 | Cash POD unchanged (`payment_method=cash` → collected / pending_deposit) | Done |
+| 8 | Online POD → `pod_status=paid_direct`, no cash settlement pool; delivery-fee billing separate | Done |
+| 9 | Gateway `pod-qr` / verify also use Store Manager sessions | Done |
+| 10 | `STORE_MANAGER_*` env documented (`.env.example` + this guide) | Done |
+| 11 | Staff FE: Online/QR → create → show QR/link → poll → enable complete | Done |
+
 ## Fix applied
 
 - Restored `StoreManagerPaymentService` to call Store Manager HTTP APIs
@@ -49,6 +65,9 @@ STORE_MANAGER_PAYMENT_WEBHOOK_TOLERANCE=300
 # Optional legacy flag (Express no longer gates create on this):
 STORE_MANAGER_PAYMENT_ENABLED=true
 ```
+
+Local Docker tip: use `STORE_MANAGER_PAYMENT_BASE_URL=http://host.docker.internal:8000`
+when Store Manager runs on the host.
 
 HamroPay env (`HAMROPAY_*`) remains for **HQ settlements / KYB**, not doorstep POD.
 
@@ -78,14 +97,15 @@ POST /api/v1/staff/deliveries/{id}/delivered
 }
 ```
 
-## Retest (delivery id 34)
+## Retest (any out_for_delivery POD with arrived_at)
 
-1. Redeploy Express backend with this fix (required — prod still had HamroPay path).
+1. Redeploy Express backend with Store Manager payment-session path (not HamroPay).
 2. Confirm Express env has `STORE_MANAGER_PAYMENT_BASE_URL` + integration secret.
 3. Rider: out_for_delivery → arrived → Online/QR → `POST .../payment-session` with `{}`.
 4. Expect 200 + session/QR (not 422 HamroPay KYB).
 5. Customer pays; poll `GET .../payment-session?refresh=1` until `paid`.
 6. Complete delivered with `payment_method=online` + session id.
+7. Confirm cash path still works without opening a payment session.
 
 ## Related docs
 

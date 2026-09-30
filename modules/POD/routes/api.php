@@ -19,10 +19,10 @@ Route::post('v1/integrations/store-manager/payment-events', [StoreManagerPayment
 
 /*
 |--------------------------------------------------------------------------
-| EXTERNAL STORE MANAGER / GATEWAY — POD QR (HamroPay)
+| EXTERNAL STORE MANAGER / GATEWAY - POD QR (Store Manager sessions)
 |--------------------------------------------------------------------------
 | Auth: merchant.api-key (X-Tukaatu-Key / X-Tukaatu-Secret)
-| Express fetches HamroPay createSession for the store sub-merchant.
+| Express creates shipment-specific QR via StoreManagerPaymentService (not HamroPay).
 |--------------------------------------------------------------------------
 */
 

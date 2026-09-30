@@ -13,7 +13,7 @@ use Modules\Shipment\Models\Shipment;
 /**
  * Pay POD settlement to merchant wallet via HamroPay.
  * Payer credentials: branch account (from settlement shipments) → company fallback.
- * Payee: merchant hamropay_merchant_id / hamropay_business_id as subMerchantId.
+ * Payee: Merchant::hamroPaySubMerchantId() — KYB id first, else STORE- suffix / external_store_id.
  */
 class SettlementHamroPayService
 {
@@ -65,10 +65,10 @@ class SettlementHamroPayService
         }
 
         $merchant = Merchant::query()->find($settlement->merchant_id);
-        $subMerchantId = $merchant?->hamropay_merchant_id ?: $merchant?->hamropay_business_id;
+        $subMerchantId = $merchant?->hamroPaySubMerchantId();
         if (! $subMerchantId) {
             throw ValidationException::withMessages([
-                'merchant' => ['Register this merchant on HamroPay (KYB) before paying POD settlements.'],
+                'merchant' => ['Merchant needs external_store_id (e.g. STORE-00008) or HamroPay KYB id before POD settlement payout.'],
             ]);
         }
 

@@ -14,6 +14,7 @@ use Modules\Shipment\Models\Shipment;
 use Modules\Shipment\Services\BranchAssignmentService;
 use Modules\Shipment\Services\MerchantPickupLocationResolver;
 use Modules\Shipment\Services\ShipmentNumberService;
+use Modules\Shipment\Services\CheckoutDeliveryChargeResolver;
 
 final class ShipmentService
 {
@@ -23,6 +24,7 @@ final class ShipmentService
         private readonly ShipmentNumberService $shipmentNumberService,
         private readonly GatewayPickupService $pickupService,
         private readonly ShipmentRoutePlannedCallbackService $routePlannedCallback,
+        private readonly CheckoutDeliveryChargeResolver $checkoutDeliveryChargeResolver,
     ) {
     }
 
@@ -305,7 +307,11 @@ final class ShipmentService
                 |--------------------------------------------------------------------------
                 */
 
-                $charges = $this->resolveCharges($data);
+                $charges = $this->resolveCharges($data, $pickupCoordinates);
+
+                if (! empty($charges['breakdown']) && empty($data['delivery_charge_breakdown'])) {
+                    $data['delivery_charge_breakdown'] = $charges['breakdown'];
+                }
 
                 /*
                 |--------------------------------------------------------------------------
@@ -419,6 +425,12 @@ final class ShipmentService
 
                     'delivery_charge' =>
                         $charges['delivery_charge'],
+
+                    'pod_charge' =>
+                        $charges['pod_charge'] ?? ($data['pod_charge'] ?? 0),
+
+                    'delivery_charge_breakdown' =>
+                        $charges['breakdown'] ?? ($data['delivery_charge_breakdown'] ?? null),
 
                     'total_collectable_amount' =>
                         $charges['total_collectable_amount'],
@@ -854,7 +866,7 @@ final class ShipmentService
     | @return array{pod_amount: float, delivery_charge: float, total_collectable_amount: float}
     |--------------------------------------------------------------------------
     */
-    private function resolveCharges(array $data): array
+    private function resolveCharges(array $data, array $pickupCoordinates = []): array
     {
         $type = strtolower((string) ($data['payment_type'] ?? 'prepaid'));
 
@@ -876,10 +888,8 @@ final class ShipmentService
             }
         }
 
-        $deliveryCharge = round((float) (
-            $data['delivery_charge']
-            ?? config('delivery_workflow.pricing.base_fee', 0)
-        ), 2);
+        $priced = $this->checkoutDeliveryChargeResolver->resolveFromPayload($data, $pickupCoordinates);
+        $deliveryCharge = round((float) $priced['delivery_charge'], 2);
 
         $paidBy = strtolower((string) ($data['delivery_charge_paid_by'] ?? 'merchant'));
 
@@ -890,6 +900,9 @@ final class ShipmentService
             'pod_amount' => $podAmount,
             'delivery_charge' => $deliveryCharge,
             'total_collectable_amount' => round($totalCollectable, 2),
+            'breakdown' => $priced['breakdown'] ?? null,
+            'pricing_source' => $priced['source'] ?? null,
+            'pod_charge' => round((float) ($priced['pod_charge'] ?? $data['pod_charge'] ?? 0), 2),
         ];
     }
 

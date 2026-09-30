@@ -1,0 +1,89 @@
+--- a/StoreManagerPaymentService.php (before)
++++ b/StoreManagerPaymentService.php (after)
+@@ -17,7 +17,7 @@
+  * Doorstep POD online payment via Store Manager payment sessions.
+  *
+  * Express asks Store Manager to create a shipment-specific QR/session so the
+- * customer pays the merchant directly. HamroPay is NOT used here â€” HamroPay
++ * customer pays the merchant directly. HamroPay is NOT used here - HamroPay
+  * covers HQ/settlement flows (branch commissions, KYB registration), not
+  * rider doorstep POD collection.
+  *
+@@ -67,13 +67,23 @@
+             return $this->formatSession($sameRequest);
+         }
+ 
+-        $this->ensureConfigured($merchant);
+-
+         $requestPayload = $this->buildRequestPayload($shipment, $merchant);
+         $rawBody = json_encode(
+             $requestPayload,
+             JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR
+         );
++
++        // Always call Store Manager for eligible shipments. Do NOT gate on
++        // STORE_MANAGER_PAYMENT_ENABLED - that is Store Manager / ops concern.
++        // Fail with a clear config error only when we are about to call and
++        // base_url is missing. Auth/secret issues surface as SM HTTP errors.
++        $baseUrl = trim((string) config('services.store_manager.payment.base_url'));
++        if ($baseUrl === '') {
++            throw ValidationException::withMessages([
++                'payment' => ['Store Manager payment service URL is not configured (STORE_MANAGER_PAYMENT_BASE_URL).'],
++            ]);
++        }
++
+         $timestamp = (string) now()->timestamp;
+         $secret = $this->secretFor($merchant);
+         $headers = [
+@@ -331,7 +341,13 @@
+     private function refreshSession(PodPaymentSession $session): void
+     {
+         $merchant = $session->merchant ?: Merchant::query()->findOrFail($session->merchant_id);
+-        $this->ensureConfigured($merchant);
++
++        // No STORE_MANAGER_PAYMENT_ENABLED gate. Skip remote poll only when
++        // Express cannot form a Store Manager URL.
++        $baseUrl = trim((string) config('services.store_manager.payment.base_url'));
++        if ($baseUrl === '') {
++            return;
++        }
+ 
+         $timestamp = (string) now()->timestamp;
+         $secret = $this->secretFor($merchant);
+@@ -645,36 +661,6 @@
+         }
+     }
+ 
+-    private function ensureConfigured(Merchant $merchant): void
+-    {
+-        if (! config('services.store_manager.payment.enabled')) {
+-            throw ValidationException::withMessages([
+-                'payment' => [
+-                    'Store Manager online payment is not enabled. Set STORE_MANAGER_PAYMENT_ENABLED=true (HamroPay KYB is not used for doorstep POD).',
+-                ],
+-            ]);
+-        }
+-
+-        if (trim((string) config('services.store_manager.payment.base_url')) === '') {
+-            throw ValidationException::withMessages([
+-                'payment' => ['Store Manager payment service URL is not configured (STORE_MANAGER_PAYMENT_BASE_URL).'],
+-            ]);
+-        }
+-
+-        if (trim((string) config('services.store_manager.payment.integration_id')) === '') {
+-            throw ValidationException::withMessages([
+-                'payment' => ['Store Manager payment integration id is not configured (STORE_MANAGER_PAYMENT_INTEGRATION_ID).'],
+-            ]);
+-        }
+-
+-        if ($this->secretFor($merchant) === '') {
+-            throw ValidationException::withMessages([
+-                'payment' => [
+-                    'Store Manager payment credentials are not configured. Set STORE_MANAGER_PAYMENT_INTEGRATION_SECRET or the merchant integration_callback_secret.',
+-                ],
+-            ]);
+-        }
+-    }
+ 
+     private function secretFor(Merchant $merchant): string
+     {

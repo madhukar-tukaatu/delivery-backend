@@ -238,6 +238,36 @@ class Merchant extends Model
     | Source Helpers
     |--------------------------------------------------------------------------
     */
+    /**
+     * HamroPay createSession / checkout subMerchantId (doorstep POD + settlements).
+     *
+     * Preference (Phase 6):
+     * 1) hamropay_merchant_id / hamropay_business_id — KYB id registered with HamroPay
+     * 2) digits/suffix after STORE- from external_store_id (e.g. STORE-00018 -> 00018)
+     *    when KYB id is empty AND that STORE- suffix is what HamroPay KYB registered
+     * 3) raw external_store_id when it has no STORE- prefix
+     */
+    public function hamroPaySubMerchantId(): ?string
+    {
+        $kyb = trim((string) ($this->hamropay_merchant_id ?: $this->hamropay_business_id ?: ''));
+        if ($kyb !== '') {
+            return $kyb;
+        }
+
+        $external = trim((string) ($this->external_store_id ?? ''));
+        if ($external === '') {
+            return null;
+        }
+
+        if (preg_match('/^STORE-(.+)$/i', $external, $matches)) {
+            $id = trim((string) ($matches[1] ?? ''));
+
+            return $id !== '' ? $id : null;
+        }
+
+        return $external;
+    }
+
 
     public function isStoreManagerApplication(): bool
     {

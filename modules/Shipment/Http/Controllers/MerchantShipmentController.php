@@ -4,7 +4,7 @@ namespace Modules\Shipment\Http\Controllers;
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
-use Modules\Rate\Services\RateCalculatorService;
+use Modules\Shipment\Services\CheckoutDeliveryChargeResolver;
 use Modules\Shipment\Models\Shipment;
 use Modules\Shipment\Services\MerchantShipmentGateService;
 use Modules\Shipment\Services\ShipmentService;
@@ -198,7 +198,7 @@ class MerchantShipmentController extends Controller
     public function quote(
         Request $request,
         MerchantShipmentGateService $gate,
-        RateCalculatorService $rateCalculator
+        CheckoutDeliveryChargeResolver $checkoutDeliveryChargeResolver
     ) {
         $merchant = $request->user()->merchant;
 
@@ -212,10 +212,18 @@ class MerchantShipmentController extends Controller
 
         $data = $gate->enrichShipmentPayload($merchant, $data);
 
-        $rate = $rateCalculator->calculate($data, $merchant->id);
+        $priced = $checkoutDeliveryChargeResolver->resolveFromPayload($data, [
+            'lat' => $data['pickup_lat'] ?? null,
+            'lng' => $data['pickup_lng'] ?? null,
+        ]);
 
-        $deliveryCharge = (float) ($rate['delivery_charge'] ?? 0);
-        $codCharge      = (float) ($rate['pod_charge'] ?? 0);
+        $deliveryCharge = (float) ($priced['delivery_charge'] ?? 0);
+        $codCharge      = (float) ($priced['pod_charge'] ?? 0);
+        $rate = $priced['breakdown'] ?? [
+            'delivery_charge' => $deliveryCharge,
+            'pod_charge' => $codCharge,
+            'pricing_source' => $priced['source'] ?? null,
+        ];
 
         $paymentType = $data['payment_type'] ?? 'prepaid';
         $codAmount   = (float) ($data['pod_amount'] ?? 0);
@@ -354,6 +362,8 @@ class MerchantShipmentController extends Controller
 
             'payment_type'            => ['required', 'in:pod,prepaid'],
             'pod_amount'              => ['nullable', 'numeric', 'min:0'],
+            'delivery_charge'          => ['nullable', 'numeric', 'min:0'],
+            'pod_charge'               => ['nullable', 'numeric', 'min:0'],
             'delivery_charge_paid_by' => ['nullable', 'in:customer,merchant'],
 
             'self_drop'               => ['nullable', 'boolean'],

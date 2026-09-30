@@ -104,16 +104,18 @@ final class StoreManagerPaymentService
             Log::warning('Store Manager payment session connection failed.', [
                 'shipment_id' => $shipment->id,
                 'merchant_id' => $merchant->id,
+                'base_url' => $baseUrl,
                 'error' => $exception->getMessage(),
             ]);
 
             throw ValidationException::withMessages([
-                'payment' => ['The Store Manager payment service is unavailable. Check STORE_MANAGER_PAYMENT_BASE_URL and network access.'],
+                'payment' => ['The Store Manager payment service is unavailable at ' . $baseUrl . '. Check STORE_MANAGER_PAYMENT_BASE_URL (Docker: http://store-manager:8000), network access, and that Store Manager is running.'],
             ]);
         } catch (Throwable $exception) {
             Log::error('Store Manager payment session request failed.', [
                 'shipment_id' => $shipment->id,
                 'merchant_id' => $merchant->id,
+                'base_url' => $baseUrl,
                 'error' => $exception->getMessage(),
             ]);
 
@@ -444,11 +446,11 @@ final class StoreManagerPaymentService
 
         $qr = data_get($providerData, 'payment.qr', data_get($providerData, 'qr', []));
         $session = PodPaymentSession::updateOrCreate(
-            ['idempotency_key' => $idempotencyKey],
+            ['payment_session_id' => $providerSessionId],
             [
+                'idempotency_key' => $idempotencyKey,
                 'merchant_id' => $merchant->id,
                 'shipment_id' => $shipment->id,
-                'payment_session_id' => $providerSessionId,
                 'external_store_id' => $merchant->external_store_id,
                 'external_platform' => $merchant->external_platform,
                 'merchant_order_id' => $shipment->merchant_order_id,
@@ -712,7 +714,7 @@ final class StoreManagerPaymentService
         }
 
         try {
-            return Carbon::parse($value);
+            return Carbon::parse($value)->timezone((string) config('app.timezone', 'UTC'));
         } catch (Throwable) {
             return null;
         }

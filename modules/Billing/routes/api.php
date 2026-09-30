@@ -21,6 +21,13 @@ Route::prefix('v1/admin')
                 ->name('invoices.mark-paid');
             Route::post('invoices/{invoice}/pay-hamropay', [InvoiceController::class, 'payHamroPay'])
                 ->name('invoices.pay-hamropay');
+            // Manual email triggers
+            Route::post('invoices/{invoice}/send-email', [InvoiceController::class, 'sendEmail'])
+                ->name('invoices.send-email');
+            Route::post('invoices/send-digest', [InvoiceController::class, 'sendDigest'])
+                ->name('invoices.send-digest');
+            Route::get('invoices/summary', [InvoiceController::class, 'summary'])
+                ->name('invoices.summary');
 
             // Merchant HamroPay KYB
             Route::get('merchants/{merchant}/hamropay', [HamroPayMerchantController::class, 'status'])
@@ -77,5 +84,10 @@ Route::prefix('v1/merchant')
                 ->name('invoices.pay-hamropay');
             Route::post('invoices/{invoice}/mark-paid', [InvoiceController::class, 'markPaid'])
                 ->name('invoices.mark-paid');
+            // Manual email trigger for merchant
+            Route::post('invoices/{invoice}/send-email', [InvoiceController::class, 'sendEmail'])
+                ->name('invoices.send-email');
+            Route::get('invoices/summary', [InvoiceController::class, 'summary'])
+                ->name('invoices.summary');
         });
     });

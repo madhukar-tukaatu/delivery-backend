@@ -107,34 +107,35 @@ class MerchantDeliveryBillingService
             }
 
             $invoice = $invoice->load('items');
-            $this->notifyMerchantBillCreated($invoice, $shipment);
+            // Queue for periodic digest instead of immediate email
+            $this->queueForDigest($invoice, $shipment);
 
             return $invoice;
         });
     }
 
-    protected function notifyMerchantBillCreated(Invoice $invoice, Shipment $shipment): void
+    /**
+     * Queue invoice for periodic digest email (daily/weekly)
+     */
+    protected function queueForDigest(Invoice $invoice, Shipment $shipment): void
     {
         $merchant = Merchant::query()->find($shipment->merchant_id);
         $email = $merchant?->email ?? $merchant?->contact_email ?? null;
-        $subject = 'Delivery charge bill '.$invoice->invoice_number;
-        $body = sprintf(
-            "Delivery charge bill for shipment %s.\nInvoice: %s\nAmount due to branch: Rs. %s\n(This is separate from POD cash and from HQ commission.)",
-            $shipment->tracking_number,
-            $invoice->invoice_number,
-            number_format((float) $invoice->total_amount, 2),
-        );
+
+        if (! $email) {
+            return;
+        }
 
         try {
             if (class_exists(NotificationLog::class)) {
                 NotificationLog::create([
                     'merchant_id' => $shipment->merchant_id,
-                    'type' => 'delivery_bill',
+                    'type' => 'delivery_bill_queued',
                     'channel' => 'system',
-                    'status' => 'logged',
+                    'status' => 'queued',
                     'payload' => [
-                        'title' => $subject,
-                        'message' => $body,
+                        'title' => 'Delivery charge bill queued for digest',
+                        'message' => "Invoice {$invoice->invoice_number} for shipment {$shipment->tracking_number} queued for periodic digest",
                         'invoice_id' => $invoice->id,
                         'shipment_id' => $shipment->id,
                     ],
@@ -144,10 +145,27 @@ class MerchantDeliveryBillingService
         } catch (Throwable $e) {
             Log::info('delivery_bill.notification_log_skipped', ['error' => $e->getMessage()]);
         }
+    }
+
+    /**
+     * Send immediate email for a specific invoice (manual trigger)
+     */
+    public function sendInvoiceEmail(Invoice $invoice): bool
+    {
+        $shipment = $invoice->shipment;
+        if (! $shipment) {
+            return false;
+        }
+
+        $merchant = Merchant::query()->find($shipment->merchant_id);
+        $email = $merchant?->email ?? $merchant?->contact_email ?? null;
 
         if (! $email) {
-            return;
+            return false;
         }
+
+        $subject = 'Delivery charge bill '.$invoice->invoice_number;
+        $body = $this->buildInvoiceEmailBody($invoice, $shipment);
 
         try {
             Mail::raw($body, function ($message) use ($email, $subject) {
@@ -162,8 +180,67 @@ class MerchantDeliveryBillingService
                     'sent_at' => now(),
                 ]);
             }
+            return true;
         } catch (Throwable $e) {
             Log::warning('delivery_bill.email_failed', ['error' => $e->getMessage()]);
+            return false;
         }
+    }
+
+    /**
+     * Build email body for single invoice
+     */
+    protected function buildInvoiceEmailBody(Invoice $invoice, Shipment $shipment): string
+    {
+        return sprintf(
+            "Delivery charge bill for shipment %s.\nInvoice: %s\nAmount due to branch: Rs. %s\n(This is separate from POD cash and from HQ commission.)",
+            $shipment->tracking_number,
+            $invoice->invoice_number,
+            number_format((float) $invoice->total_amount, 2),
+        );
+    }
+
+    /**
+     * Build digest email body for multiple invoices
+     */
+    public function buildDigestEmailBody(array $invoices): string
+    {
+        $total = 0;
+        $lines = ["Dear Merchant,\n\nHere is your delivery charges summary:\n"];
+
+        foreach ($invoices as $inv) {
+            $shipment = $inv->shipment;
+            $amount = (float) $inv->total_amount;
+            $total += $amount;
+            $tracking = $shipment?->tracking_number ?? 'N/A';
+            $lines[] = "- {$inv->invoice_number} | Shipment: {$tracking} | Amount: Rs. " . number_format($amount, 2);
+        }
+
+        $lines[] = "\nTotal Amount Due: Rs. " . number_format($total, 2);
+        $lines[] = "\n(This is separate from POD cash and from HQ commission.)";
+        $lines[] = "\nPlease log in to your merchant portal to view and pay invoices.";
+
+        return implode("\n", $lines);
+    }
+
+    /**
+     * Get unpaid invoices for a merchant within date range
+     */
+    public function getUnpaidInvoicesForMerchant(int $merchantId, ?string $fromDate = null, ?string $toDate = null): \Illuminate\Database\Eloquent\Collection
+    {
+        $query = Invoice::with('shipment')
+            ->where('merchant_id', $merchantId)
+            ->where('type', 'delivery_charges')
+            ->where('status', 'unpaid')
+            ->orderBy('invoice_date', 'desc');
+
+        if ($fromDate) {
+            $query->whereDate('invoice_date', '>=', $fromDate);
+        }
+        if ($toDate) {
+            $query->whereDate('invoice_date', '<=', $toDate);
+        }
+
+        return $query->get();
     }
 }

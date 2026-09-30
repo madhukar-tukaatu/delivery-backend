@@ -22,10 +22,14 @@ class InvoiceController extends Controller
 
     public function index(Request $request)
     {
-        $query = Invoice::with('items')->latest();
+        $query = Invoice::with(['items', 'shipment'])->latest();
+        
+        // Merchant can only see their own invoices
         if ($request->user()->role === 'merchant') {
             $query->where('merchant_id', $request->user()->merchant_id);
         }
+        
+        // Admin filters
         if ($request->filled('merchant_id')) {
             $query->where('merchant_id', $request->merchant_id);
         }
@@ -38,8 +42,29 @@ class InvoiceController extends Controller
         if ($request->filled('status')) {
             $query->where('status', $request->status);
         }
+        
+        // Date range filters
+        if ($request->filled('from_date')) {
+            $query->whereDate('invoice_date', '>=', $request->from_date);
+        }
+        if ($request->filled('to_date')) {
+            $query->whereDate('invoice_date', '<=', $request->to_date);
+        }
+        
+        // Search by invoice number or tracking number
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('invoice_number', 'like', "%{$search}%")
+                  ->orWhereHas('shipment', function ($sq) use ($search) {
+                      $sq->where('tracking_number', 'like', "%{$search}%");
+                  });
+            });
+        }
 
-        return ApiResponse::success($query->paginate((int) $request->get('per_page', 20)));
+        $perPage = min((int) $request->get('per_page', 20), 100);
+        
+        return ApiResponse::success($query->paginate($perPage));
     }
 
     public function shipmentInvoice(Request $request, Shipment $shipment)
@@ -64,6 +89,88 @@ class InvoiceController extends Controller
         ]);
 
         return ApiResponse::success($invoice->fresh('items'), 'Invoice marked paid.');
+    }
+
+    /**
+     * Send invoice email immediately (manual trigger)
+     */
+    public function sendEmail(Request $request, Invoice $invoice)
+    {
+        // Check permissions
+        $user = $request->user();
+        if ($user->role === 'merchant') {
+            abort_unless((int) $user->merchant_id === (int) $invoice->merchant_id, 403);
+        }
+
+        $sent = $this->billing->sendInvoiceEmail($invoice);
+        
+        if ($sent) {
+            return ApiResponse::success(null, 'Invoice email sent successfully.');
+        }
+        
+        return ApiResponse::error('Failed to send email. Merchant email may not be configured.', 500);
+    }
+
+    /**
+     * Send digest email for merchant (manual trigger for admin)
+     */
+    public function sendDigest(Request $request)
+    {
+        $request->validate([
+            'merchant_id' => ['required', 'integer', 'exists:merchants,id'],
+            'period' => ['required', 'in:daily,weekly'],
+        ]);
+
+        $merchantId = $request->merchant_id;
+        $period = $request->period;
+
+        // Check permissions
+        $user = $request->user();
+        if ($user->role === 'merchant') {
+            abort_unless((int) $user->merchant_id === $merchantId, 403);
+        }
+
+        // Dispatch job
+        \Modules\Billing\Jobs\SendMerchantBillDigest::dispatch($merchantId, $period);
+
+        return ApiResponse::success(null, "{$period} digest email queued for merchant.");
+    }
+
+    /**
+     * Get invoice summary for merchant (for dashboard)
+     */
+    public function summary(Request $request)
+    {
+        $merchantId = $request->user()->role === 'merchant' 
+            ? $request->user()->merchant_id 
+            : $request->get('merchant_id');
+
+        if (! $merchantId) {
+            return ApiResponse::error('Merchant ID required', 400);
+        }
+
+        $unpaid = Invoice::where('merchant_id', $merchantId)
+            ->where('type', 'delivery_charges')
+            ->where('status', 'unpaid')
+            ->selectRaw('COUNT(*) as count, SUM(total_amount) as total')
+            ->first();
+
+        $paid = Invoice::where('merchant_id', $merchantId)
+            ->where('type', 'delivery_charges')
+            ->where('status', 'paid')
+            ->selectRaw('COUNT(*) as count, SUM(total_amount) as total')
+            ->first();
+
+        return ApiResponse::success([
+            'unpaid' => [
+                'count' => (int) ($unpaid->count ?? 0),
+                'total' => (float) ($unpaid->total ?? 0),
+            ],
+            'paid' => [
+                'count' => (int) ($paid->count ?? 0),
+                'total' => (float) ($paid->total ?? 0),
+            ],
+        ]);
     }
 
     /**

@@ -10,16 +10,27 @@ use Modules\Merchant\Models\Merchant;
 
 class MerchantShipmentCreateViewService
 {
+    public function __construct(
+        private readonly CheckoutDeliveryChargeResolver $checkoutDeliveryChargeResolver,
+    ) {
+    }
+
     public function quote(Merchant $merchant, array $payload): array
     {
         $pickupLocation = $this->resolvePickupLocation($merchant, $payload);
         $origin = $this->resolveOrigin($merchant, $pickupLocation);
         $destination = $this->resolveDestination($payload);
-        $fare = $this->calculateFare($payload, $pickupLocation, $destination);
+        $fare = $this->calculateFare($merchant, $payload, $pickupLocation, $destination);
 
         return [
             'pickup_location' => $pickupLocation,
             'fare' => $fare,
+            'delivery_charge' => $fare['delivery_charge'] ?? null,
+            'final_delivery_fee' => isset($fare['delivery_charge'], $fare['pod_fee'])
+                ? round((float) $fare['delivery_charge'] + (float) $fare['pod_fee'], 2)
+                : ($fare['delivery_charge'] ?? null),
+            'pod_charge' => $fare['pod_charge'] ?? $fare['pod_fee'] ?? null,
+            'pricing_source' => $fare['pricing_source'] ?? null,
             'route' => [
                 'origin_branch_id' => $origin['branch_id'],
                 'origin_sub_branch_id' => $origin['sub_branch_id'],
@@ -220,50 +231,69 @@ class MerchantShipmentCreateViewService
         ];
     }
 
-    private function calculateFare(array $payload, ?object $pickupLocation, array $destination): array
+    private function calculateFare(Merchant $merchant, array $payload, ?object $pickupLocation, array $destination): array
     {
-        $actualWeight = (float) data_get($payload, 'package.weight', 0);
+        $actualWeight = (float) data_get($payload, 'package.weight', data_get($payload, 'weight', data_get($payload, 'package_weight', 0)));
         $length = (float) data_get($payload, 'package.length_cm', 0);
         $width = (float) data_get($payload, 'package.width_cm', 0);
         $height = (float) data_get($payload, 'package.height_cm', 0);
         $volumetricWeight = $length && $width && $height ? ($length * $width * $height) / 5000 : 0;
         $chargeableWeight = max($actualWeight, $volumetricWeight, 0.1);
 
-        $pickupLat = $pickupLocation?->latitude;
-        $pickupLng = $pickupLocation?->longitude;
-        $deliveryLat = data_get($payload, 'delivery.latitude');
-        $deliveryLng = data_get($payload, 'delivery.longitude');
+        $pickupLat = $pickupLocation?->latitude ?? data_get($payload, 'pickup_lat');
+        $pickupLng = $pickupLocation?->longitude ?? data_get($payload, 'pickup_lng');
+        $deliveryLat = data_get($payload, 'delivery.latitude', data_get($payload, 'delivery_lat', data_get($payload, 'delivery_latitude')));
+        $deliveryLng = data_get($payload, 'delivery.longitude', data_get($payload, 'delivery_lng', data_get($payload, 'delivery_longitude')));
         $distanceKm = ($pickupLat && $pickupLng && $deliveryLat && $deliveryLng)
             ? $this->distanceKm((float) $pickupLat, (float) $pickupLng, (float) $deliveryLat, (float) $deliveryLng)
-            : 5.0;
+            : 0.0;
 
-        $baseFee = (float) config('delivery_workflow.pricing.base_fee', 80);
-        $ratePerKm = (float) config('delivery_workflow.pricing.rate_per_km', 12);
-        $ratePerKg = (float) config('delivery_workflow.pricing.rate_per_kg', 25);
-        $codFeePercent = (float) config('delivery_workflow.pricing.pod_fee_percent', 1);
-        $minimumCharge = (float) config('delivery_workflow.pricing.minimum_charge', 100);
+        $paymentType = data_get($payload, 'payment.type', data_get($payload, 'payment_type', 'prepaid'));
+        $codAmount = $paymentType === 'pod'
+            ? (float) data_get($payload, 'payment.pod_amount', data_get($payload, 'pod_amount', 0))
+            : 0;
+        $paidBy = data_get($payload, 'payment.delivery_charge_paid_by', data_get($payload, 'delivery_charge_paid_by', 'merchant'));
 
-        $distanceFee = round($distanceKm * $ratePerKm, 2);
-        $weightFee = round($chargeableWeight * $ratePerKg, 2);
-        $codAmount = data_get($payload, 'payment.type') === 'pod' ? (float) data_get($payload, 'payment.pod_amount', 0) : 0;
-        $codFee = round($codAmount * $codFeePercent / 100, 2);
-        $deliveryCharge = max($minimumCharge, round($baseFee + $distanceFee + $weightFee + $codFee, 2));
-        $paidBy = data_get($payload, 'payment.delivery_charge_paid_by', 'merchant');
+        $priced = $this->checkoutDeliveryChargeResolver->resolveFromPayload([
+            'merchant_id' => $merchant->id,
+            'pickup_lat' => $pickupLat,
+            'pickup_lng' => $pickupLng,
+            'delivery_lat' => $deliveryLat,
+            'delivery_lng' => $deliveryLng,
+            'weight' => $chargeableWeight,
+            'parcel_weight' => $chargeableWeight,
+            'service_type' => data_get($payload, 'service_type', 'standard'),
+            'payment_type' => $paymentType,
+            'pod_amount' => $codAmount,
+            'delivery_charge' => data_get($payload, 'delivery_charge'),
+            'delivery_charge_breakdown' => data_get($payload, 'delivery_charge_breakdown'),
+            'pod_charge' => data_get($payload, 'pod_charge'),
+        ], [
+            'lat' => $pickupLat !== null ? (float) $pickupLat : null,
+            'lng' => $pickupLng !== null ? (float) $pickupLng : null,
+        ]);
+
+        $deliveryCharge = round((float) $priced['delivery_charge'], 2);
+        $codFee = round((float) ($priced['pod_charge'] ?? 0), 2);
         $totalCollectable = $codAmount + ($paidBy === 'customer' ? $deliveryCharge : 0);
+        $breakdown = is_array($priced['breakdown'] ?? null) ? $priced['breakdown'] : [];
 
         return [
-            'base_fee' => $baseFee,
+            'base_fee' => round((float) ($breakdown['base_rate'] ?? data_get($breakdown, 'breakdown.base_rate') ?? $deliveryCharge), 2),
             'distance_km' => round($distanceKm, 2),
-            'distance_fee' => $distanceFee,
+            'distance_fee' => round((float) (data_get($breakdown, 'distance_fee') ?? 0), 2),
             'actual_weight' => $actualWeight,
             'volumetric_weight' => round($volumetricWeight, 2),
             'chargeable_weight' => round($chargeableWeight, 2),
-            'weight_fee' => $weightFee,
+            'weight_fee' => round((float) (data_get($breakdown, 'weight_fee') ?? 0), 2),
             'pod_amount' => $codAmount,
             'pod_fee' => $codFee,
+            'pod_charge' => $codFee,
             'delivery_charge' => $deliveryCharge,
             'delivery_charge_paid_by' => $paidBy,
             'total_collectable' => round($totalCollectable, 2),
+            'pricing_source' => $priced['source'] ?? null,
+            'breakdown' => $priced['breakdown'] ?? null,
         ];
     }
 

@@ -115,6 +115,12 @@ class Merchant extends Model
         return $this->hasMany(User::class);
     }
 
+    public function marketplace(): BelongsTo
+    {
+        return $this->belongsTo(\Modules\Setting\Models\Marketplace::class, 'marketplace_id');
+    }
+
+
     /*
     |--------------------------------------------------------------------------
     | API Integration Relationships

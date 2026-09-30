@@ -62,6 +62,7 @@ class MenuSeeder extends Seeder
             ['section' => MenuSection::Admin->value, 'label' => 'Branch Staff', 'route' => '/admin/branch-staff', 'icon' => 'users', 'permission' => 'branches.team.view', 'sort_order' => 50, 'parent' => 'Network'],
             ['section' => MenuSection::Admin->value, 'label' => 'Branch Roles', 'route' => '/admin/branch-roles', 'icon' => 'roles', 'permission' => 'branches.team.view', 'sort_order' => 60, 'parent' => 'Network'],
             ['section' => MenuSection::Admin->value, 'label' => 'Merchants', 'route' => '/admin/merchants', 'icon' => 'merchants', 'permission' => 'merchants.view', 'sort_order' => 70, 'parent' => 'Network'],
+            ['section' => MenuSection::Admin->value, 'label' => 'Marketplaces', 'route' => '/admin/marketplaces', 'icon' => 'api', 'permission' => 'marketplaces.view', 'sort_order' => 75, 'parent' => 'Network'],
             ['section' => MenuSection::Admin->value, 'label' => 'Merchant Applications', 'route' => '/admin/merchant-applications', 'icon' => 'store', 'permission' => 'merchants.view', 'sort_order' => 80, 'parent' => 'Network'],
             ['section' => MenuSection::Admin->value, 'label' => 'Customers', 'route' => '/admin/customers', 'icon' => 'customers', 'permission' => 'customers.view', 'sort_order' => 90, 'parent' => 'Network'],
 

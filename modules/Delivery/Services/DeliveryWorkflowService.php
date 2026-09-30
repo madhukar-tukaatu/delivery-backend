@@ -17,7 +17,7 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Modules\Delivery\Models\DeliveryAssignment;
 use Modules\POD\Services\PODWorkflowService;
-use Modules\POD\Services\StoreManagerPaymentService;
+use Modules\POD\Services\HamroPayPodPaymentService;
 use Modules\Shipment\Models\Shipment;
 use Modules\Shipment\Services\ShipmentCallbackService;
 use Modules\Tracking\Services\TrackingService;
@@ -41,7 +41,7 @@ class DeliveryWorkflowService
         private TrackingService $trackingService,
         private WebhookService $webhookService,
         private ShipmentCallbackService $callbacks,
-        private StoreManagerPaymentService $paymentService,
+        private HamroPayPodPaymentService $paymentService,
     ) {}
 
     /**
@@ -264,9 +264,10 @@ class DeliveryWorkflowService
     }
 
     /**
-     * Create the Store Manager POD payment session used for an online POD payment.
+     * Create the HamroPay POD session for doorstep online/QR payment.
      * Only the assigned rider can initiate a session while out for delivery.
-     * HamroPay is not used for doorstep POD (settlements/HQ only).
+     * Amount comes from the shipment. Empty body is valid. KYB is required only
+     * when the store has neither hamropay_merchant_id nor external_store_id.
      */
     public function createPaymentSession(
         DeliveryAssignment $delivery,
@@ -285,7 +286,7 @@ class DeliveryWorkflowService
     }
 
     /**
-     * Return the current Store Manager POD payment session for a delivery.
+     * Return the current HamroPay POD payment session for a delivery.
      */
     public function paymentSession(
         DeliveryAssignment $delivery,
@@ -307,8 +308,8 @@ class DeliveryWorkflowService
      * Complete the delivery.
      *
      * A POD shipment is completed only after the customer pays the merchant
-     * directly by cash or through a verified Store Manager payment session. The
-     * platform does not collect or settle this payment.
+     * directly by cash or through a verified HamroPay session (merchant_txn_id).
+     * Online/QR funds are paid_direct and are not added to the cash deposit pool.
      *
      * @param array{payment_method?: string, payment_session_id?: string, merchant_txn_id?: string, pod_collected_amount?: float, customer_confirmed?: bool, customer_name?: string, customer_signature?: string, remarks?: string} $data
      */
@@ -393,7 +394,7 @@ class DeliveryWorkflowService
                     if ($paymentSessionId === '') {
                         throw ValidationException::withMessages([
                             'payment_session_id' => [
-                                'A verified Store Manager payment session is required for online/qr payment.',
+                                'A verified HamroPay merchant_txn_id is required for online/qr payment.',
                             ],
                         ]);
                     }

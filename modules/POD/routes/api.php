@@ -19,10 +19,11 @@ Route::post('v1/integrations/store-manager/payment-events', [StoreManagerPayment
 
 /*
 |--------------------------------------------------------------------------
-| EXTERNAL STORE MANAGER / GATEWAY - POD QR (Store Manager sessions)
+| GATEWAY - POD QR (Phase 6 HamroPay)
 |--------------------------------------------------------------------------
 | Auth: merchant.api-key (X-Tukaatu-Key / X-Tukaatu-Secret)
-| Express creates shipment-specific QR via StoreManagerPaymentService (not HamroPay).
+| Express creates the HamroPay session (createSession) and verifies with getTransaction.
+| Store Manager payment sessions are a separate legacy integration webhook below.
 |--------------------------------------------------------------------------
 */
 

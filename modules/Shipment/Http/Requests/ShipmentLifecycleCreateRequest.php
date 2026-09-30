@@ -21,11 +21,42 @@ class ShipmentLifecycleCreateRequest extends FormRequest
             ?? $this->input('delivery_lng')
             ?? $this->input('delivery_longitude');
 
+        $package = (array) $this->input('package', []);
+        $weight = data_get($package, 'weight')
+            ?? $this->input('weight')
+            ?? $this->input('package_weight')
+            ?? $this->input('parcel_weight');
+
+        $customer = (array) $this->input('customer', []);
+        $payment = (array) $this->input('payment', []);
+
         $this->merge([
-            'delivery' => array_merge($delivery, [
+            'delivery' => array_merge($delivery, array_filter([
                 'latitude' => $latitude,
                 'longitude' => $longitude,
-            ]),
+                'address' => data_get($delivery, 'address') ?? $this->input('delivery_address') ?? $this->input('receiver_address'),
+                'city' => data_get($delivery, 'city') ?? $this->input('delivery_city') ?? $this->input('receiver_city'),
+                'area' => data_get($delivery, 'area') ?? $this->input('delivery_area') ?? $this->input('receiver_area'),
+            ], fn ($v) => $v !== null && $v !== '')),
+            'package' => array_merge($package, array_filter([
+                'weight' => $weight,
+                'type' => data_get($package, 'type') ?? $this->input('package_type'),
+                'description' => data_get($package, 'description') ?? $this->input('package_description'),
+                'value' => data_get($package, 'value') ?? $this->input('package_value') ?? $this->input('declared_value'),
+            ], fn ($v) => $v !== null && $v !== '')),
+            'customer' => array_merge($customer, array_filter([
+                'name' => data_get($customer, 'name') ?? $this->input('receiver_name'),
+                'phone' => data_get($customer, 'phone') ?? $this->input('receiver_phone'),
+                'email' => data_get($customer, 'email') ?? $this->input('receiver_email'),
+            ], fn ($v) => $v !== null && $v !== '')),
+            'payment' => array_merge($payment, array_filter([
+                'type' => data_get($payment, 'type') ?? $this->input('payment_type'),
+                'pod_amount' => data_get($payment, 'pod_amount') ?? $this->input('pod_amount'),
+                'delivery_charge_paid_by' => data_get($payment, 'delivery_charge_paid_by') ?? $this->input('delivery_charge_paid_by'),
+                'delivery_charge' => data_get($payment, 'delivery_charge') ?? $this->input('delivery_charge'),
+            ], fn ($v) => $v !== null && $v !== '')),
+            'weight' => $weight,
+            'delivery_charge' => $this->input('delivery_charge') ?? data_get($payment, 'delivery_charge'),
         ]);
     }
 

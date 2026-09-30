@@ -856,8 +856,8 @@ final class ShipmentService
     |   from pod_amount (or the nested payment.pod_amount shape).
     |
     | delivery_charge:
-    |   The shipping fee. Taken from the request if supplied, otherwise the
-    |   configured flat default.
+    |   The shipping fee from PricingEngine final_price or explicit quote
+    |   delivery_charge. Config base_fee (80) fallback is disabled.
     |
     | total_collectable_amount:
     |   What the rider physically collects from the customer =

@@ -254,6 +254,14 @@ class MerchantController extends Controller
             'default_sub_branch_id' => ['nullable', 'exists:branches,id'],
             'status'                => ['nullable', 'in:pending,active,suspended,rejected'],
 
+            // Phase 6 POD / HamroPay store sub-merchant (admin-editable; not from .env)
+            'marketplace_id'          => ['nullable', 'integer', 'exists:marketplaces,id'],
+            'external_store_id'       => ['nullable', 'string', 'max:100'],
+            'external_platform'       => ['nullable', 'string', 'max:64'],
+            'hamropay_merchant_id'    => ['nullable', 'string', 'max:100'],
+            'hamropay_business_id'    => ['nullable', 'string', 'max:100'],
+            'hamropay_qr_payload'     => ['nullable', 'string', 'max:5000'],
+
             /*
             | Bulk pickup discount (per store partner).
             | threshold = min packets in one pickup to trigger the discount.

@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Modules\Merchant\Models\Merchant;
+use Modules\Setting\Models\Marketplace;
 use Modules\Webhook\Models\WebhookDeliveryLog;
 use RuntimeException;
 use Throwable;
@@ -57,6 +58,21 @@ class SendShipmentCallback implements ShouldQueue
         }
 
         $callbackUrl = trim((string) $merchant->integration_callback_url);
+        $callbackSecret = (string) $merchant->integration_callback_secret;
+
+        // Multi-marketplace: fall back to marketplace callback/API when the
+        // store row has no per-store callback (POD / lifecycle webhooks).
+        if ($callbackUrl === '' || $callbackSecret === '') {
+            $marketplace = Marketplace::resolveFromMerchant($merchant);
+            if ($marketplace) {
+                if ($callbackUrl === '') {
+                    $callbackUrl = trim((string) ($marketplace->callback_url ?: ''));
+                }
+                if ($callbackSecret === '' && filled($marketplace->callback_secret)) {
+                    $callbackSecret = (string) $marketplace->callback_secret;
+                }
+            }
+        }
 
         // Not every merchant is a store-integration partner; missing URL is
         // a normal condition, not an error.
@@ -64,11 +80,10 @@ class SendShipmentCallback implements ShouldQueue
             return;
         }
 
-        $callbackSecret = (string) $merchant->integration_callback_secret;
-
         if ($callbackSecret === '') {
             throw new RuntimeException(
-                'Integration callback secret is missing for merchant ' . $this->merchantId . '.'
+                'Integration callback secret is missing for merchant ' . $this->merchantId
+                . ' (and its marketplace has no callback_secret).'
             );
         }
 

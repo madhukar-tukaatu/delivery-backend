@@ -2,6 +2,8 @@
 
 namespace Modules\Shipment\Services;
 
+use Modules\Merchant\Models\Merchant;
+
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -16,11 +18,26 @@ class ShipmentLifecycleService
 
     public function quote(int $merchantId, array $payload): array
     {
+        $merchant = Merchant::query()->findOrFail($merchantId);
         $pickupLocationId = data_get($payload, 'pickup_location_id');
-        $origin = $this->branchAssignmentService->resolveOrigin($merchantId, $pickupLocationId);
+        $pickupLocation = $this->branchAssignmentService->resolveMerchantPickupLocation(
+            $merchant,
+            $pickupLocationId !== null ? (int) $pickupLocationId : null
+        );
+        $origin = $this->branchAssignmentService->resolveOrigin($merchant, $pickupLocation);
         $destination = $this->branchAssignmentService->resolveDestination($payload);
-        $route = $this->branchAssignmentService->routeSummary($origin, $destination);
-        $fare = $this->fareQuoteService->quote($payload, $origin, $destination);
+        $route = method_exists($this->branchAssignmentService, 'routeSummary')
+            ? $this->branchAssignmentService->routeSummary($origin, $destination)
+            : [
+                'origin_branch_id' => $origin['branch_id'] ?? null,
+                'origin_sub_branch_id' => $origin['sub_branch_id'] ?? null,
+                'destination_branch_id' => $destination['branch_id'] ?? null,
+                'destination_sub_branch_id' => $destination['sub_branch_id'] ?? null,
+                'requires_transfer' => ($origin['branch_id'] ?? null) !== ($destination['branch_id'] ?? null),
+            ];
+        // PricingEngine via FareQuoteService — no legacy base_fee 80.
+        $quoted = $this->fareQuoteService->quote($merchant, $payload);
+        $fare = $quoted['fare'] ?? $quoted;
 
         return [
             'merchant_id' => $merchantId,
@@ -28,6 +45,12 @@ class ShipmentLifecycleService
             'destination' => $destination,
             'route' => $route,
             'fare' => $fare,
+            'delivery_charge' => $fare['delivery_charge'] ?? null,
+            'final_delivery_fee' => isset($fare['delivery_charge'], $fare['pod_fee'])
+                ? round((float) $fare['delivery_charge'] + (float) $fare['pod_fee'], 2)
+                : ($fare['delivery_charge'] ?? null),
+            'pod_charge' => $fare['pod_charge'] ?? $fare['pod_fee'] ?? null,
+            'pricing_source' => $fare['pricing_source'] ?? $quoted['pricing_source'] ?? null,
         ];
     }
 

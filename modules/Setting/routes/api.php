@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use Modules\Setting\Http\Controllers\BackupController;
+use Modules\Setting\Http\Controllers\MarketplaceController;
 use Modules\Setting\Http\Controllers\SettingController;
 
 /*
@@ -31,6 +32,26 @@ Route::prefix('v1/admin')
 
             Route::post('settings', [SettingController::class, 'store'])
                 ->name('settings.store');
+            /*
+            |--------------------------------------------------------------------------
+            | Marketplaces (multi-tenant partner APIs)
+            |--------------------------------------------------------------------------
+            | Permissions (route.permission):
+            | marketplaces.view / marketplaces.manage (via named routes below)
+            */
+            Route::get('marketplaces', [MarketplaceController::class, 'index'])
+                ->name('marketplaces.index');
+            Route::post('marketplaces', [MarketplaceController::class, 'store'])
+                ->name('marketplaces.store');
+            Route::get('marketplaces/{marketplace}', [MarketplaceController::class, 'show'])
+                ->name('marketplaces.show');
+            Route::put('marketplaces/{marketplace}', [MarketplaceController::class, 'update'])
+                ->name('marketplaces.update');
+            Route::post('marketplaces/{marketplace}/hamropay', [MarketplaceController::class, 'upsertHamroPay'])
+                ->name('marketplaces.hamropay');
+            Route::post('marketplaces/{marketplace}/stores', [MarketplaceController::class, 'syncStores'])
+                ->name('marketplaces.stores');
+
         });
 
         /*

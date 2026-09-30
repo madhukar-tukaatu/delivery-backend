@@ -6,7 +6,12 @@ use Illuminate\Support\Facades\Http;
 
 /**
  * HamroPay checkout client (session + transaction status).
- * Credentials: prefer PaymentGatewayAccount (company/branch), else config/hamropay.php / env.
+ *
+ * Credentials resolution (callers):
+ * 1) PaymentGatewayAccount (company/branch) via PaymentGatewayAccountService::hamroPayClientFromAccount
+ * 2) Optional last-resort: config/hamropay.php / HAMROPAY_* env
+ *
+ * Missing .env alone must not block when admin-saved credentials are complete.
  */
 class HamroPayService
 {
@@ -64,6 +69,18 @@ class HamroPayService
         return $instance;
     }
 
+    /**
+     * True when checkout can be signed (admin account or env fallback).
+     */
+    public function isConfigured(): bool
+    {
+        return $this->apiBaseUrl !== ''
+            && $this->clientId !== ''
+            && $this->clientApiKey !== ''
+            && $this->secret !== ''
+            && $this->merchantId !== '';
+    }
+
     public function sign(string $message): string
     {
         return base64_encode(hash_hmac('sha512', $message, $this->secret, true));
@@ -81,11 +98,19 @@ class HamroPayService
 
     public function createSession(array $data, ?string $merchantId = null, ?string $subMerchantId = null): array
     {
-        if ($this->apiBaseUrl === '' || $this->clientId === '') {
+        if (! $this->isConfigured() && ($this->apiBaseUrl === '' || $this->clientId === '')) {
+            return ['message' => 'HamroPay is not configured.', 'http_status' => 503];
+        }
+
+        if ($this->apiBaseUrl === '' || $this->clientId === '' || $this->clientApiKey === '' || $this->secret === '') {
             return ['message' => 'HamroPay is not configured.', 'http_status' => 503];
         }
 
         $merchantId = $merchantId ?: $this->merchantId;
+        if ($merchantId === '') {
+            return ['message' => 'HamroPay is not configured.', 'http_status' => 503];
+        }
+
         $sig = $this->sign(implode(',', [
             $data['merchantTxnId'],
             $data['transactionAmount'],
@@ -154,11 +179,15 @@ class HamroPayService
 
     public function getTransaction(string $merchantTxnId, ?string $merchantId = null): array
     {
-        if ($this->apiBaseUrl === '') {
-            return ['message' => 'HamroPay is not configured.'];
+        if ($this->apiBaseUrl === '' || $this->clientId === '' || $this->clientApiKey === '' || $this->secret === '') {
+            return ['message' => 'HamroPay is not configured.', 'http_status' => 503];
         }
 
         $merchantId = $merchantId ?: $this->merchantId;
+        if ($merchantId === '') {
+            return ['message' => 'HamroPay is not configured.', 'http_status' => 503];
+        }
+
         $sig = $this->sign(implode(',', [
             $merchantTxnId,
             $merchantId,

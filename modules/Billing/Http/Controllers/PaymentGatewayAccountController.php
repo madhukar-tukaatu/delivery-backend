@@ -108,6 +108,34 @@ class PaymentGatewayAccountController extends Controller
         return ApiResponse::success($this->accounts->masked($account), 'Company payment account saved.');
     }
 
+    public function upsertMarketplace(Request $request, int $marketplaceId)
+    {
+        $this->assertCanManageCompany($request);
+
+        $codes = implode(',', PaymentGatewayCatalog::codes());
+
+        $data = $request->validate([
+            'gateway' => ['required', 'string', 'in:'.$codes],
+            'label' => ['nullable', 'string', 'max:64'],
+            'is_enabled' => ['nullable', 'boolean'],
+            'is_default' => ['nullable', 'boolean'],
+            'credentials' => ['required', 'array'],
+        ]);
+
+        $account = $this->accounts->upsert(
+            'marketplace',
+            $marketplaceId,
+            $data['gateway'],
+            $this->accounts->filterCredentials($data['gateway'], $data['credentials']),
+            [
+                'label' => $data['label'] ?? 'default',
+                'is_enabled' => $data['is_enabled'] ?? true,
+                'is_default' => $data['is_default'] ?? true,
+            ],
+        );
+
+        return ApiResponse::success($this->accounts->masked($account), 'Marketplace payment account saved.');
+    }
     public function upsertBranch(Request $request, int $branchId)
     {
         $user = $request->user();

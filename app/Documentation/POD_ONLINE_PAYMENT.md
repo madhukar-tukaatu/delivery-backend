@@ -1,112 +1,57 @@
-# POD Online Payment (Doorstep) — Ops & Dev Guide
+# POD Online Payment (Phase 6 — HamroPay, multi-marketplace)
 
-## Root cause of production 422
+Express supports **multiple marketplaces** (e.g. `https://api.tukaatu.com`, `https://api.fca.com.np`). Each marketplace has its own API/callback URL and HamroPay HQ credentials. Stores belong to a marketplace. POD resolves **marketplace + store from the shipment** (not a single `.env` URL).
 
-```
-POST /api/v1/staff/deliveries/{id}/payment-session → 422
-"Store HamroPay sub-merchant is not registered. Complete HamroPay KYB first."
-payload {}
-```
+## Admin screens
 
-**This was a code bug, not a genuine HamroPay KYB prerequisite for doorstep POD.**
+1. **Admin → Network → Marketplaces** (`/admin/marketplaces`)
+   - Create/edit marketplace: `api_base_url`, `callback_url`, `callback_secret`, default flag.
+   - On detail: **Save HamroPay** (API base, gateway URL, client id, api key, secret, HQ merchant id).
+   - Attach stores to the marketplace.
+2. **Admin → Network → Merchants** → open store (`/admin/merchants/{id}`)
+   - Set `marketplace_id`, `external_store_id`, `hamropay_merchant_id` / `hamropay_business_id`.
+3. **Admin → Finance → Payment Gateways** (`/admin/payment-gateways`)
+   - Optional **company** HamroPay fallback (and branch accounts for settlements).
+   - Marketplace credentials are preferred via Marketplaces screen (`owner_type=marketplace`).
 
-Commit `48edc4e` / `52e32bc` rewrote `StoreManagerPaymentService` to call HamroPay
-`createSession` and require store sub-merchant KYB. That conflated two money tracks:
+## Credential resolve order (POD QR / staff payment-session / verify)
 
-| Track | Provider | When |
-|---|---|---|
-| **Doorstep online POD** | **Store Manager** payment sessions | Rider at door, customer pays merchant QR |
-| Cash POD | Local record only | Rider collects cash for later branch deposit |
-| HQ settlements / branch commission | **HamroPay** (+ KYB for sub-merchants) | Settlements, not rider POD |
+1. `payment_gateway_accounts` for the shipment's marketplace (`owner_type=marketplace`)
+2. Company HamroPay account
+3. Branch account (optional)
+4. Optional last-resort: `HAMROPAY_*` env — **missing env alone must not block** when admin config exists
 
-Empty request body `{}` is **valid**. Amount and method are not client-supplied on
-`payment-session`; Express derives amount from the shipment
-(`total_collectable_amount` / `pod_amount`).
+Store **sub-merchant** (never from `.env`):
 
-## Phase 6 checklist (doorstep online POD)
+1. `merchants.hamropay_merchant_id` / `hamropay_business_id`
+2. else suffix of `external_store_id` (`STORE-00018` → `00018`)
 
-| # | Item | Status |
-|---|---|---|
-| 1 | Staff `POST .../payment-session` with `{}` creates Store Manager session (no amount/method in body) | Done |
-| 2 | No HamroPay KYB / `createSession` on the staff doorstep path | Done |
-| 3 | Staff `GET .../payment-session?refresh=1` polls Store Manager until `paid` | Done |
-| 4 | Signed webhook `POST /api/v1/integrations/store-manager/payment-events` marks session paid | Done |
-| 5 | QR/checkout returned (`qr_string` / `image_url` / `checkout_url`) for rider UI | Done |
-| 6 | `POST .../delivered` with `payment_method=online|qr` + `payment_session_id` only after paid | Done |
-| 7 | Cash POD unchanged (`payment_method=cash` → collected / pending_deposit) | Done |
-| 8 | Online POD → `pod_status=paid_direct`, no cash settlement pool; delivery-fee billing separate | Done |
-| 9 | Gateway `pod-qr` / verify also use Store Manager sessions | Done |
-| 10 | `STORE_MANAGER_*` env documented (`.env.example` + this guide) | Done |
-| 11 | Staff FE: Online/QR → create → show QR/link → poll → enable complete | Done |
+## Flow
 
-## Fix applied
+1. Store / marketplace: `POST /api/v1/gateway/payments/pod-qr` (merchant API key) with `merchant_order_id` / `external_order_id` / `amount`.
+2. Express: resolve shipment → merchant → marketplace → HamroPay `createSession` (HQ merchant + store sub-merchant) → cache 30 min.
+3. Customer pays in HamroPay app.
+4. Verify: `POST /api/v1/gateway/payments/pod-qr/verify` `{ "merchant_txn_id" }` → `getTransaction`; `SUCCESS` → paid direct.
+5. Staff: `POST /api/v1/staff/deliveries/{id}/payment-session` `{}` then `GET ...?refresh=1`.
+6. Staff delivered: `payment_method` `qr`|`online`, `merchant_txn_id`, exact `pod_collected_amount`.
+7. Webhook: `delivery.delivered` with `paid`, `pod_collected_amount`, `payment_method`, `payment_reference`. Callback URL = store `integration_callback_url` or marketplace `callback_url`.
 
-- Restored `StoreManagerPaymentService` to call Store Manager HTTP APIs
-  (`STORE_MANAGER_PAYMENT_BASE_URL` + signed integration headers).
-- Removed Express-side `STORE_MANAGER_PAYMENT_ENABLED` gate for create/refresh
-  (only empty `BASE_URL` blocks the call with a clear config error).
-- Staff controller accepts `{}`; rejects accidental `amount` / `payment_method` on create.
-- `delivered` accepts `payment_method` `cash` | `online` | `qr` with
-  `payment_session_id` / `merchant_txn_id`.
-- Gateway `pod-qr` helpers stay, backed by the same Store Manager sessions.
-- HamroPay KYB is **not** required for staff doorstep payment-session.
+## Retest
 
-## Env keys (Express)
+1. Admin → Marketplaces → open Tukaatu (and/or FCA) → save full HamroPay credentials (leave `.env` HAMROPAY_* empty).
+2. Admin → Merchants → store → set marketplace + `hamropay_merchant_id` or `external_store_id`.
+3. Shipment POD, out for delivery, rider arrived.
+4. Staff Online/QR → `POST .../payment-session` `{}` → 200 with `qr_string` / `merchant_txn_id`.
+5. After HamroPay SUCCESS, `GET .../payment-session?refresh=1` → `paid`.
+6. `POST .../delivered` with `online`/`qr` + `merchant_txn_id` + amount.
+7. Marketplace receives `delivery.delivered` webhook fields.
 
-```env
-# Required for doorstep online POD (Store Manager)
-STORE_MANAGER_PAYMENT_BASE_URL=https://tukaatu.com
-STORE_MANAGER_PAYMENT_INTEGRATION_ID=tukaatu-express
-STORE_MANAGER_PAYMENT_INTEGRATION_SECRET=<shared secret with Store Manager>
-STORE_MANAGER_PAYMENT_CREATE_PATH=/api/v1/integrations/tukaatu-express/pod-payment-sessions
-STORE_MANAGER_PAYMENT_STATUS_PATH=/api/v1/integrations/tukaatu-express/pod-payment-sessions/{payment_session_id}
-STORE_MANAGER_PAYMENT_TIMEOUT=20
-STORE_MANAGER_PAYMENT_WEBHOOK_TOLERANCE=300
-# Optional legacy flag (Express no longer gates create on this):
-STORE_MANAGER_PAYMENT_ENABLED=true
-```
-
-Local Docker tip: use `STORE_MANAGER_PAYMENT_BASE_URL=http://host.docker.internal:8000`
-when Store Manager runs on the host.
-
-HamroPay env (`HAMROPAY_*`) remains for **HQ settlements / KYB**, not doorstep POD.
-
-## Staff rider endpoints
+Gateway smoke:
 
 ```http
-POST /api/v1/staff/deliveries/{id}/payment-session
-Content-Type: application/json
+POST /api/v1/gateway/payments/pod-qr
+X-Tukaatu-Key: ...
+X-Tukaatu-Secret: ...
 
-{}
+{ "merchant_order_id": "ORD-1", "external_order_id": "ORD-1", "amount": 1100 }
 ```
-
-```http
-GET /api/v1/staff/deliveries/{id}/payment-session?refresh=1
-```
-
-```http
-POST /api/v1/staff/deliveries/{id}/delivered
-{
-  "payment_method": "online",
-  "payment_session_id": "<session id from create>",
-  "merchant_txn_id": "<same id ok>",
-  "pod_collected_amount": 1100.00,
-  "customer_confirmed": true,
-  "customer_name": "...",
-  "customer_signature": "data:image/png;base64,..."
-}
-```
-
-## Retest (any out_for_delivery POD with arrived_at)
-
-1. Redeploy Express backend with Store Manager payment-session path (not HamroPay).
-2. Confirm Express env has `STORE_MANAGER_PAYMENT_BASE_URL` + integration secret.
-3. Rider: out_for_delivery → arrived → Online/QR → `POST .../payment-session` with `{}`.
-4. Expect 200 + session/QR (not 422 HamroPay KYB).
-5. Customer pays; poll `GET .../payment-session?refresh=1` until `paid`.
-6. Complete delivered with `payment_method=online` + session id.
-7. Confirm cash path still works without opening a payment session.
-
-## Related docs
-
-- `app/Documentation/StoreManagerPodPaymentApi.md` — Store Manager contract

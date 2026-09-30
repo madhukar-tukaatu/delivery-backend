@@ -22,6 +22,18 @@ class PaymentGatewayAccountService
             ->first();
     }
 
+    public function marketplaceAccount(int $marketplaceId, string $gateway = 'hamropay'): ?PaymentGatewayAccount
+    {
+        return PaymentGatewayAccount::query()
+            ->where('owner_type', 'marketplace')
+            ->where('owner_id', $marketplaceId)
+            ->gateway($gateway)
+            ->where('is_enabled', true)
+            ->orderByDesc('is_default')
+            ->orderByDesc('id')
+            ->first();
+    }
+
     public function branchAccount(int $branchId, string $gateway = 'hamropay'): ?PaymentGatewayAccount
     {
         return PaymentGatewayAccount::query()
@@ -46,6 +58,31 @@ class PaymentGatewayAccountService
         }
 
         return $this->companyAccount($gateway);
+    }
+
+    /**
+     * POD / marketplace checkout credentials.
+     * Prefer marketplace account (per api.tukaatu.com / api.fca.com.np), then
+     * company, then optional branch, then caller falls back to HAMROPAY_* env.
+     */
+    public function resolveMarketplacePayerAccount(
+        ?int $marketplaceId,
+        ?int $branchId = null,
+        string $gateway = 'hamropay',
+    ): ?PaymentGatewayAccount {
+        if ($marketplaceId) {
+            $mp = $this->marketplaceAccount($marketplaceId, $gateway);
+            if ($mp) {
+                return $mp;
+            }
+        }
+
+        $company = $this->companyAccount($gateway);
+        if ($company) {
+            return $company;
+        }
+
+        return $this->resolvePayerAccount($branchId, $gateway);
     }
 
     /**
@@ -74,11 +111,11 @@ class PaymentGatewayAccountService
         if (! in_array($gateway, self::GATEWAYS, true)) {
             throw ValidationException::withMessages(['gateway' => ['Unsupported gateway.']]);
         }
-        if (! in_array($ownerType, ['company', 'branch'], true)) {
+        if (! in_array($ownerType, ['company', 'branch', 'marketplace'], true)) {
             throw ValidationException::withMessages(['owner_type' => ['Must be company or branch.']]);
         }
-        if ($ownerType === 'branch' && ! $ownerId) {
-            throw ValidationException::withMessages(['owner_id' => ['Branch id required.']]);
+        if (in_array($ownerType, ['branch', 'marketplace'], true) && ! $ownerId) {
+            throw ValidationException::withMessages(['owner_id' => [ucfirst($ownerType).' id required.']]);
         }
         if ($ownerType === 'company') {
             $ownerId = null;

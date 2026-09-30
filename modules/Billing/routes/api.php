@@ -43,6 +43,8 @@ Route::prefix('v1/admin')
                 ->name('payment-gateways.company');
             Route::post('payment-gateways/branches/{branchId}', [PaymentGatewayAccountController::class, 'upsertBranch'])
                 ->name('payment-gateways.branch');
+            Route::post('payment-gateways/marketplaces/{marketplaceId}', [PaymentGatewayAccountController::class, 'upsertMarketplace'])
+                ->name('payment-gateways.marketplace');
 
             // HQ commission billing (superadmin receivables from branches)
             Route::get('hq-commissions/settings', [BranchCommissionController::class, 'settings'])

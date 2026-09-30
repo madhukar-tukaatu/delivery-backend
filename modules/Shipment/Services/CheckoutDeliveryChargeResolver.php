@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Modules\Shipment\Services;
 
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 use Modules\Rate\Services\PricingEngineService;
 use Modules\Shipment\Models\Shipment;
 use Throwable;
@@ -13,7 +14,8 @@ use Throwable;
  * Resolve the checkout delivery fee merchants owe when they cover delivery.
  *
  * Prefer the live PricingEngine (branch_route_rates + weight/distance rules).
- * Never silently bill the legacy config base_fee (80) when engine pricing is available.
+ * Prefer PricingEngine final_price, else explicit payload delivery_charge from quote.
+ * Never fall back to legacy config base_fee (80); fail loudly if charge cannot be resolved.
  */
 final class CheckoutDeliveryChargeResolver
 {
@@ -129,18 +131,22 @@ final class CheckoutDeliveryChargeResolver
             ];
         }
 
-        $fallback = round((float) config('delivery_workflow.pricing.base_fee', 0), 2);
-        Log::warning('checkout_delivery_charge.config_fallback_used', [
-            'fallback' => $fallback,
+        // Never silently bill legacy config base_fee (80). Fail loud so create
+        // cannot store a flat fallback; callers must supply a quote charge or
+        // PricingEngine must resolve from coordinates.
+        Log::error('checkout_delivery_charge.unresolvable', [
             'has_coords' => $pickupLat !== null && $deliveryLat !== null,
+            'explicit_charge' => $explicitCharge,
+            'merchant_id' => $data['merchant_id'] ?? null,
         ]);
 
-        return [
-            'delivery_charge' => $fallback,
-            'source' => 'config_fallback',
-            'breakdown' => null,
-            'pod_charge' => round((float) ($data['pod_charge'] ?? 0), 2),
-        ];
+        throw ValidationException::withMessages([
+            'delivery_charge' => [
+                'Unable to resolve delivery charge from PricingEngine or quote payload. '
+                . 'Recalculate fare with pickup/delivery coordinates, or pass delivery_charge from a valid quote. '
+                . 'Flat config base_fee fallback is disabled.',
+            ],
+        ]);
     }
 
     /**

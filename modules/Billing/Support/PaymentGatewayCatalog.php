@@ -15,10 +15,10 @@ class PaymentGatewayCatalog
                 'code' => 'hamropay',
                 'label' => 'HamroPay',
                 'status' => 'live',
-                'description' => 'Company and branch HamroPay merchant credentials used for payouts and checkouts.',
+                'description' => 'HamroPay credentials for company, marketplace (api.tukaatu.com / api.fca.com.np), and branch. Phase 6 POD uses marketplace account first, then company. Store sub-merchant ids live on the merchant row.',
                 'fields' => [
-                    self::field('api_base_url', 'API base URL', 'url', false, 'https://…'),
-                    self::field('gateway_url', 'Gateway / checkout URL', 'url', false, 'https://…'),
+                    self::field('api_base_url', 'API base URL', 'url', false, 'https://example.com',),
+                    self::field('gateway_url', 'Gateway / checkout URL', 'url', false, 'https://example.com',),
                     self::field('merchant_id', 'Merchant ID', 'text', false),
                     self::field('client_id', 'Client ID', 'text', false),
                     self::field('client_api_key', 'Client API key', 'password', true, 'Leave blank to keep existing'),
@@ -36,7 +36,7 @@ class PaymentGatewayCatalog
                     self::field('merchant_code', 'Merchant code', 'text', false),
                     self::field('product_code', 'Product code', 'text', false),
                     self::field('secret_key', 'Secret key', 'password', true, 'Leave blank to keep existing'),
-                    self::field('api_base_url', 'API base URL', 'url', false, 'https://…'),
+                    self::field('api_base_url', 'API base URL', 'url', false, 'https://example.com',),
                     self::field('success_url', 'Success URL', 'url', false),
                     self::field('failure_url', 'Failure URL', 'url', false),
                 ],
@@ -49,7 +49,7 @@ class PaymentGatewayCatalog
                 'fields' => [
                     self::field('public_key', 'Public key', 'text', false),
                     self::field('secret_key', 'Secret key', 'password', true, 'Leave blank to keep existing'),
-                    self::field('api_base_url', 'API base URL', 'url', false, 'https://…'),
+                    self::field('api_base_url', 'API base URL', 'url', false, 'https://example.com',),
                     self::field('webhook_secret', 'Webhook secret', 'password', true, 'Leave blank to keep existing'),
                     self::field('return_url', 'Return URL', 'url', false),
                     self::field('website_url', 'Website URL', 'url', false),
@@ -66,7 +66,7 @@ class PaymentGatewayCatalog
                     self::field('app_name', 'App name', 'text', false),
                     self::field('basic_auth_username', 'Basic auth username', 'text', false),
                     self::field('basic_auth_password', 'Basic auth password', 'password', true, 'Leave blank to keep existing'),
-                    self::field('api_base_url', 'API base URL', 'url', false, 'https://…'),
+                    self::field('api_base_url', 'API base URL', 'url', false, 'https://example.com',),
                     self::field('success_url', 'Success URL', 'url', false),
                     self::field('failure_url', 'Failure URL', 'url', false),
                 ],
@@ -78,6 +78,7 @@ class PaymentGatewayCatalog
     {
         return [
             ['type' => 'company', 'label' => 'Tukaatu Express (super admin)', 'roles' => ['super_admin', 'main_admin']],
+            ['type' => 'marketplace', 'label' => 'Marketplace (Tukaatu / FCA / ...)', 'roles' => ['super_admin', 'main_admin', 'admin']],
             ['type' => 'branch', 'label' => 'Branch', 'roles' => ['super_admin', 'main_admin', 'admin', 'branch_manager', 'sub_branch_manager']],
         ];
     }

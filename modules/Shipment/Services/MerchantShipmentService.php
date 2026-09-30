@@ -439,7 +439,7 @@ final class MerchantShipmentService
     | Resolve charges (pod amount, delivery charge, total collectable).
     |
     | pod_amount:                goods value collected on delivery (0 prepaid).
-    | delivery_charge:           shipping fee from payload, else config default.
+    | delivery_charge:           shipping fee from PricingEngine (or explicit quote delivery_charge); never config base_fee 80.
     | total_collectable_amount:  pod_amount + delivery_charge (only when the
     |                            customer pays the delivery charge).
     |

@@ -54,5 +54,15 @@ return Application::configure(
     ->withExceptions(function (Exceptions $exceptions): void {
         //
     })
+    ->withCommands([
+        \Modules\Billing\Console\Commands\SendMerchantBillDigests::class,
+    ])
+    ->withSchedule(function (\Illuminate\Console\Scheduling\Schedule $schedule): void {
+        // 06:17 Asia/Kathmandu via config app.timezone (APP_TIMEZONE, default Asia/Kathmandu). Do not change app timezone.
+        $schedule->command('billing:send-merchant-digests --period=daily')->dailyAt('06:17');
+        // Monday 06:17. The command still skips weekly unless it is Monday.
+        // Admin Send weekly dispatches SendMerchantBillDigest directly and is not blocked.
+        $schedule->command('billing:send-merchant-digests --period=weekly')->weeklyOn(1, '06:17');
+    })
 
     ->create();

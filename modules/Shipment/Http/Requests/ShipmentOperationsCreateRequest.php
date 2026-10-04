@@ -87,6 +87,14 @@ class ShipmentOperationsCreateRequest extends FormRequest
             ?: data_get($this->input('payment'), 'delivery_charge_paid_by')
             ?: 'merchant';
 
+        $freeBy = $this->input('delivery_free_by');
+        if ($freeBy === null || $freeBy === '') {
+            $freeBy = data_get($this->input('payment'), 'delivery_free_by');
+        }
+        if ($freeBy === null || $freeBy === '') {
+            $freeBy = 'none';
+        }
+
         $this->merge([
             'self_drop' => (bool) $this->input('self_drop', false),
             'pickup_location_id' => $this->input('pickup_location_id'),
@@ -122,6 +130,7 @@ class ShipmentOperationsCreateRequest extends FormRequest
             'payment_type' => $paymentType,
             'pod_amount' => $codAmount,
             'delivery_charge_paid_by' => $deliveryChargePaidBy,
+            'delivery_free_by' => $freeBy,
 
             'customer' => [
                 'name' => $customerName,
@@ -152,6 +161,7 @@ class ShipmentOperationsCreateRequest extends FormRequest
                 'type' => $paymentType,
                 'pod_amount' => $codAmount,
                 'delivery_charge_paid_by' => $deliveryChargePaidBy,
+                'delivery_free_by' => $freeBy,
             ],
         ]);
     }
@@ -187,9 +197,18 @@ class ShipmentOperationsCreateRequest extends FormRequest
             'payment.type' => ['required', 'in:prepaid,pod'],
             'payment.pod_amount' => ['required_if:payment.type,pod', 'nullable', 'numeric', 'min:0'],
             'payment.delivery_charge_paid_by' => ['required', 'in:merchant,customer'],
+            'delivery_free_by' => ['nullable', 'in:'.$this->freeDeliveryValues()],
+            'payment.delivery_free_by' => ['nullable', 'in:'.$this->freeDeliveryValues()],
 
             'special_instruction' => ['nullable', 'string', 'max:500'],
         ];
+    }
+
+    private function freeDeliveryValues(): string
+    {
+        return str_contains('/'.$this->path(), '/admin/')
+            ? 'none,store,marketplace'
+            : 'none,store';
     }
 
     public function messages(): array
@@ -206,4 +225,5 @@ class ShipmentOperationsCreateRequest extends FormRequest
             'payment.type.required' => 'Payment type is required.',
         ];
     }
+
 }

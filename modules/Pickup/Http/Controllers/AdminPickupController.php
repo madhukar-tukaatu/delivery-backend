@@ -68,9 +68,9 @@ final class AdminPickupController extends Controller
 
         $query = PickupRequest::query()
             ->with([
-                'merchant:id,name,phone,email',
+                'merchant:id,name,code,phone,email,external_store_id,marketplace_id',
                 'pickupLocation',
-                'assignedStaff:id,name,email,phone,branch_id',
+                'assignedStaff:id,name,email,phone,branch_id,role',
                 'shipments',
             ]);
 

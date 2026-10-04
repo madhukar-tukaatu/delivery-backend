@@ -216,6 +216,22 @@ final class CreateMarketplaceApiKey extends Command
                     ];
 
                     /*
+                     * Encrypted full public key so Express can
+                     * send X-Tukaatu-Key outbound (doorstep POD).
+                     */
+                    if (
+                        Schema::hasColumn(
+                            'marketplace_api_keys',
+                            'key_encrypted'
+                        )
+                    ) {
+                        $apiKeyData['key_encrypted'] =
+                            Crypt::encryptString(
+                                $publicKey
+                            );
+                    }
+
+                    /*
                      * Only add optional fields that exist
                      * in the current database schema.
                      */

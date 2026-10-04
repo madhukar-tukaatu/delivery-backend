@@ -17,12 +17,10 @@ use Modules\Shipment\Models\Shipment;
 use Throwable;
 
 /**
- * Phase 6 doorstep POD via HamroPay.
+ * Gateway / store-initiated POD QR via HamroPay (NOT rider doorstep).
+ * Rider doorstep Online/QR uses TukaatuPodPaymentService (/staff/deliveries/{id}/pod-payment) and never requires marketplace HamroPay HQ.
  *
- * Store Manager calls Express POST /api/v1/gateway/payments/pod-qr.
- * Express authenticates the store, checks the POD shipment, opens a HamroPay
- * checkout session for the store sub-merchant, and caches the intent for 30 minutes.
- * STORE_MANAGER_PAYMENT_BASE_URL is not used on this path.
+ * Store Manager may still call Express POST /api/v1/gateway/payments/pod-qr.
  */
 final class HamroPayPodPaymentService
 {

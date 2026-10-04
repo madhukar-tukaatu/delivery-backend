@@ -96,6 +96,9 @@ final class AuthenticateMarketplaceApiKey
             ->where('key_hash', hash('sha256', $publicKey))
             ->where('is_active', true)
             ->where(function ($query): void {
+                $query->whereNull('revoked_at');
+            })
+            ->where(function ($query): void {
                 $query->whereNull('expires_at')
                     ->orWhere('expires_at', '>', now());
             })

@@ -198,6 +198,16 @@ class MerchantCreateShipmentRequest extends FormRequest
                 'in:merchant,customer',
             ],
 
+            'delivery_free_by' => [
+                'nullable',
+                'in:none,store',
+            ],
+
+            'payment.delivery_free_by' => [
+                'nullable',
+                'in:none,store',
+            ],
+
             'remarks'                  => [
                 'nullable',
                 'string',
@@ -205,4 +215,5 @@ class MerchantCreateShipmentRequest extends FormRequest
             ],
         ];
     }
+
 }

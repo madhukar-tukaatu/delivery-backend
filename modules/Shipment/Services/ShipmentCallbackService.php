@@ -33,6 +33,7 @@ final class ShipmentCallbackService
         'delivery.out_for_delivery',
         'delivery.arrived',
         'delivery.delivered',
+        'delivery.completed',
         'delivery.failed',
     ];
 
@@ -82,6 +83,8 @@ final class ShipmentCallbackService
     public function deliveryDelivered(Shipment $shipment, array $data = []): void
     {
         $this->dispatch($shipment, 'delivery.delivered', $data);
+        // Same payload under the name Tukaatu also accepts.
+        $this->dispatch($shipment, 'delivery.completed', $data);
     }
 
     public function deliveryFailed(Shipment $shipment, array $data = []): void
@@ -120,6 +123,13 @@ final class ShipmentCallbackService
                 'total_collectable_amount' => (float) $shipment->total_collectable_amount,
             ],
             'data' => $data,
+            'delivery' => [
+                'paid' => (bool) ($data['paid'] ?? false),
+                'payment_reference' => $data['payment_reference'] ?? null,
+                'payment_method' => $data['payment_method'] ?? null,
+                'pod_collected_amount' => $data['pod_collected_amount'] ?? null,
+                'merchant_txn_id' => $data['payment_session_id'] ?? null,
+            ],
         ];
 
         SendShipmentCallback::dispatch($merchantId, $payload)

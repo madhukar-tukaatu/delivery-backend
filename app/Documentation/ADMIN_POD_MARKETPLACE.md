@@ -39,3 +39,14 @@ Store sub-merchant from merchant row only.
 - `modules/Shipment/Jobs/SendShipmentCallback.php` (marketplace callback fallback)
 - FE `/admin/marketplaces`, `/admin/marketplaces/[id]`, `/admin/merchants/[id]`
 - Doc `app/Documentation/POD_ONLINE_PAYMENT.md`
+## Issued marketplace API keys (Online POD outbound)
+
+Online POD does **not** use `marketplaces.api_key` / `api_secret` or `.env` for `X-Tukaatu-Key` / `X-Tukaatu-Secret`.
+
+It uses the active row in `marketplace_api_keys` for the store's marketplace:
+
+- Host: `marketplaces.api_base_url`
+- Key: decrypt `key_encrypted` (added for outbound; reissue if null)
+- Secret: decrypt `secret_encrypted`
+
+Admin: **Network → Marketplaces → {id} → Reissue API key**. Copy key+secret once and give them to the marketplace partner (inbound Express + outbound POD share the same pair). Existing keys without `key_encrypted` must be reissued; do not rotate live keys blindly.

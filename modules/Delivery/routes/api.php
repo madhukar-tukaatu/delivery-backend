@@ -79,6 +79,15 @@ Route::prefix('v1/staff')
             ->middleware(['route.permission'])
             ->name('deliveries.arrived');
 
+        Route::post('deliveries/{delivery}/pod-payment', [StaffDeliveryController::class, 'createPodPayment'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.pod-payment');
+
+        Route::get('deliveries/{delivery}/pod-payment', [StaffDeliveryController::class, 'podPayment'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.pod-payment.status');
+
+        // Thin aliases for older clients
         Route::post('deliveries/{delivery}/payment-session', [StaffDeliveryController::class, 'createPaymentSession'])
             ->middleware(['route.permission'])
             ->name('deliveries.payment-session');

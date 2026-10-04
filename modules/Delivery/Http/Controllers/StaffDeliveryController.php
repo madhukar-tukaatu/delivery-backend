@@ -68,12 +68,11 @@ class StaffDeliveryController extends Controller
      * Request body (all optional):
      * - idempotency_key (string, max 191): retry-safe key; Express generates one when omitted.
      *
+     * @deprecated Prefer POST .../pod-payment (same behavior; thin alias).
      * Amount is taken from the shipment. Empty body {} is valid.
-     * Do not send amount or payment_method here.
      *
      * Preconditions: assigned rider, out_for_delivery, arrived_at, POD amount.
-     * HamroPay KYB (hamropay_merchant_id) is required only when external_store_id
-     * cannot supply a sub-merchant id. This path does not call Store Manager.
+     * Doorstep QR is created by Tukaatu (async); Express does not call HamroPay.
      */
     public function createPaymentSession(Request $request, DeliveryAssignment $delivery)
     {
@@ -96,9 +95,47 @@ class StaffDeliveryController extends Controller
     }
 
     /**
-     * Get (and optionally refresh) the current HamroPay payment session.
-     *
-     * Query: refresh=1 polls HamroPay getTransaction until SUCCESS.
+     * POST /api/v1/staff/deliveries/{id}/pod-payment
+     * Create pending POD session and dispatch Tukaatu request job.
+     * Response: { session_id, status: "pending", ... }
+     */
+    public function createPodPayment(Request $request, DeliveryAssignment $delivery)
+    {
+        $data = $request->validate([
+            'idempotency_key' => ['nullable', 'string', 'max:191'],
+            'amount' => ['prohibited'],
+            'payment_method' => ['prohibited'],
+            'method' => ['prohibited'],
+        ]);
+
+        return ApiResponse::success(
+            $this->service->createPaymentSession(
+                $delivery,
+                $request->user(),
+                $data['idempotency_key'] ?? null,
+            ),
+            'POD payment session pending.'
+        );
+    }
+
+    /**
+     * GET /api/v1/staff/deliveries/{id}/pod-payment
+     * Rider polls until qr_string appears and status becomes paid.
+     */
+    public function podPayment(Request $request, DeliveryAssignment $delivery)
+    {
+        return ApiResponse::success(
+            $this->service->paymentSession(
+                $delivery,
+                $request->user(),
+                (bool) $request->boolean('refresh'),
+            ),
+            'POD payment session retrieved.'
+        );
+    }
+
+    /**
+     * @deprecated Prefer GET .../pod-payment.
      */
     public function paymentSession(Request $request, DeliveryAssignment $delivery)
     {
@@ -135,6 +172,8 @@ class StaffDeliveryController extends Controller
             'customer_name' => ['required', 'string', 'max:191'],
             'customer_signature' => ['required', 'string', 'max:2097152'],
             'pod_collected_amount' => ['nullable', 'numeric', 'min:0'],
+            'payment_reference' => ['nullable', 'string', 'max:191'],
+            'paid' => ['nullable', 'boolean'],
             'remarks' => ['nullable', 'string', 'max:500'],
         ]);
 
@@ -144,7 +183,7 @@ class StaffDeliveryController extends Controller
             if ($txn === '') {
                 throw \Illuminate\Validation\ValidationException::withMessages([
                     'payment_session_id' => [
-                        'payment_session_id (or merchant_txn_id) is required for online/qr POD payment.',
+                        'merchant_txn_id (or payment_session_id) is required for online/qr POD payment.',
                     ],
                 ]);
             }

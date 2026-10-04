@@ -25,7 +25,8 @@ final class ShipmentController extends Controller
 
         $query = Shipment::query()
             ->with([
-                'merchant',
+                'merchant:id,name,code,external_store_id,marketplace_id',
+                'merchant.marketplace:id,name,code',
                 'originBranch',
                 'originSubBranch',
                 'destinationBranch',
@@ -103,6 +104,14 @@ final class ShipmentController extends Controller
                 'merchant_id',
                 $request->input('merchant_id')
             );
+        }
+
+        if ($request->filled('marketplace_id')) {
+            $marketplaceId = (int) $request->input('marketplace_id');
+            $query->where(function ($q) use ($marketplaceId): void {
+                $q->where('marketplace_id', $marketplaceId)
+                    ->orWhereHas('merchant', fn ($mq) => $mq->where('marketplace_id', $marketplaceId));
+            });
         }
 
         /*
@@ -709,6 +718,8 @@ final class ShipmentController extends Controller
                 'nullable',
                 'in:merchant,customer',
             ],
+
+            'delivery_free_by' => ['nullable', 'in:none,store,marketplace'],
 
             'remarks' => [
                 'nullable',

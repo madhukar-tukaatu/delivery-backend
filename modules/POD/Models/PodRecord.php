@@ -3,6 +3,8 @@
 namespace Modules\POD\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Modules\Merchant\Models\Merchant;
 use Modules\Shipment\Models\Shipment;
 
 class PodRecord extends Model
@@ -17,8 +19,13 @@ class PodRecord extends Model
         'payment_paid_at' => 'datetime',
     ];
 
-    public function shipment()
+    public function shipment(): BelongsTo
     {
         return $this->belongsTo(Shipment::class);
+    }
+
+    public function merchant(): BelongsTo
+    {
+        return $this->belongsTo(Merchant::class);
     }
 }

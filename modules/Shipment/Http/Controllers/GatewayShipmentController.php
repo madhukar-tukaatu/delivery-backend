@@ -210,6 +210,11 @@ final class GatewayShipmentController extends Controller
                 'max:50',
             ],
 
+            'delivery_free_by' => [
+                'nullable',
+                'in:none,store,marketplace',
+            ],
+
             'self_drop' => [
                 'nullable',
                 'boolean',

@@ -69,4 +69,26 @@ return [
             'webhook_tolerance' => (int) env('STORE_MANAGER_PAYMENT_WEBHOOK_TOLERANCE', 300),
         ],
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Tukaatu Marketplace API (Express -> Tukaatu outbound)
+    |--------------------------------------------------------------------------
+    | Doorstep POD QR: Express creates a pending session, then POSTs to
+    | Tukaatu /api/v1/gateway/payments/pod-qr with X-Tukaatu-Key/Secret.
+    | Tukaatu owns HamroPay createSession and callbacks Express.
+    | Doorstep POD uses only the marketplace row (api_base_url, api_key, api_secret).
+    | EXPRESS_TUKAATU_API_KEY is not used for rider QR.
+    */
+    'tukaatu' => [
+        'api_base_url' => env('TUKAATU_API_BASE_URL', 'https://api.tukaatu.com'),
+        'api_key' => env('EXPRESS_TUKAATU_API_KEY', env('TUKAATU_API_KEY')),
+        'api_secret' => env('EXPRESS_TUKAATU_API_SECRET', env('TUKAATU_API_SECRET')),
+        'callback_secret' => env('TUKAATU_CALLBACK_SECRET'),
+        'pod_payment_request_path' => env('TUKAATU_POD_PAYMENT_REQUEST_PATH', '/api/v1/gateway/payments/pod-qr'),
+        'timeout' => (int) env('TUKAATU_API_TIMEOUT', 20),
+        'webhook_tolerance' => (int) env('TUKAATU_CALLBACK_TOLERANCE', 300),
+        'verify_ssl' => filter_var(env('TUKAATU_API_VERIFY_SSL', true), FILTER_VALIDATE_BOOLEAN),
+    ],
+
 ];

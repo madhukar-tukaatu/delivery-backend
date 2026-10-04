@@ -438,6 +438,9 @@ final class ShipmentService
                     'delivery_charge_paid_by' =>
                         $data['delivery_charge_paid_by'],
 
+                    'delivery_free_by' =>
+                        \Modules\Settlement\Services\SettlementWorkflowService::resolveFreeBy($data, true),
+
                     'self_drop' =>
                         $selfDrop,
 
@@ -612,6 +615,8 @@ final class ShipmentService
                     ??
                     $this->shipmentNumberService
                         ->generate();
+
+                $data['delivery_free_by'] = \Modules\Settlement\Services\SettlementWorkflowService::resolveFreeBy($data, true);
 
                 $shipmentData = array_merge(
                     $data,

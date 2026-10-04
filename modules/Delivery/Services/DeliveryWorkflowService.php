@@ -17,7 +17,7 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Modules\Delivery\Models\DeliveryAssignment;
 use Modules\POD\Services\PODWorkflowService;
-use Modules\POD\Services\HamroPayPodPaymentService;
+use Modules\POD\Services\TukaatuPodPaymentService;
 use Modules\Shipment\Models\Shipment;
 use Modules\Shipment\Services\ShipmentCallbackService;
 use Modules\Tracking\Services\TrackingService;
@@ -41,7 +41,7 @@ class DeliveryWorkflowService
         private TrackingService $trackingService,
         private WebhookService $webhookService,
         private ShipmentCallbackService $callbacks,
-        private HamroPayPodPaymentService $paymentService,
+        private TukaatuPodPaymentService $paymentService,
     ) {}
 
     /**
@@ -264,10 +264,10 @@ class DeliveryWorkflowService
     }
 
     /**
-     * Create the HamroPay POD session for doorstep online/QR payment.
-     * Only the assigned rider can initiate a session while out for delivery.
-     * Amount comes from the shipment. Empty body is valid. KYB is required only
-     * when the store has neither hamropay_merchant_id nor external_store_id.
+     * Create a pending Tukaatu POD payment session for doorstep online/QR.
+     * Express does not call HamroPay createSession; Tukaatu owns the QR.
+     * Only the assigned rider can initiate while out for delivery + arrived.
+     * Returns quickly with status=pending; rider polls GET for qr_string.
      */
     public function createPaymentSession(
         DeliveryAssignment $delivery,
@@ -279,14 +279,15 @@ class DeliveryWorkflowService
         $this->ensureRider($delivery, $user);
         $this->ensurePaymentSessionStage($delivery);
 
-        return $this->paymentService->createForShipment(
+        return $this->paymentService->createForDelivery(
+            $delivery,
             $delivery->shipment,
             $idempotencyKey,
         );
     }
 
     /**
-     * Return the current HamroPay POD payment session for a delivery.
+     * Return the current Tukaatu POD payment session for a delivery (poll for QR/paid).
      */
     public function paymentSession(
         DeliveryAssignment $delivery,
@@ -298,7 +299,8 @@ class DeliveryWorkflowService
         $this->ensureRider($delivery, $user);
         $this->ensurePaymentSessionStage($delivery);
 
-        return $this->paymentService->currentForShipment(
+        return $this->paymentService->currentForDelivery(
+            $delivery,
             $delivery->shipment,
             $refresh,
         );
@@ -308,7 +310,7 @@ class DeliveryWorkflowService
      * Complete the delivery.
      *
      * A POD shipment is completed only after the customer pays the merchant
-     * directly by cash or through a verified HamroPay session (merchant_txn_id).
+     * directly by cash or through a Tukaatu-confirmed POD session (merchant_txn_id).
      * Online/QR funds are paid_direct and are not added to the cash deposit pool.
      *
      * @param array{payment_method?: string, payment_session_id?: string, merchant_txn_id?: string, pod_collected_amount?: float, customer_confirmed?: bool, customer_name?: string, customer_signature?: string, remarks?: string} $data
@@ -394,7 +396,7 @@ class DeliveryWorkflowService
                     if ($paymentSessionId === '') {
                         throw ValidationException::withMessages([
                             'payment_session_id' => [
-                                'A verified HamroPay merchant_txn_id is required for online/qr payment.',
+                                'A verified Tukaatu merchant_txn_id (paid POD session) is required for online/qr payment.',
                             ],
                         ]);
                     }
@@ -403,7 +405,10 @@ class DeliveryWorkflowService
                         $shipment,
                         $paymentSessionId,
                     );
-                    $paymentReference = $verifiedSession->provider_reference ?: $paymentSessionId;
+                    $paymentReference = $verifiedSession->transaction_id
+                        ?: $verifiedSession->provider_reference
+                        ?: $verifiedSession->merchant_txn_id
+                        ?: $paymentSessionId;
                     $directPayment = true;
 
                     $podWorkflow->markPaidDirectToMerchant(

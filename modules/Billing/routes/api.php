@@ -15,10 +15,18 @@ Route::prefix('v1/admin')
 
             Route::get('invoices', [InvoiceController::class, 'index'])
                 ->name('invoices.index');
+            // Separate path so access:sync does not rename the seeded Invoices menu.
+            Route::get('delivery-charges', [InvoiceController::class, 'index'])
+                ->name('delivery-charges.index')
+                ->adminMenu('Delivery charges', '/admin/delivery-charges', 'invoices', 45, 'Finance');
             Route::post('shipments/{shipment}/invoice', [InvoiceController::class, 'shipmentInvoice'])
                 ->name('invoices.create');
             Route::post('invoices/{invoice}/mark-paid', [InvoiceController::class, 'markPaid'])
                 ->name('invoices.mark-paid');
+            Route::post('invoices/{invoice}/mark-checked', [InvoiceController::class, 'markChecked'])
+                ->name('invoices.mark-checked');
+            Route::post('invoices/{invoice}/close', [InvoiceController::class, 'close'])
+                ->name('invoices.close');
             Route::post('invoices/{invoice}/pay-hamropay', [InvoiceController::class, 'payHamroPay'])
                 ->name('invoices.pay-hamropay');
             // Manual email triggers

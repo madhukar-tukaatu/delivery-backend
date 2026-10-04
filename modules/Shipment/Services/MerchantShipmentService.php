@@ -337,6 +337,9 @@ final class MerchantShipmentService
                 'delivery_charge_paid_by' =>
                     $data['delivery_charge_paid_by'] ?? 'merchant',
 
+                'delivery_free_by' =>
+                    \Modules\Settlement\Services\SettlementWorkflowService::resolveFreeBy($data, false),
+
                 /*
                 |--------------------------------------------------------------------------
                 | Pickup

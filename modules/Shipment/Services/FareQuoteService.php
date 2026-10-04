@@ -110,6 +110,7 @@ class FareQuoteService
             );
         }
 
+        // Free delivery is express-billing only. Customer/COD/prepaid collectable stays the full fare.
         $totalCollectable = $paymentType === 'pod'
             ? $podAmount + ($paidBy === 'customer' ? $deliveryCharge : 0)
             : ($paidBy === 'customer' ? $deliveryCharge : 0);

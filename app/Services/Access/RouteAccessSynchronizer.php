@@ -77,7 +77,8 @@ final class RouteAccessSynchronizer
                     )
                     ?? collect($permissions)->first();
 
-                if ($menuPermission !== null) {
+                // Explicit adminMenu() slug wins. Otherwise prefer *.view.
+                if (empty($menu['permission']) && $menuPermission !== null) {
                     $menu['permission'] = $menuPermission;
                 }
 
@@ -384,6 +385,30 @@ final class RouteAccessSynchronizer
 
         /*
         |--------------------------------------------------------------------------
+        | Optional parent group
+        |--------------------------------------------------------------------------
+        |
+        | Only set when the route declares a parent label. Existing children
+        | of that group are left alone, and menus without a parent keep
+        | whatever parent_id they already have.
+        |--------------------------------------------------------------------------
+        */
+
+        $parentLabel = trim((string) ($menu['parent'] ?? ''));
+
+        if (
+            $parentLabel !== ''
+            && Schema::hasColumn($table, 'parent_id')
+        ) {
+            $data['parent_id'] = $this->resolveMenuParentId(
+                $table,
+                $section,
+                $parentLabel
+            );
+        }
+
+        /*
+        |--------------------------------------------------------------------------
         | Determine route column
         |--------------------------------------------------------------------------
         */
@@ -469,6 +494,49 @@ final class RouteAccessSynchronizer
     | Sync Super Admin
     |--------------------------------------------------------------------------
     */
+
+    private function resolveMenuParentId(
+        string $table,
+        string $section,
+        string $label
+    ): int {
+        $query = DB::table($table)
+            ->where('section', $section);
+
+        if (Schema::hasColumn($table, 'parent_id')) {
+            $query->whereNull('parent_id');
+        }
+
+        if (Schema::hasColumn($table, 'label')) {
+            $query->where('label', $label);
+        } elseif (Schema::hasColumn($table, 'title')) {
+            $query->where('title', $label);
+        } elseif (Schema::hasColumn($table, 'name')) {
+            $query->where('name', $label);
+        }
+
+        $existingId = $query->value('id');
+
+        if ($existingId !== null) {
+            return (int) $existingId;
+        }
+
+        $row = $this->filterColumns($table, [
+            'section' => $section,
+            'title' => $label,
+            'label' => $label,
+            'name' => $label,
+            'icon' => 'money',
+            'sort_order' => 50,
+            'order' => 50,
+            'is_active' => true,
+            'parent_id' => null,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+
+        return (int) DB::table($table)->insertGetId($row);
+    }
 
     private function syncSuperAdmin(): void
     {

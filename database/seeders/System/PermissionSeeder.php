@@ -297,6 +297,15 @@ class PermissionSeeder extends Seeder
             // ─────────────────────────────────────────────────────────────
             // Integrations / Logs
             // ─────────────────────────────────────────────────────────────
+            'Marketplaces' => [
+                'marketplaces.view' => 'Marketplaces View',
+                'marketplaces.create' => 'Marketplaces Create',
+                'marketplaces.update' => 'Marketplaces Update',
+                'marketplaces.hamropay' => 'Marketplaces HamroPay',
+                'marketplaces.stores' => 'Marketplaces Stores',
+                'marketplaces.delete' => 'Marketplaces Delete',
+            ],
+
             'API Keys' => [
                 'api_keys.view'   => 'API Keys View',
                 'api_keys.manage' => 'API Keys Manage',

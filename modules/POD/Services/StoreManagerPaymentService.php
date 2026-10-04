@@ -10,6 +10,7 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Modules\Merchant\Models\Merchant;
 use Modules\POD\Models\PodPaymentSession;
+use Modules\Setting\Services\MarketplacePaymentUrlResolver;
 use Modules\Shipment\Models\Shipment;
 use Throwable;
 
@@ -77,12 +78,7 @@ final class StoreManagerPaymentService
         // STORE_MANAGER_PAYMENT_ENABLED - that is Store Manager / ops concern.
         // Fail with a clear config error only when we are about to call and
         // base_url is missing. Auth/secret issues surface as SM HTTP errors.
-        $baseUrl = trim((string) config('services.store_manager.payment.base_url'));
-        if ($baseUrl === '') {
-            throw ValidationException::withMessages([
-                'payment' => ['Store Manager payment service URL is not configured (STORE_MANAGER_PAYMENT_BASE_URL).'],
-            ]);
-        }
+        $baseUrl = $this->paymentBaseUrl($shipment, $merchant);
 
         $timestamp = (string) now()->timestamp;
         $secret = $this->secretFor($merchant);
@@ -99,7 +95,7 @@ final class StoreManagerPaymentService
             $response = Http::withHeaders($headers)
                 ->withBody($rawBody, 'application/json')
                 ->timeout((int) config('services.store_manager.payment.timeout', 20))
-                ->post($this->endpoint((string) config('services.store_manager.payment.create_path')));
+                ->post($this->endpoint($baseUrl, (string) config('services.store_manager.payment.create_path')));
         } catch (ConnectionException $exception) {
             Log::warning('Store Manager payment session connection failed.', [
                 'shipment_id' => $shipment->id,
@@ -109,7 +105,7 @@ final class StoreManagerPaymentService
             ]);
 
             throw ValidationException::withMessages([
-                'payment' => ['The Store Manager payment service is unavailable at ' . $baseUrl . '. Check STORE_MANAGER_PAYMENT_BASE_URL (Docker: http://store-manager:8000), network access, and that Store Manager is running.'],
+                'payment' => ['The payment service is unavailable at ' . $baseUrl . '. Check this store marketplace API base URL on Admin -> Marketplaces.'],
             ]);
         } catch (Throwable $exception) {
             Log::error('Store Manager payment session request failed.', [
@@ -342,11 +338,12 @@ final class StoreManagerPaymentService
 
     private function refreshSession(PodPaymentSession $session): void
     {
+        $session->loadMissing(['merchant', 'shipment']);
         $merchant = $session->merchant ?: Merchant::query()->findOrFail($session->merchant_id);
 
         // No STORE_MANAGER_PAYMENT_ENABLED gate. Skip remote poll only when
-        // Express cannot form a Store Manager URL.
-        $baseUrl = trim((string) config('services.store_manager.payment.base_url'));
+        // this store's marketplace has no API base URL.
+        $baseUrl = $this->paymentBaseUrl($session->shipment, $merchant, false);
         if ($baseUrl === '') {
             return;
         }
@@ -369,7 +366,7 @@ final class StoreManagerPaymentService
         try {
             $response = Http::withHeaders($headers)
                 ->timeout((int) config('services.store_manager.payment.timeout', 20))
-                ->get($this->endpoint($path));
+                ->get($this->endpoint($baseUrl, $path));
         } catch (Throwable $exception) {
             Log::warning('Store Manager payment status request failed.', [
                 'payment_session_id' => $session->payment_session_id,
@@ -642,7 +639,7 @@ final class StoreManagerPaymentService
                 'requested_at' => now()->toIso8601String(),
             ],
             'callback' => [
-                'url' => rtrim((string) config('app.url'), '/') . '/api/v1/integrations/store-manager/payment-events',
+                'url' => rtrim((string) config('app.url'), '/') . '/api/v1/express/callback',
                 'events' => ['pod.payment.paid', 'pod.payment.failed', 'pod.payment.expired'],
             ],
         ];
@@ -683,9 +680,27 @@ final class StoreManagerPaymentService
         return trim((string) config('services.store_manager.payment.shared_secret'));
     }
 
-    private function endpoint(string $path): string
+    /**
+     * Host from Admin -> Marketplaces api_base_url for this store.
+     * $required false returns '' when unset (status poll).
+     */
+    private function paymentBaseUrl(?Shipment $shipment, ?Merchant $merchant, bool $required = true): string
     {
-        return rtrim((string) config('services.store_manager.payment.base_url'), '/') . '/' . ltrim($path, '/');
+        $resolved = app(MarketplacePaymentUrlResolver::class)->resolve($shipment, $merchant);
+        $base = $resolved['api_base_url'];
+        if ($base !== '' || ! $required) {
+            return $base;
+        }
+
+        $label = $resolved['marketplace']?->name ?: 'this store';
+        throw ValidationException::withMessages([
+            'payment' => ['No payment API base URL for '.$label.'. Set API base URL on Admin -> Marketplaces.'],
+        ]);
+    }
+
+    private function endpoint(string $baseUrl, string $path): string
+    {
+        return rtrim($baseUrl, '/') . '/' . ltrim($path, '/');
     }
 
     private function shipmentAmount(Shipment $shipment): float

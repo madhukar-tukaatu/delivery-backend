@@ -5,6 +5,7 @@ namespace Modules\Settlement\Services;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Validation\ValidationException;
 use Modules\Settlement\Models\MerchantSettlement;
 use Modules\Settlement\Models\MerchantSettlementItem;
 use Modules\Shipment\Models\Shipment;
@@ -28,10 +29,119 @@ class SettlementWorkflowService
     {
         $payer = strtolower(trim((string) ($shipment->delivery_charge_paid_by ?? 'customer')));
 
-        // Only deduct when merchant/store covers delivery (free delivery for customer).
-        // Customer-paid delivery was already handled at checkout / door collection.
+        // Remittance is unchanged by coupons. Only the original payer flag
+        // decides whether the merchant covers delivery for settlement status.
         return in_array($payer, ['merchant', 'store', 'seller', 'free', 'free_delivery'], true)
             && $this->checkoutDeliveryCharge($shipment) > 0;
+    }
+
+    /**
+     * Express-invoice split of the full fare. Does not change collectable,
+     * customer payment, or merchant remittance.
+     * store_share is billed to the store. marketplace_share is billed to tukaatu.com.
+     * customer_share is the unbilled remainder when the customer pays delivery.
+     * It must not be written into collectable or payment fields.
+     *
+     * @return array{store_share: float, marketplace_share: float, customer_share: float, free_by: string}
+     */
+    public function deliveryChargeSplit(Shipment $shipment): array
+    {
+        return self::splitDeliveryCharge(
+            $this->checkoutDeliveryCharge($shipment),
+            (string) ($shipment->delivery_free_by ?? 'none'),
+            $shipment->delivery_charge_paid_by,
+        );
+    }
+
+    /**
+     * Free delivery only. free_by is none, store, or marketplace.
+     * Marketplace free delivery bills the full fare to tukaatu.com.
+     * Store free delivery bills the full fare to the store.
+     * With no free delivery, merchant/store/seller (and legacy free / free_delivery)
+     * still bill the full fare to the store. A customer payer is not invoiced.
+     *
+     * @return array{store_share: float, marketplace_share: float, customer_share: float, free_by: string}
+     */
+    public static function splitDeliveryCharge(float $fare, ?string $freeBy, ?string $paidBy): array
+    {
+        $fare = round(max(0, $fare), 2);
+        $freeBy = self::normalizeFreeBy($freeBy);
+        $payer = strtolower(trim((string) ($paidBy ?? 'customer')));
+
+        $storeShare = 0.0;
+        $marketplaceShare = 0.0;
+        $customerShare = 0.0;
+
+        if ($freeBy === 'marketplace') {
+            $marketplaceShare = $fare;
+        } elseif ($freeBy === 'store' || in_array($payer, ['merchant', 'store', 'seller', 'free', 'free_delivery'], true)) {
+            $storeShare = $fare;
+        } else {
+            $customerShare = $fare;
+        }
+
+        return [
+            'store_share' => round($storeShare, 2),
+            'marketplace_share' => round($marketplaceShare, 2),
+            'customer_share' => round($customerShare, 2),
+            'free_by' => $freeBy,
+        ];
+    }
+
+    public static function normalizeFreeBy(mixed $value): string
+    {
+        $freeBy = strtolower(trim((string) ($value ?? 'none')));
+
+        return in_array($freeBy, ['store', 'marketplace'], true) ? $freeBy : 'none';
+    }
+
+    /**
+     * Read delivery_free_by from a create/assign payload.
+     * Absent means none. Invalid values are rejected.
+     * Merchants cannot set marketplace.
+     */
+    public static function resolveFreeBy(array $input, bool $allowMarketplace = true): string
+    {
+        $raw = $input['delivery_free_by'] ?? null;
+        if ($raw === null || $raw === '') {
+            $raw = data_get($input, 'payment.delivery_free_by');
+        }
+        if ($raw === null || $raw === '') {
+            return 'none';
+        }
+
+        $freeBy = strtolower(trim((string) $raw));
+        if (! in_array($freeBy, ['none', 'store', 'marketplace'], true)) {
+            throw ValidationException::withMessages([
+                'delivery_free_by' => 'Free delivery must be none, store, or marketplace.',
+            ]);
+        }
+        if ($freeBy === 'marketplace' && ! $allowMarketplace) {
+            throw ValidationException::withMessages([
+                'delivery_free_by' => 'Only the marketplace can apply marketplace free delivery.',
+            ]);
+        }
+
+        return $freeBy;
+    }
+
+    /**
+     * Optional assign-time update. Absent key is left unchanged.
+     * Does not change delivery_charge, collectable, or remittance.
+     */
+    public function applyFreeDelivery(Shipment $shipment, array $input, bool $allowMarketplace = true): bool
+    {
+        $top = array_key_exists('delivery_free_by', $input) ? $input['delivery_free_by'] : null;
+        $nested = data_get($input, 'payment.delivery_free_by');
+        $raw = ($top !== null && $top !== '') ? $top : $nested;
+        if ($raw === null || $raw === '') {
+            return false;
+        }
+
+        $shipment->delivery_free_by = self::resolveFreeBy($input, $allowMarketplace);
+        $shipment->save();
+
+        return true;
     }
 
     /**

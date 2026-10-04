@@ -147,6 +147,8 @@ class RoutePermissionMapper
             'deposit' => 'deposit',
             'confirm' => 'confirm',
             'mark_paid' => 'mark_paid',
+            'mark_checked' => 'mark_paid',
+            'close' => 'mark_paid',
             'pay' => 'pay',
             'submit' => 'submit',
             'manage' => 'manage',

@@ -14,6 +14,12 @@ use Modules\POD\Http\Controllers\StoreManagerPaymentWebhookController;
 |--------------------------------------------------------------------------
 */
 
+Route::post('v1/express/callback', [StoreManagerPaymentWebhookController::class, 'handle'])
+    ->name('express.callback');
+
+Route::post('v1/integrations/pod-payment/callback', [StoreManagerPaymentWebhookController::class, 'handle'])
+    ->name('integrations.pod-payment.callback');
+
 Route::post('v1/integrations/store-manager/payment-events', [StoreManagerPaymentWebhookController::class, 'handle'])
     ->name('integrations.store-manager.payment-events');
 
@@ -22,8 +28,9 @@ Route::post('v1/integrations/store-manager/payment-events', [StoreManagerPayment
 | GATEWAY - POD QR (Phase 6 HamroPay)
 |--------------------------------------------------------------------------
 | Auth: merchant.api-key (X-Tukaatu-Key / X-Tukaatu-Secret)
-| Express creates the HamroPay session (createSession) and verifies with getTransaction.
-| Store Manager payment sessions are a separate legacy integration webhook below.
+| Store-initiated gateway POD QR (HamroPay on Express) — separate from rider doorstep.
+| Rider doorstep POD uses POST /staff/deliveries/{id}/pod-payment -> Tukaatu.
+| Inbound callback: POST /api/v1/express/callback. pod_payment.* stays on the delivery POD handler.
 |--------------------------------------------------------------------------
 */
 

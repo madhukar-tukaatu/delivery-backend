@@ -9,6 +9,7 @@ use App\Support\CourierStatus;
 use Illuminate\Http\Request;
 use Modules\Delivery\Models\DeliveryAssignment;
 use Modules\Delivery\Services\DeliveryWorkflowService;
+use Modules\Settlement\Services\SettlementWorkflowService;
 use Modules\Shipment\Models\Shipment;
 
 class DeliveryController extends Controller
@@ -29,7 +30,8 @@ class DeliveryController extends Controller
 
         $query = DeliveryAssignment::query()
             ->with([
-                'shipment.merchant',
+                'shipment.merchant:id,name,code,external_store_id,marketplace_id',
+                'shipment.merchant.marketplace:id,name,code',
                 'shipment.originBranch',
                 'shipment.destinationBranch',
                 'rider',
@@ -68,9 +70,27 @@ class DeliveryController extends Controller
                 $query->whereHas('shipment', function ($q) use ($search) {
                     $q->where('tracking_number', 'like', "%{$search}%")
                         ->orWhere('receiver_name', 'like', "%{$search}%")
-                        ->orWhere('receiver_phone', 'like', "%{$search}%");
+                        ->orWhere('receiver_phone', 'like', "%{$search}%")
+                        ->orWhereHas('merchant', function ($mq) use ($search) {
+                            $mq->where('name', 'like', "%{$search}%")
+                                ->orWhere('external_store_id', 'like', "%{$search}%")
+                                ->orWhere('code', 'like', "%{$search}%");
+                        });
                 });
             }
+        }
+
+        if ($request->filled('merchant_id')) {
+            $merchantId = (int) $request->input('merchant_id');
+            $query->whereHas('shipment', fn ($q) => $q->where('merchant_id', $merchantId));
+        }
+
+        if ($request->filled('marketplace_id')) {
+            $marketplaceId = (int) $request->input('marketplace_id');
+            $query->whereHas('shipment', function ($q) use ($marketplaceId) {
+                $q->where('marketplace_id', $marketplaceId)
+                    ->orWhereHas('merchant', fn ($mq) => $mq->where('marketplace_id', $marketplaceId));
+            });
         }
 
         $perPage = min(max((int) $request->input('per_page', 20), 1), 100);
@@ -134,11 +154,16 @@ class DeliveryController extends Controller
     /**
      * Assign a rider to a delivery.
      */
-    public function assign(Request $request, DeliveryAssignment $delivery)
+    public function assign(Request $request, DeliveryAssignment $delivery, SettlementWorkflowService $settlements)
     {
         $data = $request->validate([
             'rider_id' => ['required', 'integer', 'exists:users,id'],
+            'delivery_free_by' => ['sometimes', 'nullable', 'in:none,store,marketplace'],
         ]);
+
+        if ($delivery->shipment) {
+            $settlements->applyFreeDelivery($delivery->shipment, $data, true);
+        }
 
         $rider = User::query()->findOrFail($data['rider_id']);
 

@@ -11,6 +11,7 @@ use Modules\Merchant\Models\Merchant;
 use Modules\Shipment\Http\Requests\ShipmentOperationsCreateRequest;
 use Modules\Shipment\Models\Shipment;
 use Modules\Shipment\Services\PickupWorkflowService;
+use Modules\Settlement\Services\SettlementWorkflowService;
 use Modules\Shipment\Services\ShipmentOperationsService;
 
 class AdminShipmentLifecycleController  extends Controller
@@ -45,11 +46,14 @@ class AdminShipmentLifecycleController  extends Controller
         return response()->json(['message' => 'Pickup assigned.', 'data' => $pickup]);
     }
 
-    public function assignDelivery(Request $request, Shipment $shipment, DeliveryWorkflowService $deliveryWorkflowService): JsonResponse
+    public function assignDelivery(Request $request, Shipment $shipment, DeliveryWorkflowService $deliveryWorkflowService, SettlementWorkflowService $settlements): JsonResponse
     {
         $data = $request->validate([
             'rider_id' => ['required', 'integer', 'exists:users,id'],
+            'delivery_free_by' => ['sometimes', 'nullable', 'in:none,store,marketplace'],
         ]);
+
+        $settlements->applyFreeDelivery($shipment, $data, true);
 
         $rider = User::query()->findOrFail((int) $data['rider_id']);
         $delivery = $deliveryWorkflowService->createPendingForShipment(

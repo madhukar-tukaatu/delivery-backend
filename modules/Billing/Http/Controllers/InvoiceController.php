@@ -22,7 +22,12 @@ class InvoiceController extends Controller
 
     public function index(Request $request)
     {
-        $query = Invoice::with(['items', 'shipment'])->latest();
+        $query = Invoice::with([
+            'items',
+            'shipment',
+            'merchant:id,name,code,external_store_id,marketplace_id',
+            'merchant.marketplace:id,name,code',
+        ])->latest();
         
         // Merchant can only see their own invoices
         if ($request->user()->role === 'merchant') {
@@ -33,14 +38,50 @@ class InvoiceController extends Controller
         if ($request->filled('merchant_id')) {
             $query->where('merchant_id', $request->merchant_id);
         }
+        if ($request->filled('marketplace_id')) {
+            $marketplaceId = (int) $request->input('marketplace_id');
+            $query->whereHas('merchant', fn ($mq) => $mq->where('marketplace_id', $marketplaceId));
+        }
+        $merchantSearch = trim((string) $request->input('merchant', $request->input('q', '')));
+        if ($merchantSearch !== '') {
+            if (ctype_digit($merchantSearch)) {
+                $query->where('merchant_id', (int) $merchantSearch);
+            } else {
+                $query->whereHas('merchant', function ($mq) use ($merchantSearch) {
+                    $like = '%'.$merchantSearch.'%';
+                    $mq->where('name', 'like', $like)
+                        ->orWhere('external_store_id', 'like', $like)
+                        ->orWhere('code', 'like', $like);
+                });
+            }
+        }
         if ($request->filled('branch_id')) {
             $query->where('branch_id', $request->branch_id);
         }
-        if ($request->filled('type')) {
+        if ($request->routeIs('admin.delivery-charges.index')) {
+            $query->where('type', 'delivery_charges');
+        } elseif ($request->filled('type')) {
             $query->where('type', $request->type);
         }
         if ($request->filled('status')) {
             $query->where('status', $request->status);
+        }
+        if ($request->boolean('due_for_check') && \Illuminate\Support\Facades\Schema::hasColumn('invoices', 'sent_at')) {
+            $query->where('status', 'unpaid')
+                ->whereNotNull('sent_at')
+                ->where('sent_at', '<=', now()->subDays(3))
+                ->whereNull('manual_checked_at');
+        }
+
+        if ($request->filled('payer_type')) {
+            $payer = strtolower((string) $request->input('payer_type'));
+            if ($payer === 'company') {
+                $query->where('payer_type', 'company');
+            } elseif (in_array($payer, ['merchant', 'store'], true)) {
+                $query->where(function ($inner) {
+                    $inner->where('payer_type', 'merchant')->orWhereNull('payer_type');
+                });
+            }
         }
         
         // Date range filters
@@ -63,8 +104,163 @@ class InvoiceController extends Controller
         }
 
         $perPage = min((int) $request->get('per_page', 20), 100);
+
+        $paginator = $query->paginate($perPage);
+        $paginator->getCollection()->transform(function (Invoice $invoice) {
+            $merchant = $invoice->merchant;
+            $shipment = $invoice->shipment;
+            $store = $merchant ?: $shipment?->merchant;
+            $mp = $merchant?->marketplace ?: $store?->marketplace;
+            if (! $mp && $shipment) {
+                $mp = \Modules\Setting\Models\Marketplace::resolveForShipment($shipment, $store);
+            }
+            $invoice->setAttribute('merchant_name', $store?->name);
+            $invoice->setAttribute('external_store_id', $store?->external_store_id);
+            $invoice->setAttribute('marketplace_id', $mp?->id ?? $store?->marketplace_id);
+            $invoice->setAttribute('marketplace_name', $mp?->name);
+            $invoice->setAttribute('marketplace_code', $mp?->code);
+            $invoice->setAttribute('bill_to', $this->billing->invoiceRecipient($invoice));
+            $invoice->setAttribute('tracking_number', $shipment?->tracking_number);
+            $invoice->setAttribute('delivery_count', $this->deliveryCount($invoice));
+            $invoice->setAttribute('due_for_check', $this->billing->isDueForCheck($invoice));
+            $invoice->setAttribute('days_since_sent', $invoice->sent_at ? (int) $invoice->sent_at->diffInDays(now()) : null);
+
+            return $invoice;
+        });
         
-        return ApiResponse::success($query->paginate($perPage));
+        $payload = $paginator->toArray();
+        $payload['merchant_summary'] = $this->merchantBillingSummary(clone $query);
+
+        return ApiResponse::success($payload);
+    }
+
+
+    /**
+     * One delivery-charge bill is one shipment. POD fee lines are not extra deliveries.
+     */
+    private function deliveryCount(Invoice $invoice): int
+    {
+        if ((string) $invoice->type !== 'delivery_charges') {
+            return 0;
+        }
+
+        if ($invoice->shipment_id) {
+            return 1;
+        }
+
+        return $invoice->items->filter(function ($item): bool {
+            return ! str_starts_with((string) $item->description, 'POD service fee');
+        })->count();
+    }
+
+
+    /**
+     * Merchant-wise unpaid/paid counts for the current filters.
+     * Marketplace (payer company) bills stay out of merchant totals.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder  $query
+     * @return list<array<string, mixed>>
+     */
+    private function merchantBillingSummary($query): array
+    {
+        $rows = (clone $query)
+            ->reorder()
+            ->setEagerLoads([])
+            ->selectRaw('merchant_id, payer_type, status, COUNT(*) as bill_count, COALESCE(SUM(total_amount), 0) as total')
+            ->groupBy('merchant_id', 'payer_type', 'status')
+            ->get();
+
+        $merchantIds = $rows->pluck('merchant_id')->filter()->unique()->values();
+        $merchants = $merchantIds->isEmpty()
+            ? collect()
+            : \Modules\Merchant\Models\Merchant::query()
+                ->whereIn('id', $merchantIds)
+                ->get(['id', 'name', 'external_store_id', 'code'])
+                ->keyBy('id');
+
+        $buckets = [];
+        $marketplace = [
+            'merchant_id' => null,
+            'merchant_name' => 'Marketplace bills',
+            'external_store_id' => null,
+            'unpaid_count' => 0,
+            'unpaid_total' => 0.0,
+            'paid_count' => 0,
+            'due_for_check_count' => 0,
+            'side' => 'marketplace',
+        ];
+
+        foreach ($rows as $row) {
+            $payer = strtolower((string) ($row->payer_type ?? 'merchant'));
+            $status = strtolower((string) $row->status);
+            $count = (int) $row->bill_count;
+            $total = (float) $row->total;
+            $isMarketplace = $payer === 'company' || $row->merchant_id === null;
+            if ($isMarketplace) {
+                if ($status === 'unpaid') {
+                    $marketplace['unpaid_count'] += $count;
+                    $marketplace['unpaid_total'] += $total;
+                } elseif ($status === 'paid') {
+                    $marketplace['paid_count'] += $count;
+                }
+                continue;
+            }
+
+            $id = (int) $row->merchant_id;
+            if (! isset($buckets[$id])) {
+                $merchant = $merchants->get($id);
+                $buckets[$id] = [
+                    'merchant_id' => $id,
+                    'merchant_name' => $merchant?->name,
+                    'external_store_id' => $merchant?->external_store_id,
+                    'unpaid_count' => 0,
+                    'unpaid_total' => 0.0,
+                    'paid_count' => 0,
+                    'due_for_check_count' => 0,
+                    'side' => 'merchant',
+                ];
+            }
+            if ($status === 'unpaid') {
+                $buckets[$id]['unpaid_count'] += $count;
+                $buckets[$id]['unpaid_total'] += $total;
+            } elseif ($status === 'paid') {
+                $buckets[$id]['paid_count'] += $count;
+            }
+        }
+
+        if (\Illuminate\Support\Facades\Schema::hasColumn('invoices', 'sent_at')) {
+            $dueRows = (clone $query)
+                ->reorder()
+                ->setEagerLoads([])
+                ->where('status', 'unpaid')
+                ->whereNotNull('sent_at')
+                ->where('sent_at', '<=', now()->subDays(3))
+                ->whereNull('manual_checked_at')
+                ->selectRaw('merchant_id, payer_type, COUNT(*) as due_count')
+                ->groupBy('merchant_id', 'payer_type')
+                ->get();
+            foreach ($dueRows as $due) {
+                $payer = strtolower((string) ($due->payer_type ?? 'merchant'));
+                $dueCount = (int) $due->due_count;
+                if ($payer === 'company' || $due->merchant_id === null) {
+                    $marketplace['due_for_check_count'] += $dueCount;
+                    continue;
+                }
+                $id = (int) $due->merchant_id;
+                if (! isset($buckets[$id])) {
+                    continue;
+                }
+                $buckets[$id]['due_for_check_count'] += $dueCount;
+            }
+        }
+
+        $list = array_values($buckets);
+        usort($list, fn (array $a, array $b): int => $b['unpaid_total'] <=> $a['unpaid_total']);
+        if ($marketplace['unpaid_count'] > 0 || $marketplace['paid_count'] > 0 || $marketplace['due_for_check_count'] > 0) {
+            array_unshift($list, $marketplace);
+        }
+
+        return $list;
     }
 
     public function shipmentInvoice(Request $request, Shipment $shipment)
@@ -84,11 +280,42 @@ class InvoiceController extends Controller
             'reference_number' => ['nullable', 'string', 'max:191'],
         ]);
 
+        return ApiResponse::success($this->settlePaid($invoice), 'Invoice marked paid.');
+    }
+
+    public function markChecked(Invoice $invoice)
+    {
+        if (strtolower((string) $invoice->status) !== 'unpaid') {
+            return ApiResponse::error('Only an unpaid bill can be checked.', 422);
+        }
+        if (! $this->billing->isDueForCheck($invoice)) {
+            return ApiResponse::error('This bill is not due for check yet.', 422);
+        }
+
+        $invoice->forceFill(['manual_checked_at' => now()])->save();
+
+        return ApiResponse::success($invoice->fresh('items'), 'Marked checked. It stays unpaid until you close it.');
+    }
+
+    public function close(Request $request, Invoice $invoice)
+    {
+        if (strtolower((string) $invoice->status) === 'paid') {
+            return ApiResponse::error('Invoice is already paid.', 422);
+        }
+        if (! $invoice->sent_at) {
+            return ApiResponse::error('Send the bill before closing it.', 422);
+        }
+
+        return ApiResponse::success($this->settlePaid($invoice), 'Invoice closed and marked paid.');
+    }
+
+    private function settlePaid(Invoice $invoice): Invoice
+    {
         $invoice->update([
             'status' => 'paid',
         ]);
 
-        return ApiResponse::success($invoice->fresh('items'), 'Invoice marked paid.');
+        return $invoice->fresh('items');
     }
 
     /**
@@ -102,13 +329,27 @@ class InvoiceController extends Controller
             abort_unless((int) $user->merchant_id === (int) $invoice->merchant_id, 403);
         }
 
-        $sent = $this->billing->sendInvoiceEmail($invoice);
-        
-        if ($sent) {
-            return ApiResponse::success(null, 'Invoice email sent successfully.');
+        if ($user->role === 'merchant' && strtolower((string) ($invoice->payer_type ?? 'merchant')) === 'company') {
+            abort(403);
         }
-        
-        return ApiResponse::error('Failed to send email. Merchant email may not be configured.', 500);
+
+        if (! $this->billing->invoiceIsSendable($invoice)) {
+            return ApiResponse::error('Nothing to send. Paid bills are excluded.', 422);
+        }
+
+        $to = $this->billing->invoiceRecipient($invoice);
+        $sent = $this->billing->sendInvoiceEmail($invoice);
+
+        if ($sent) {
+            return ApiResponse::success(['to' => $to], 'Invoice email sent to '.$to.'.');
+        }
+
+        $payer = strtolower((string) ($invoice->payer_type ?? 'merchant'));
+        $hint = $payer === 'company'
+            ? 'Set the marketplace billing email on Admin -> Marketplaces, or BILLING_MARKETPLACE_EMAIL.'
+            : 'The store has no email on file.';
+
+        return ApiResponse::error('Failed to send email. '.$hint, 500);
     }
 
     /**
@@ -130,10 +371,18 @@ class InvoiceController extends Controller
             abort_unless((int) $user->merchant_id === $merchantId, 403);
         }
 
-        // Dispatch job
+        $fromDate = $period === 'weekly' ? now()->subWeek()->toDateString() : now()->subDay()->toDateString();
+        $unpaid = $this->billing->getUnpaidInvoicesForMerchant((int) $merchantId, $fromDate, now()->toDateString());
+        if ($unpaid->isEmpty()) {
+            return ApiResponse::success(null, 'Nothing to send. Paid bills are excluded.');
+        }
+
         \Modules\Billing\Jobs\SendMerchantBillDigest::dispatch($merchantId, $period);
 
-        return ApiResponse::success(null, "{$period} digest email queued for merchant.");
+        return ApiResponse::success(
+            ['count' => $unpaid->count()],
+            $period.' digest email queued for merchant. Paid bills are excluded.'
+        );
     }
 
     /**
@@ -202,22 +451,43 @@ class InvoiceController extends Controller
             abort_unless((int) $user->merchant_id === (int) $invoice->merchant_id, 403);
         }
 
-        $branchId = $invoice->branch_id;
-        $branchAccount = $branchId
-            ? $this->accounts->branchAccount((int) $branchId, 'hamropay')
-            : null;
-
-        if (! $branchAccount) {
+        $invoice->loadMissing('shipment.merchant');
+        $paymentTarget = app(\Modules\Setting\Services\MarketplacePaymentUrlResolver::class)
+            ->resolve($invoice->shipment, $invoice->shipment?->merchant);
+        if ($paymentTarget['api_base_url'] === '') {
+            $label = $paymentTarget['marketplace']?->name ?: 'this store';
             throw ValidationException::withMessages([
-                'gateway' => ['Branch HamroPay account is not configured. Branch must save credentials under Payment gateways.'],
+                'payment' => ['No payment API base URL for '.$label.'. Set API base URL on Admin -> Marketplaces.'],
             ]);
         }
 
-        $client = $this->accounts->hamroPayClientFromAccount($branchAccount);
-        $branchMerchantId = $branchAccount->credential('merchant_id');
+        $branchId = $invoice->branch_id;
+        $payerType = strtolower((string) ($invoice->payer_type ?? 'merchant'));
+        $marketplaceId = $paymentTarget['marketplace']?->id ? (int) $paymentTarget['marketplace']->id : null;
+        $payAccount = $payerType === 'company'
+            ? $this->accounts->resolveMarketplacePayerAccount($marketplaceId, $branchId ? (int) $branchId : null, 'hamropay')
+            : ($branchId ? $this->accounts->branchAccount((int) $branchId, 'hamropay') : null);
+
+        if (! $payAccount) {
+            throw ValidationException::withMessages([
+                'gateway' => [$payerType === 'company'
+                    ? 'Marketplace HamroPay account is not configured. Save it on Admin -> Marketplaces.'
+                    : 'Branch HamroPay account is not configured. Branch must save credentials under Payment gateways.'],
+            ]);
+        }
+
+        $client = $this->accounts->hamroPayClientFromAccount($payAccount);
+        $paymentBase = (string) ($paymentTarget['api_base_url'] ?? '');
+        if ($paymentBase !== '') {
+            // Same host Admin -> Marketplaces stores (api.tukaatu.com, api.fca.com.np, ...).
+            $client = $client->withEndpoints($paymentBase);
+        }
+        $branchMerchantId = $payAccount->credential('merchant_id');
         if (! filled($branchMerchantId)) {
             throw ValidationException::withMessages([
-                'gateway' => ['Branch HamroPay merchant_id is missing.'],
+                'gateway' => [$payerType === 'company'
+                    ? 'Marketplace HamroPay merchant_id is missing.'
+                    : 'Branch HamroPay merchant_id is missing.'],
             ]);
         }
 
@@ -228,6 +498,10 @@ class InvoiceController extends Controller
             'merchantTxnId' => $txnId,
             'transactionAmount' => $paisa,
             'remarks' => 'Delivery bill '.$invoice->invoice_number,
+            'metadata' => [
+                'payment_api_base_url' => $paymentBase,
+                'marketplace_code' => $paymentTarget['marketplace']?->code,
+            ],
         ], (string) $branchMerchantId, null);
 
         $sessionId = data_get($session, 'sessionId')
@@ -256,6 +530,13 @@ class InvoiceController extends Controller
             'payee' => 'branch',
             'branch_id' => $branchId,
             'gateway_url' => $client->getGatewayUrl(),
+            'payment_api_base_url' => $paymentTarget['api_base_url'],
+            'payment_request_url' => $paymentTarget['payment_request_url'],
+            'marketplace' => $paymentTarget['marketplace'] ? [
+                'id' => $paymentTarget['marketplace']->id,
+                'code' => $paymentTarget['marketplace']->code,
+                'name' => $paymentTarget['marketplace']->name,
+            ] : null,
             'checkout' => $params,
             'provider' => $session,
         ], 'HamroPay session created — merchant pays branch for delivery charges.');

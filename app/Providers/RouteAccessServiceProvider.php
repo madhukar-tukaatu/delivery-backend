@@ -28,13 +28,15 @@ final class RouteAccessServiceProvider extends ServiceProvider
                 string $frontendRoute,
                 string $icon = 'menu',
                 int $sortOrder = 999,
-                string $section = 'admin'
+                ?string $parent = null,
+                string $section = 'admin',
+                ?string $permission = null
             ): LaravelRoute {
                 /** @var LaravelRoute $this */
 
                 $action = $this->getAction();
 
-                $action['_admin_menu'] = [
+                $menu = [
                     'section' => $section,
                     'title' => $label,
                     'label' => $label,
@@ -42,6 +44,20 @@ final class RouteAccessServiceProvider extends ServiceProvider
                     'icon' => $icon,
                     'sort_order' => $sortOrder,
                 ];
+
+                $parentLabel = trim((string) $parent);
+
+                if ($parentLabel !== '') {
+                    $menu['parent'] = $parentLabel;
+                }
+
+                $permissionSlug = trim((string) $permission);
+
+                if ($permissionSlug !== '') {
+                    $menu['permission'] = $permissionSlug;
+                }
+
+                $action['_admin_menu'] = $menu;
 
                 $this->setAction($action);
 

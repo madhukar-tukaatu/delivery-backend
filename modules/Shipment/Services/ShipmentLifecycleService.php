@@ -123,6 +123,7 @@ class ShipmentLifecycleService
                     'pod_amount' => $codAmount,
                     'delivery_charge' => $fare['delivery_charge'],
                     'delivery_charge_paid_by' => $fare['delivery_charge_paid_by'],
+                    'delivery_free_by' => \Modules\Settlement\Services\SettlementWorkflowService::resolveFreeBy($payload, false),
                     'total_collectable' => $fare['total_collectable'],
                     'origin_branch_id' => $origin['branch_id'],
                     'origin_sub_branch_id' => $origin['sub_branch_id'],

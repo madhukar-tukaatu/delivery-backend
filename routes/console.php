@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Modules\Billing\Models\Invoice;
 use Modules\Billing\Models\InvoiceItem;
+use Modules\Settlement\Services\SettlementWorkflowService;
 use Modules\Shipment\Models\Shipment;
 use Modules\Shipment\Services\CheckoutDeliveryChargeResolver;
 
@@ -47,13 +48,25 @@ Artisan::command('billing:reconcile-delivery-charges {--dry-run : Report only} {
         }
 
         $priced = $resolver->resolveFromShipment($shipment);
-        $deliveryFee = 0.0;
-        $payer = strtolower(trim((string) ($shipment->delivery_charge_paid_by ?? 'customer')));
-        if (in_array($payer, ['merchant', 'store', 'seller', 'free', 'free_delivery'], true)) {
-            $deliveryFee = round((float) $priced['delivery_charge'], 2);
-        }
-
+        $fullFare = round((float) $priced['delivery_charge'], 2);
+        $payerType = strtolower((string) ($invoice->payer_type ?? 'merchant'));
+        $split = SettlementWorkflowService::splitDeliveryCharge(
+            $fullFare,
+            (string) ($shipment->delivery_free_by ?? 'none'),
+            (string) ($shipment->delivery_charge_paid_by ?? 'customer'),
+        );
         $podFee = round((float) ($shipment->pod_charge ?? $priced['pod_charge'] ?? 0), 2);
+        $freeBy = (string) ($split['free_by'] ?? 'none');
+        if ($payerType === 'company') {
+            $deliveryFee = (float) $split['marketplace_share'];
+            $podFee = 0.0;
+            $lineDescription = 'Free delivery (marketplace) '.$shipment->tracking_number;
+        } else {
+            $deliveryFee = (float) $split['store_share'];
+            $lineDescription = $freeBy === 'store'
+                ? 'Free delivery (store) '.$shipment->tracking_number
+                : 'Delivery charge '.$shipment->tracking_number;
+        }
         $subtotal = round($deliveryFee + $podFee, 2);
 
         $before = round((float) $invoice->total_amount, 2);
@@ -66,7 +79,7 @@ Artisan::command('billing:reconcile-delivery-charges {--dry-run : Report only} {
             $payer,
             $priced['source'] ?? '?',
             $oldShipmentCharge,
-            $deliveryFee,
+            $fullFare,
             $before,
             $subtotal
         ));
@@ -77,7 +90,7 @@ Artisan::command('billing:reconcile-delivery-charges {--dry-run : Report only} {
             continue;
         }
 
-        if (abs($before - $subtotal) < 0.009 && abs($oldShipmentCharge - $deliveryFee) < 0.009) {
+        if (abs($before - $subtotal) < 0.009 && abs($oldShipmentCharge - $fullFare) < 0.009) {
             $skipped++;
             continue;
         }
@@ -87,8 +100,8 @@ Artisan::command('billing:reconcile-delivery-charges {--dry-run : Report only} {
             continue;
         }
 
-        DB::transaction(function () use ($invoice, $shipment, $deliveryFee, $podFee, $subtotal, $priced) {
-            $shipment->delivery_charge = $deliveryFee;
+        DB::transaction(function () use ($invoice, $shipment, $deliveryFee, $podFee, $subtotal, $priced, $fullFare, $lineDescription) {
+            $shipment->delivery_charge = $fullFare;
             if (! empty($priced['breakdown'])) {
                 $shipment->delivery_charge_breakdown = $priced['breakdown'];
             }
@@ -107,7 +120,7 @@ Artisan::command('billing:reconcile-delivery-charges {--dry-run : Report only} {
             if ($deliveryFee > 0) {
                 InvoiceItem::create([
                     'invoice_id' => $invoice->id,
-                    'description' => 'Delivery charge (checkout) '.$shipment->tracking_number,
+                    'description' => $lineDescription,
                     'quantity' => 1,
                     'unit_price' => $deliveryFee,
                     'total' => $deliveryFee,

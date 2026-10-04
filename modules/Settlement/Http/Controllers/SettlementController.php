@@ -8,6 +8,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Validation\ValidationException;
+use Modules\Merchant\Models\Merchant;
 use Modules\POD\Models\PodRecord;
 use Modules\Settlement\Models\MerchantSettlement;
 use Modules\Settlement\Models\MerchantSettlementItem;
@@ -24,15 +25,24 @@ class SettlementController extends Controller
 
     public function index(Request $request)
     {
-        $query = MerchantSettlement::with('items')->latest();
+        $query = MerchantSettlement::query()
+            ->with([
+                'items',
+                'merchant:id,name,code,external_store_id,marketplace_id',
+                'merchant.marketplace:id,name,code',
+            ])
+            ->latest();
+
         if ($request->user()->role === 'merchant') {
             $query->where('merchant_id', $request->user()->merchant_id);
         }
-        if ($request->filled('merchant_id')) {
-            $query->where('merchant_id', $request->merchant_id);
-        }
 
-        return ApiResponse::success($query->paginate((int) $request->get('per_page', 20)));
+        $this->applySettlementFilters($query, $request);
+
+        $paginator = $query->paginate((int) $request->get('per_page', 20));
+        $paginator->getCollection()->transform(fn (MerchantSettlement $row) => $this->presentSettlement($row));
+
+        return ApiResponse::success($paginator);
     }
 
     /**
@@ -42,13 +52,36 @@ class SettlementController extends Controller
     public function pendingCash(Request $request)
     {
         $perPage = (int) $request->get('per_page', 100);
+        $merchantId = $request->filled('merchant_id') ? (int) $request->input('merchant_id') : null;
+        $marketplaceId = $request->filled('marketplace_id') ? (int) $request->input('marketplace_id') : null;
+        $merchantSearch = trim((string) $request->input('merchant', $request->input('q', '')));
 
         $records = PodRecord::query()
-            ->with('shipment')
+            ->with([
+                'shipment',
+                'merchant:id,name,code,external_store_id,marketplace_id',
+                'merchant.marketplace:id,name,code',
+            ])
             ->where('status', 'collected')
             ->where(function ($q) {
                 $q->whereNull('payment_destination')
                     ->orWhere('payment_destination', '!=', 'merchant');
+            })
+            ->when($merchantId, fn ($q) => $q->where('merchant_id', $merchantId))
+            ->when($marketplaceId, function ($q) use ($marketplaceId) {
+                $q->whereHas('merchant', fn ($mq) => $mq->where('marketplace_id', $marketplaceId));
+            })
+            ->when($merchantSearch !== '', function ($q) use ($merchantSearch) {
+                if (ctype_digit($merchantSearch)) {
+                    $q->where('merchant_id', (int) $merchantSearch);
+                } else {
+                    $q->whereHas('merchant', function ($mq) use ($merchantSearch) {
+                        $like = '%'.$merchantSearch.'%';
+                        $mq->where('name', 'like', $like)
+                            ->orWhere('external_store_id', 'like', $like)
+                            ->orWhere('code', 'like', $like);
+                    });
+                }
             })
             ->latest()
             ->limit($perPage)
@@ -58,20 +91,50 @@ class SettlementController extends Controller
 
         // Fallback: shipment marked pending_deposit but POD row missing / wrong status.
         $orphanShipments = Shipment::query()
+            ->with([
+                'merchant:id,name,code,external_store_id,marketplace_id',
+                'merchant.marketplace:id,name,code',
+            ])
             ->where('status', 'delivered')
             ->where('settlement_status', 'pending_deposit')
             ->when($coveredShipmentIds !== [], fn ($q) => $q->whereNotIn('id', $coveredShipmentIds))
+            ->when($merchantId, fn ($q) => $q->where('merchant_id', $merchantId))
+            ->when($marketplaceId, function ($q) use ($marketplaceId) {
+                $q->where(function ($inner) use ($marketplaceId) {
+                    $inner->where('marketplace_id', $marketplaceId)
+                        ->orWhereHas('merchant', fn ($mq) => $mq->where('marketplace_id', $marketplaceId));
+                });
+            })
+            ->when($merchantSearch !== '', function ($q) use ($merchantSearch) {
+                if (ctype_digit($merchantSearch)) {
+                    $q->where('merchant_id', (int) $merchantSearch);
+                } else {
+                    $q->whereHas('merchant', function ($mq) use ($merchantSearch) {
+                        $like = '%'.$merchantSearch.'%';
+                        $mq->where('name', 'like', $like)
+                            ->orWhere('external_store_id', 'like', $like)
+                            ->orWhere('code', 'like', $like);
+                    });
+                }
+            })
             ->latest('delivered_at')
             ->limit($perPage)
             ->get();
 
         $rows = $records->map(function (PodRecord $record) {
+            $merchant = $record->merchant;
+
             return [
                 'id' => $record->id,
                 'source' => 'pod_record',
                 'pod_record_id' => $record->id,
                 'shipment_id' => $record->shipment_id,
                 'merchant_id' => $record->merchant_id,
+                'merchant_name' => $this->merchantName($merchant),
+                'external_store_id' => $merchant?->external_store_id,
+                'marketplace_id' => $merchant?->marketplace_id,
+                'marketplace_name' => $merchant?->marketplace?->name,
+                'merchant' => $this->merchantBrief($merchant),
                 'collected_by' => $record->collected_by,
                 'pod_amount' => $record->pod_amount,
                 'collected_amount' => $record->collected_amount,
@@ -83,12 +146,18 @@ class SettlementController extends Controller
         })->values();
 
         foreach ($orphanShipments as $shipment) {
+            $merchant = $shipment->merchant;
             $rows->push([
                 'id' => 'shipment-'.$shipment->id,
                 'source' => 'shipment_fallback',
                 'pod_record_id' => null,
                 'shipment_id' => $shipment->id,
                 'merchant_id' => $shipment->merchant_id,
+                'merchant_name' => $this->merchantName($merchant),
+                'external_store_id' => $merchant?->external_store_id,
+                'marketplace_id' => $shipment->marketplace_id ?: $merchant?->marketplace_id,
+                'marketplace_name' => $merchant?->marketplace?->name,
+                'merchant' => $this->merchantBrief($merchant),
                 'collected_by' => null,
                 'pod_amount' => $shipment->pod_amount,
                 'collected_amount' => $shipment->pod_amount,
@@ -112,6 +181,11 @@ class SettlementController extends Controller
                 'settlements' => MerchantSettlement::query()->count(),
             ],
             'hint' => 'Cash POD from rider complete appears here first. Settlements table stays empty until you Generate settlement after deposit (or on_collection path).',
+            'filters' => [
+                'marketplace_id' => $marketplaceId,
+                'merchant_id' => $merchantId,
+                'merchant' => $merchantSearch !== '' ? $merchantSearch : null,
+            ],
         ]);
     }
 
@@ -160,9 +234,17 @@ class SettlementController extends Controller
 
         $adjustments = (float) ($data['adjustments'] ?? 0);
         $final = $totalPod + $adjustments; // delivery fees billed separately via invoices
+        $merchant = Merchant::query()
+            ->with('marketplace:id,name,code')
+            ->find($data['merchant_id']);
 
         return ApiResponse::success([
             'cash_path' => $cashPath,
+            'merchant_id' => (int) $data['merchant_id'],
+            'merchant_name' => $this->merchantName($merchant),
+            'external_store_id' => $merchant?->external_store_id,
+            'marketplace_id' => $merchant?->marketplace_id,
+            'marketplace_name' => $merchant?->marketplace?->name,
             'shipment_count' => count($lines),
             'total_pod_collected' => round($totalPod, 2),
             'total_delivery_charges' => round($totalDelivery, 2),
@@ -262,7 +344,11 @@ class SettlementController extends Controller
         });
 
         return ApiResponse::success(
-            $settlement->load('items'),
+            $this->presentSettlement($settlement->load([
+                'items',
+                'merchant:id,name,code,external_store_id,marketplace_id',
+                'merchant.marketplace:id,name,code',
+            ])),
             'Settlement generated (POD cash + delivery charges).',
             201,
         );
@@ -296,12 +382,23 @@ class SettlementController extends Controller
                 ->update(['status' => 'settled', 'settled_at' => now()]);
         });
 
-        return ApiResponse::success($settlement->fresh('items'), 'Settlement marked paid.');
+        return ApiResponse::success(
+            $this->presentSettlement($settlement->fresh([
+                'items',
+                'merchant:id,name,code,external_store_id,marketplace_id',
+                'merchant.marketplace:id,name,code',
+            ])),
+            'Settlement marked paid.',
+        );
     }
 
     public function show(MerchantSettlement $settlement)
     {
-        return ApiResponse::success($settlement->load('items.shipment'));
+        return ApiResponse::success($this->presentSettlement($settlement->load([
+            'items.shipment',
+            'merchant:id,name,code,external_store_id,marketplace_id',
+            'merchant.marketplace:id,name,code',
+        ])));
     }
 
     public function payHamroPay(MerchantSettlement $settlement)
@@ -330,4 +427,79 @@ class SettlementController extends Controller
         return $this->markPaid($request, $settlement);
     }
 
+    private function applySettlementFilters($query, Request $request): void
+    {
+        if ($request->filled('merchant_id')) {
+            $query->where('merchant_id', (int) $request->input('merchant_id'));
+        }
+
+        if ($request->filled('marketplace_id')) {
+            $marketplaceId = (int) $request->input('marketplace_id');
+            $query->whereHas('merchant', fn ($mq) => $mq->where('marketplace_id', $marketplaceId));
+        }
+
+        $merchantSearch = trim((string) $request->input('merchant', $request->input('q', '')));
+        if ($merchantSearch !== '') {
+            if (ctype_digit($merchantSearch)) {
+                $query->where('merchant_id', (int) $merchantSearch);
+            } else {
+                $query->whereHas('merchant', function ($mq) use ($merchantSearch) {
+                    $like = '%'.$merchantSearch.'%';
+                    $mq->where('name', 'like', $like)
+                        ->orWhere('external_store_id', 'like', $like)
+                        ->orWhere('code', 'like', $like);
+                });
+            }
+        }
+
+        if ($request->filled('status')) {
+            $query->where('status', $request->input('status'));
+        }
+    }
+
+    private function presentSettlement(MerchantSettlement $settlement): MerchantSettlement
+    {
+        $merchant = $settlement->merchant;
+        $settlement->setAttribute('merchant_name', $this->merchantName($merchant));
+        $settlement->setAttribute('external_store_id', $merchant?->external_store_id);
+        $settlement->setAttribute('marketplace_id', $merchant?->marketplace_id);
+        $settlement->setAttribute('marketplace_name', $merchant?->marketplace?->name);
+        $settlement->setAttribute('marketplace_code', $merchant?->marketplace?->code);
+        $settlement->setAttribute('delivery_count', $settlement->relationLoaded('items') ? $settlement->items->count() : 0);
+
+        return $settlement;
+    }
+
+    private function merchantName(?Merchant $merchant): ?string
+    {
+        if (! $merchant) {
+            return null;
+        }
+
+        $name = trim((string) ($merchant->name ?: ''));
+
+        return $name !== '' ? $name : ('Merchant #'.$merchant->id);
+    }
+
+    private function merchantBrief(?Merchant $merchant): ?array
+    {
+        if (! $merchant) {
+            return null;
+        }
+
+        return [
+            'id' => $merchant->id,
+            'name' => $this->merchantName($merchant),
+            'external_store_id' => $merchant->external_store_id,
+            'code' => $merchant->code ?? null,
+            'marketplace_id' => $merchant->marketplace_id,
+            'marketplace' => $merchant->marketplace
+                ? [
+                    'id' => $merchant->marketplace->id,
+                    'name' => $merchant->marketplace->name,
+                    'code' => $merchant->marketplace->code,
+                ]
+                : null,
+        ];
+    }
 }

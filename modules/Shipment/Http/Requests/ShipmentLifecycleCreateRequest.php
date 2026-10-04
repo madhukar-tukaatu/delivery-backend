@@ -54,6 +54,7 @@ class ShipmentLifecycleCreateRequest extends FormRequest
                 'pod_amount' => data_get($payment, 'pod_amount') ?? $this->input('pod_amount'),
                 'delivery_charge_paid_by' => data_get($payment, 'delivery_charge_paid_by') ?? $this->input('delivery_charge_paid_by'),
                 'delivery_charge' => data_get($payment, 'delivery_charge') ?? $this->input('delivery_charge'),
+                'delivery_free_by' => data_get($payment, 'delivery_free_by') ?? $this->input('delivery_free_by') ?? 'none',
             ], fn ($v) => $v !== null && $v !== '')),
             'weight' => $weight,
             'delivery_charge' => $this->input('delivery_charge') ?? data_get($payment, 'delivery_charge'),
@@ -89,7 +90,10 @@ class ShipmentLifecycleCreateRequest extends FormRequest
             'payment.type' => ['nullable', 'in:prepaid,pod'],
             'payment.pod_amount' => ['nullable', 'numeric', 'min:0'],
             'payment.delivery_charge_paid_by' => ['nullable', 'in:merchant,customer'],
+            'delivery_free_by' => ['nullable', 'in:none,store'],
+            'payment.delivery_free_by' => ['nullable', 'in:none,store'],
             'special_instruction' => ['nullable', 'string'],
         ];
     }
+
 }

@@ -119,6 +119,7 @@ class ShipmentOperationsService
                     : 0;
 
                 $shipment->delivery_charge_paid_by = $payment['delivery_charge_paid_by'] ?? 'merchant';
+                $shipment->delivery_free_by = \Modules\Settlement\Services\SettlementWorkflowService::resolveFreeBy($payload, $source === 'admin_panel');
                 $shipment->delivery_charge = $fare['delivery_charge'] ?? 0;
                 $shipment->total_collectable = $fare['total_collectable'] ?? 0;
 
@@ -390,6 +391,10 @@ class ShipmentOperationsService
                 'delivery_charge_paid_by' => $payload['delivery_charge_paid_by']
                     ?? data_get($payload, 'payment.delivery_charge_paid_by')
                     ?? 'merchant',
+
+                'delivery_free_by' => $payload['delivery_free_by']
+                    ?? data_get($payload, 'payment.delivery_free_by')
+                    ?? 'none',
             ],
         ]);
     }

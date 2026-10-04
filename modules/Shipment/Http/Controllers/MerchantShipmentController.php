@@ -366,6 +366,8 @@ class MerchantShipmentController extends Controller
             'pod_charge'               => ['nullable', 'numeric', 'min:0'],
             'delivery_charge_paid_by' => ['nullable', 'in:customer,merchant'],
 
+            'delivery_free_by' => ['nullable', 'in:none,store'],
+
             'self_drop'               => ['nullable', 'boolean'],
             'special_instructions'    => ['nullable', 'string', 'max:1000'],
             'remarks'                 => ['nullable', 'string', 'max:1000'],

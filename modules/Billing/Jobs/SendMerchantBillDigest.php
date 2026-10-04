@@ -56,7 +56,7 @@ class SendMerchantBillDigest implements ShouldQueue
             ? 'Weekly Delivery Charges Summary' 
             : 'Daily Delivery Charges Summary';
 
-        $body = $billingService->buildDigestEmailBody($invoices->toArray());
+        $body = $billingService->buildDigestEmailBody($invoices);
 
         try {
             Mail::raw($body, function ($message) use ($email, $subject) {
@@ -72,6 +72,8 @@ class SendMerchantBillDigest implements ShouldQueue
                     'sent_at' => now(),
                 ]);
             }
+
+            $billingService->stampInvoicesSent($invoices);
 
             Log::info('merchant_bill_digest.sent', [
                 'merchant_id' => $this->merchantId,

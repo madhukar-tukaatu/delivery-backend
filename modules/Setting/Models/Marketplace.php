@@ -20,6 +20,8 @@ class Marketplace extends Model
 
     protected $hidden = [
         'callback_secret',
+        'api_key',
+        'api_secret',
     ];
 
     protected function casts(): array
@@ -53,6 +55,89 @@ class Marketplace extends Model
         } catch (\Throwable $e) {
             Log::warning('Marketplace callback_secret decrypt failed', [
                 'id' => $this->attributes['id'] ?? null,
+                'message' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
+    public function setApiKeyAttribute(?string $value): void
+    {
+        $this->attributes['api_key'] = $this->encryptOptionalSecret($value);
+    }
+
+    public function getApiKeyAttribute($value): ?string
+    {
+        return $this->decryptOptionalSecret($value, 'api_key');
+    }
+
+    public function setApiSecretAttribute(?string $value): void
+    {
+        $this->attributes['api_secret'] = $this->encryptOptionalSecret($value);
+    }
+
+    public function getApiSecretAttribute($value): ?string
+    {
+        return $this->decryptOptionalSecret($value, 'api_secret');
+    }
+
+    /**
+     * Shipment marketplace first, then the store's marketplace.
+     */
+    public static function resolveForShipment($shipment, ?Merchant $merchant): ?self
+    {
+        $marketplaceId = $shipment?->marketplace_id;
+        if ($marketplaceId) {
+            $row = static::query()->active()->find($marketplaceId);
+            if ($row) {
+                return $row;
+            }
+        }
+
+        return static::resolveFromMerchant($merchant);
+    }
+
+    /**
+     * Absolute POD request URL. Path defaults unless meta.pod_payment_request_path is set.
+     */
+    public function podPaymentRequestUrl(): string
+    {
+        $base = rtrim(trim((string) ($this->api_base_url ?? '')), '/');
+        if ($base === '') {
+            return '';
+        }
+
+        $path = trim((string) data_get($this->meta, 'pod_payment_request_path', ''));
+        $legacy = '/api/v1/express/pod-payment/request';
+        if ($path === '' || $path === $legacy) {
+            $path = '/api/v1/gateway/payments/pod-qr';
+        }
+
+        return $base . '/' . ltrim($path, '/');
+    }
+
+    private function encryptOptionalSecret(?string $value): ?string
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        return Crypt::encryptString($value);
+    }
+
+    private function decryptOptionalSecret($value, string $field): ?string
+    {
+        if (! $value) {
+            return null;
+        }
+
+        try {
+            return Crypt::decryptString($value);
+        } catch (\Throwable $e) {
+            Log::warning('Marketplace secret decrypt failed', [
+                'id' => $this->attributes['id'] ?? null,
+                'field' => $field,
                 'message' => $e->getMessage(),
             ]);
 

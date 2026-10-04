@@ -40,17 +40,22 @@ Route::prefix('v1/admin')
             | marketplaces.view / marketplaces.manage (via named routes below)
             */
             Route::get('marketplaces', [MarketplaceController::class, 'index'])
-                ->name('marketplaces.index');
+                ->name('marketplaces.index')
+                ->adminMenu('Marketplaces', '/admin/marketplaces', 'api', 75, 'Network', 'admin', 'marketplaces.view');
             Route::post('marketplaces', [MarketplaceController::class, 'store'])
                 ->name('marketplaces.store');
             Route::get('marketplaces/{marketplace}', [MarketplaceController::class, 'show'])
                 ->name('marketplaces.show');
             Route::put('marketplaces/{marketplace}', [MarketplaceController::class, 'update'])
                 ->name('marketplaces.update');
+            Route::delete('marketplaces/{marketplace}', [MarketplaceController::class, 'destroy'])
+                ->name('marketplaces.destroy');
             Route::post('marketplaces/{marketplace}/hamropay', [MarketplaceController::class, 'upsertHamroPay'])
                 ->name('marketplaces.hamropay');
             Route::post('marketplaces/{marketplace}/stores', [MarketplaceController::class, 'syncStores'])
                 ->name('marketplaces.stores');
+            Route::post('marketplaces/{marketplace}/api-keys/reissue', [MarketplaceController::class, 'reissueApiKey'])
+                ->name('marketplaces.api-keys.reissue');
 
         });
 

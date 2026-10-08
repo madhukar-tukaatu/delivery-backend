@@ -13,6 +13,9 @@ use Modules\Branch\Models\BranchTeamPosition;
 use Modules\Delivery\Models\DeliveryAssignment;
 use Modules\Merchant\Models\Merchant;
 use Modules\Pickup\Models\PickupRequest;
+use Illuminate\Support\Facades\Log;
+use Spatie\Permission\Exceptions\RoleDoesNotExist;
+use Spatie\Permission\Guard;
 use Spatie\Permission\PermissionRegistrar;
 use Spatie\Permission\Traits\HasRoles;
 
@@ -34,19 +37,40 @@ class User extends Authenticatable
     protected static function booted(): void
     {
         static::saved(function (User $user) {
-            if (!empty($user->role)) {
-                $currentRoles = $user
-                    ->getRoleNames()
-                    ->values()
-                    ->all();
-
-                if ($currentRoles !== [$user->role]) {
-                    $user->syncRoles([$user->role]);
-
-                    app(PermissionRegistrar::class)
-                        ->forgetCachedPermissions();
-                }
+            $role = trim((string) $user->role);
+            if ($role === '') {
+                return;
             }
+
+            $currentRoles = $user
+                ->getRoleNames()
+                ->values()
+                ->all();
+
+            if ($currentRoles === [$role]) {
+                return;
+            }
+
+            // The users.role column can hold a legacy value (old DB default
+            // "staff") that is not a Spatie role. Do not fail the save and do
+            // not wipe the user's real roles in that case.
+            $guard = Guard::getDefaultName($user);
+            try {
+                app(PermissionRegistrar::class)->getRoleClass()::findByName($role, $guard);
+            } catch (RoleDoesNotExist) {
+                Log::warning('users.role does not match an existing role; Spatie roles left unchanged.', [
+                    'user_id' => $user->id,
+                    'role' => $role,
+                    'guard' => $guard,
+                ]);
+
+                return;
+            }
+
+            $user->syncRoles([$role]);
+
+            app(PermissionRegistrar::class)
+                ->forgetCachedPermissions();
         });
     }
 

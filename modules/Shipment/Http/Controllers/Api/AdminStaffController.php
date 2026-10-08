@@ -200,6 +200,9 @@ final class AdminStaffController extends Controller
             'branch_id' =>
                 $branchId,
 
+            'role' =>
+                $validated['role'],
+
             'is_active' => true,
         ]);
 
@@ -303,6 +306,9 @@ final class AdminStaffController extends Controller
                     $validated['password']
                 );
         }
+
+        $staff->role =
+            $validated['role'];
 
         /*
          * Never change branch_id here.

@@ -337,6 +337,15 @@ final class StaffController extends Controller
             'role' => [
                 'required',
                 'string',
+                'max:64',
+            ],
+
+            // Only used for global admins; branch managers always get their own branch.
+            'branch_id' => [
+                'sometimes',
+                'nullable',
+                'integer',
+                'exists:branches,id',
             ],
 
             'is_active' => [
@@ -432,6 +441,7 @@ final class StaffController extends Controller
             'role' => [
                 'required',
                 'string',
+                'max:64',
             ],
 
             'is_active' => [

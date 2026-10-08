@@ -8,8 +8,9 @@ use App\Models\User;
 use App\Notifications\StaffAccountUpdatedNotification;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Validation\ValidationException;
+use Spatie\Permission\Guard;
 use Spatie\Permission\Models\Role;
-use RuntimeException;
 
 final class StaffService
 {
@@ -32,6 +33,37 @@ final class StaffService
         'dispatch_staff',
         'accounts_staff',
         'support_staff',
+        'branch_staff',
+        'warehouse_staff',
+    ];
+
+    /** Roles only global admins may hand out (branch managers cannot). */
+    private const ADMIN_ONLY_ROLES = [
+        'branch_manager',
+    ];
+
+    /** Users who may assign ADMIN_ONLY_ROLES. */
+    private const GLOBAL_ADMIN_ROLES = [
+        'super_admin',
+        'main_admin',
+        'admin',
+    ];
+
+    /** Form / legacy values mapped to real role names. */
+    private const ROLE_ALIASES = [
+        'staff' => 'branch_staff',
+        'branch' => 'branch_staff',
+        'delivery' => 'delivery_staff',
+        'delivery_rider' => 'rider',
+        'pickup' => 'pickup_staff',
+        'booking' => 'booking_staff',
+        'dispatch' => 'dispatch_staff',
+        'account' => 'accounts_staff',
+        'accounts' => 'accounts_staff',
+        'account_staff' => 'accounts_staff',
+        'support' => 'support_staff',
+        'warehouse' => 'warehouse_staff',
+        'manager' => 'branch_manager',
     ];
 
     /*
@@ -141,11 +173,11 @@ final class StaffService
         $query = Role::query()
             ->where(
                 'guard_name',
-                'web'
+                $this->guardName()
             )
             ->whereIn(
                 'name',
-                self::STAFF_ROLES
+                $this->assignableRolesFor($user)
             )
             ->orderBy(
                 'name'
@@ -167,12 +199,14 @@ final class StaffService
         User $creator,
         array $data
     ): User {
-        $roleName = $this->validateRole(
+        $roleName = $this->resolveRole(
+            $creator,
             $data['role'] ?? null
         );
 
         $branchId = $this->resolveBranchId(
-            $creator
+            $creator,
+            $data['branch_id'] ?? null
         );
 
         $staff = new User();
@@ -193,6 +227,11 @@ final class StaffService
 
         $staff->branch_id =
             $branchId;
+
+        // Keep the legacy users.role column in sync with the Spatie role so
+        // later saves never fall back to the old DB default ("staff").
+        $staff->role =
+            $roleName;
 
         $staff->is_active =
             array_key_exists(
@@ -225,8 +264,10 @@ final class StaffService
         User $staff,
         array $data
     ): User {
-        $roleName = $this->validateRole(
-            $data['role'] ?? null
+        $roleName = $this->resolveRole(
+            $editor,
+            $data['role'] ?? null,
+            $staff
         );
 
         /*
@@ -281,6 +322,9 @@ final class StaffService
             $staff->is_active =
                 (bool) $data['is_active'];
         }
+
+        $staff->role =
+            $roleName;
 
         $staff->save();
 
@@ -363,7 +407,8 @@ final class StaffService
     */
 
     private function resolveBranchId(
-        User $creator
+        User $creator,
+        mixed $requestedBranchId = null
     ): ?int {
         if (
             $creator->hasAnyRole([
@@ -371,20 +416,21 @@ final class StaffService
                 'admin',
             ])
         ) {
-            /*
-             * Global admins must explicitly provide
-             * a branch in the future if cross-branch
-             * staff creation is required.
-             */
+            // Global admins may pick the branch; default to their own.
+            if ($requestedBranchId !== null && $requestedBranchId !== '') {
+                return (int) $requestedBranchId;
+            }
+
             return $creator->branch_id !== null
                 ? (int) $creator->branch_id
                 : null;
         }
 
+        // Branch managers always create staff in their own branch.
         if ($creator->branch_id === null) {
-            throw new RuntimeException(
-                'The authenticated user is not assigned to a branch.'
-            );
+            throw ValidationException::withMessages([
+                'branch_id' => 'Your account is not assigned to a branch, so you cannot create branch staff.',
+            ]);
         }
 
         return (int) $creator->branch_id;
@@ -396,24 +442,67 @@ final class StaffService
     |--------------------------------------------------------------------------
     */
 
-    private function validateRole(
-        ?string $role
-    ): string {
-        $role = trim(
-            (string) $role
-        );
+    /**
+     * Roles $user may assign from branch staff management.
+     *
+     * @return list<string>
+     */
+    private function assignableRolesFor(
+        User $user
+    ): array {
+        if ($user->hasAnyRole(self::GLOBAL_ADMIN_ROLES)) {
+            return self::STAFF_ROLES;
+        }
 
-        if (
-            $role === '' ||
-            ! in_array(
-                $role,
-                self::STAFF_ROLES,
-                true
-            )
-        ) {
-            throw new RuntimeException(
-                'The selected role cannot be assigned from branch staff management.'
-            );
+        return array_values(array_diff(
+            self::STAFF_ROLES,
+            self::ADMIN_ONLY_ROLES
+        ));
+    }
+
+    private function guardName(): string
+    {
+        return Guard::getDefaultName(User::class);
+    }
+
+    /**
+     * Normalise the requested role (aliases like "staff" -> "branch_staff"),
+     * check the actor may assign it and that it exists for the users' guard.
+     * Problems are returned as 422 validation errors, never a 500.
+     */
+    private function resolveRole(
+        User $actor,
+        ?string $requested,
+        ?User $staff = null
+    ): string {
+        $role = strtolower(trim((string) $requested));
+        $role = (string) preg_replace('/[\s\-]+/', '_', $role);
+        $role = self::ROLE_ALIASES[$role] ?? $role;
+
+        if ($role === '' || ! in_array($role, self::STAFF_ROLES, true)) {
+            throw ValidationException::withMessages([
+                'role' => 'The selected role cannot be assigned from branch staff management.',
+            ]);
+        }
+
+        // Editing someone who already has this role is fine (no escalation).
+        $unchanged = $staff !== null && $staff->hasRole($role);
+
+        if (! $unchanged && ! in_array($role, $this->assignableRolesFor($actor), true)) {
+            throw ValidationException::withMessages([
+                'role' => 'You are not allowed to assign the "'.$role.'" role.',
+            ]);
+        }
+
+        $exists = Role::query()
+            ->where('name', $role)
+            ->where('guard_name', $this->guardName())
+            ->exists();
+
+        if (! $exists) {
+            throw ValidationException::withMessages([
+                'role' => 'The "'.$role.'" role is not set up on this server yet. Ask an administrator to run the latest migrations or create the role.',
+            ]);
         }
 
         return $role;

@@ -69,6 +69,9 @@ class RequestTukaatuPodPaymentJob implements ShouldQueue
                 'status' => 'failed',
                 'failed_at' => now(),
                 'last_error' => $target['error'],
+                'response_payload' => array_merge((array) $session->response_payload, [
+                    'outbound' => $this->outboundInfo($target, null, $target['error']),
+                ]),
             ]);
             event(new PodPaymentUpdated($session->fresh()));
             Log::warning('RequestTukaatuPodPaymentJob: marketplace POD target missing', [
@@ -87,13 +90,21 @@ class RequestTukaatuPodPaymentJob implements ShouldQueue
         $apiKey = $target['api_key'];
         $apiSecret = $target['api_secret'];
 
-        Log::info('RequestTukaatuPodPaymentJob: posting POD request', [
+        // Which marketplace API this store's POD request goes to
+        // (FCA stores -> api.fca.com.np, Tukaatu stores -> api.tukaatu.com).
+        // Never log header values.
+        Log::info('POD pod-qr request', [
             'session_id' => $session->payment_session_id,
+            'delivery_assignment_id' => $session->delivery_assignment_id ?? null,
+            'shipment_id' => $session->shipment_id,
+            'merchant_id' => $session->merchant_id,
+            'merchant_name' => $session->merchant?->name,
+            'external_store_id' => $session->external_store_id ?: $session->merchant?->external_store_id,
             'marketplace_id' => $target['marketplace_id'],
-            'marketplace_code' => $target['marketplace_code'],
-            'host' => $target['host'],
-            'key_prefix' => $target['key_prefix'] ?? '',
-            'credential_source' => $target['credential_source'],
+            'marketplace_slug' => $target['marketplace_code'],
+            'marketplace_name' => $target['marketplace_name'],
+            'url' => $url,
+            'has_auth_headers' => $apiKey !== '' || $apiSecret !== '',
         ]);
 
         $shipment = $session->shipment;
@@ -139,16 +150,21 @@ class RequestTukaatuPodPaymentJob implements ShouldQueue
 
             $response = $request->post($url, $body);
         } catch (Throwable $e) {
-            Log::warning('RequestTukaatuPodPaymentJob: connection failed', [
+            Log::warning('POD pod-qr response', [
                 'session_id' => $session->payment_session_id,
+                'marketplace_name' => $target['marketplace_name'],
                 'url' => $url,
-                'error' => $e->getMessage(),
+                'http_status' => null,
+                'success' => false,
+                'message' => 'Connection failed: '.$e->getMessage(),
+                'has_payment_url' => false,
             ]);
             $session->update([
                 'status' => 'failed',
                 'failed_at' => now(),
                 'last_error' => 'Marketplace payment API is unreachable',
                 'response_payload' => array_merge((array) $session->response_payload, [
+                    'outbound' => $this->outboundInfo($target, null, 'Marketplace payment API is unreachable'),
                     'tukaatu_request' => [
                         'url' => $url,
                         'body' => $body,
@@ -173,6 +189,7 @@ class RequestTukaatuPodPaymentJob implements ShouldQueue
 
         $session->update([
             'response_payload' => array_merge((array) $session->response_payload, [
+                'outbound' => $this->outboundInfo($target, $status, $providerMessage),
                 'tukaatu_request' => [
                     'url' => $url,
                     'body' => $body,
@@ -182,6 +199,23 @@ class RequestTukaatuPodPaymentJob implements ShouldQueue
                 ],
             ]),
         ]);
+
+        $responsePaymentUrl = data_get($payload, 'data.payment_url') ?? data_get($payload, 'payment_url')
+            ?? data_get($payload, 'data.checkout_url') ?? data_get($payload, 'checkout_url');
+        $responseOk = $response->successful()
+            && (! array_key_exists('success', $payload) || in_array($payload['success'], [true, 1, '1', 'true'], true));
+        $responseLog = [
+            'session_id' => $session->payment_session_id,
+            'marketplace_name' => $target['marketplace_name'],
+            'url' => $url,
+            'http_status' => $status,
+            'success' => $responseOk,
+            'message' => $this->safeMessage($providerMessage),
+            'has_payment_url' => is_string($responsePaymentUrl) && trim($responsePaymentUrl) !== '',
+        ];
+        $responseOk
+            ? Log::info('POD pod-qr response', $responseLog)
+            : Log::warning('POD pod-qr response', $responseLog);
 
         $reportedSuccess = $payload['success'] ?? null;
         $successFlag = ! array_key_exists('success', $payload)
@@ -288,6 +322,38 @@ class RequestTukaatuPodPaymentJob implements ShouldQueue
     }
 
     /**
+     * Outbound summary stored on the session (no headers, keys or secrets).
+     *
+     * @return array<string, mixed>
+     */
+    private function outboundInfo(array $target, ?int $httpStatus, ?string $message): array
+    {
+        return [
+            'url' => $target['url'] !== '' ? $target['url'] : null,
+            'marketplace_id' => $target['marketplace_id'],
+            'marketplace_slug' => $target['marketplace_code'],
+            'marketplace_name' => $target['marketplace_name'] ?? null,
+            'http_status' => $httpStatus,
+            'message' => $this->safeMessage($message),
+            'requested_at' => now()->toIso8601String(),
+        ];
+    }
+
+    private function safeMessage(?string $message): ?string
+    {
+        $message = is_string($message) ? trim($message) : '';
+        if ($message === '') {
+            return null;
+        }
+
+        if (preg_match('/api[_\-]?key|secret|password|token|authorization/i', $message)) {
+            return 'Marketplace rejected the request (details hidden).';
+        }
+
+        return mb_substr($message, 0, 300);
+    }
+
+    /**
      * Short rider-facing last_error from marketplace HTTP failure (no secrets).
      */
     private function mapProviderFailure(int $status, ?string $providerMessage): string
@@ -365,6 +431,7 @@ class RequestTukaatuPodPaymentJob implements ShouldQueue
             'key_prefix' => '',
             'marketplace_id' => $marketplace?->id,
             'marketplace_code' => $marketplace?->code,
+            'marketplace_name' => $marketplace?->name,
             'error' => null,
         ];
 

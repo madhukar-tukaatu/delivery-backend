@@ -992,6 +992,51 @@ final class TukaatuPodPaymentService
             'paid_at' => $session->paid_at?->toIso8601String(),
             'created_at' => $session->created_at?->toIso8601String(),
             'last_error' => $session->last_error,
+            'gateway' => $this->gatewayInfo($session),
         ];
+    }
+
+    /**
+     * Which marketplace pod-qr API this session was (or will be) sent to.
+     * Uses the stored outbound summary; before the first call, resolves the
+     * store's marketplace the same way the job does. No keys or headers.
+     *
+     * @return array{marketplace_id: ?int, marketplace_slug: ?string, marketplace_name: ?string, api_url: ?string, http_status: ?int, last_error: ?string, source: string}
+     */
+    private function gatewayInfo(PodPaymentSession $session): array
+    {
+        $payload = (array) $session->response_payload;
+        $outbound = is_array($payload['outbound'] ?? null) ? $payload['outbound'] : [];
+        $lastRequest = is_array($payload['tukaatu_request'] ?? null) ? $payload['tukaatu_request'] : [];
+
+        $info = [
+            'marketplace_id' => isset($outbound['marketplace_id']) ? (int) $outbound['marketplace_id'] : null,
+            'marketplace_slug' => $outbound['marketplace_slug'] ?? null,
+            'marketplace_name' => $outbound['marketplace_name'] ?? null,
+            'api_url' => $outbound['url'] ?? ($lastRequest['url'] ?? null),
+            'http_status' => isset($outbound['http_status'])
+                ? (int) $outbound['http_status']
+                : (isset($lastRequest['http_status']) ? (int) $lastRequest['http_status'] : null),
+            'last_error' => $session->last_error,
+            'source' => $outbound !== [] ? 'last_request' : ($lastRequest !== [] ? 'last_request_legacy' : 'resolved'),
+        ];
+
+        if ($info['marketplace_id'] === null || $info['api_url'] === null) {
+            try {
+                $resolved = app(MarketplacePaymentUrlResolver::class)->resolve($session->shipment, $session->merchant);
+                $marketplace = $resolved['marketplace'];
+                $info['marketplace_id'] ??= $marketplace?->id ? (int) $marketplace->id : null;
+                $info['marketplace_slug'] ??= $marketplace?->code;
+                $info['marketplace_name'] ??= $marketplace?->name;
+                $info['api_url'] ??= ($resolved['payment_request_url'] ?? '') !== '' ? $resolved['payment_request_url'] : null;
+            } catch (\Throwable $e) {
+                Log::warning('POD gateway info: marketplace resolve failed', [
+                    'session_id' => $session->payment_session_id,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return $info;
     }
 }

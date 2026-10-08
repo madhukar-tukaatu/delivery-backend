@@ -5,6 +5,7 @@ namespace Modules\Report\Http\Controllers;
 use App\Http\Controllers\Controller;
 use App\Models\User;
 use App\Support\ApiResponse;
+use App\Support\FinanceBranchScope;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Modules\Branch\Models\Branch;
@@ -113,7 +114,8 @@ class ReportController extends Controller
             'shipment_counts' => (clone $shipmentQuery)->with('merchant:id,name')
                                     ->selectRaw('merchant_id, count(*) as total, sum(pod_amount) as pod_total')
                                     ->groupBy('merchant_id')->get(),
-            'settlements'     => MerchantSettlement::selectRaw('status, count(*) as total, sum(final_payable_amount) as amount')->groupBy('status')->get(),
+            // Branch users: settlements with shipments of their branch only.
+            'settlements'     => FinanceBranchScope::scopeSettlements(MerchantSettlement::query(), $user)->selectRaw('status, count(*) as total, sum(final_payable_amount) as amount')->groupBy('status')->get(),
         ]);
     }
 

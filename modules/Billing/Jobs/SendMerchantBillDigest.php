@@ -22,6 +22,7 @@ class SendMerchantBillDigest implements ShouldQueue
     public function __construct(
         public int $merchantId,
         public string $period = 'daily', // 'daily' or 'weekly'
+        public ?array $branchIds = null, // manual digest from a branch user: only these branches' bills
     ) {
     }
 
@@ -45,7 +46,7 @@ class SendMerchantBillDigest implements ShouldQueue
             ? now()->subWeek()->toDateString() 
             : now()->subDay()->toDateString();
 
-        $invoices = $billingService->getUnpaidInvoicesForMerchant($this->merchantId, $fromDate, $toDate);
+        $invoices = $billingService->getUnpaidInvoicesForMerchant($this->merchantId, $fromDate, $toDate, $this->branchIds);
 
         if ($invoices->isEmpty()) {
             Log::info('merchant_bill_digest.no_unpaid_invoices', ['merchant_id' => $this->merchantId]);

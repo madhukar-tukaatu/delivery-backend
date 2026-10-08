@@ -4,6 +4,7 @@ namespace Modules\Billing\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
+use App\Support\FinanceBranchScope;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -33,6 +34,11 @@ class InvoiceController extends Controller
         if ($request->user()->role === 'merchant') {
             $query->where('merchant_id', $request->user()->merchant_id);
         }
+
+        // Branch users: invoices.branch_id (payee branch) in their branch.
+        // Company (marketplace) bills follow the same column, so a branch only sees
+        // Tukaatu / FCA bills for shipments it delivered.
+        FinanceBranchScope::scopeInvoices($query, $request->user());
         
         // Admin filters
         if ($request->filled('merchant_id')) {
@@ -55,8 +61,9 @@ class InvoiceController extends Controller
                 });
             }
         }
-        if ($request->filled('branch_id')) {
-            $query->where('branch_id', $request->branch_id);
+        // HQ may filter any branch. A branch user's branch_id for another branch is ignored.
+        if ($request->filled('branch_id') && FinanceBranchScope::canSeeBranch($request->user(), $request->branch_id)) {
+            $query->where('branch_id', (int) $request->branch_id);
         }
         if ($request->routeIs('admin.delivery-charges.index')) {
             $query->where('type', 'delivery_charges');
@@ -134,6 +141,18 @@ class InvoiceController extends Controller
         return ApiResponse::success($payload);
     }
 
+
+    /**
+     * 404 when a branch user opens another branch's bill; merchants only their own.
+     */
+    private function authorizeInvoice(Request $request, Invoice $invoice): void
+    {
+        abort_unless(
+            FinanceBranchScope::canSeeInvoice($request->user(), $invoice),
+            404,
+            'Invoice not found.'
+        );
+    }
 
     /**
      * One delivery-charge bill is one shipment. POD fee lines are not extra deliveries.
@@ -265,6 +284,8 @@ class InvoiceController extends Controller
 
     public function shipmentInvoice(Request $request, Shipment $shipment)
     {
+        abort_unless(FinanceBranchScope::canSeeShipment($request->user(), $shipment), 404, 'Shipment not found.');
+
         $invoice = $this->billing->autoEnsureForShipment($shipment);
         if (! $invoice) {
             return ApiResponse::success(null, 'No merchant-owed delivery charges to bill for this shipment.');
@@ -275,6 +296,8 @@ class InvoiceController extends Controller
 
     public function markPaid(Request $request, Invoice $invoice)
     {
+        $this->authorizeInvoice($request, $invoice);
+
         $request->validate([
             'payment_method' => ['nullable', 'string', 'max:64'],
             'reference_number' => ['nullable', 'string', 'max:191'],
@@ -283,8 +306,10 @@ class InvoiceController extends Controller
         return ApiResponse::success($this->settlePaid($invoice), 'Invoice marked paid.');
     }
 
-    public function markChecked(Invoice $invoice)
+    public function markChecked(Request $request, Invoice $invoice)
     {
+        $this->authorizeInvoice($request, $invoice);
+
         if (strtolower((string) $invoice->status) !== 'unpaid') {
             return ApiResponse::error('Only an unpaid bill can be checked.', 422);
         }
@@ -299,6 +324,8 @@ class InvoiceController extends Controller
 
     public function close(Request $request, Invoice $invoice)
     {
+        $this->authorizeInvoice($request, $invoice);
+
         if (strtolower((string) $invoice->status) === 'paid') {
             return ApiResponse::error('Invoice is already paid.', 422);
         }
@@ -325,6 +352,7 @@ class InvoiceController extends Controller
     {
         // Check permissions
         $user = $request->user();
+        $this->authorizeInvoice($request, $invoice);
         if ($user->role === 'merchant') {
             abort_unless((int) $user->merchant_id === (int) $invoice->merchant_id, 403);
         }
@@ -371,13 +399,19 @@ class InvoiceController extends Controller
             abort_unless((int) $user->merchant_id === $merchantId, 403);
         }
 
+        // Branch users: digest only carries their branch's bills.
+        $branchIds = FinanceBranchScope::applies($user) ? FinanceBranchScope::branchIds($user) : null;
+        if ($branchIds === []) {
+            abort(404, 'Merchant not found.');
+        }
+
         $fromDate = $period === 'weekly' ? now()->subWeek()->toDateString() : now()->subDay()->toDateString();
-        $unpaid = $this->billing->getUnpaidInvoicesForMerchant((int) $merchantId, $fromDate, now()->toDateString());
+        $unpaid = $this->billing->getUnpaidInvoicesForMerchant((int) $merchantId, $fromDate, now()->toDateString(), $branchIds);
         if ($unpaid->isEmpty()) {
             return ApiResponse::success(null, 'Nothing to send. Paid bills are excluded.');
         }
 
-        \Modules\Billing\Jobs\SendMerchantBillDigest::dispatch($merchantId, $period);
+        \Modules\Billing\Jobs\SendMerchantBillDigest::dispatch((int) $merchantId, $period, $branchIds);
 
         return ApiResponse::success(
             ['count' => $unpaid->count()],
@@ -398,13 +432,17 @@ class InvoiceController extends Controller
             return ApiResponse::error('Merchant ID required', 400);
         }
 
-        $unpaid = Invoice::where('merchant_id', $merchantId)
+        $user = $request->user();
+
+        $unpaid = FinanceBranchScope::scopeInvoices(Invoice::query(), $user)
+            ->where('merchant_id', $merchantId)
             ->where('type', 'delivery_charges')
             ->where('status', 'unpaid')
             ->selectRaw('COUNT(*) as count, SUM(total_amount) as total')
             ->first();
 
-        $paid = Invoice::where('merchant_id', $merchantId)
+        $paid = FinanceBranchScope::scopeInvoices(Invoice::query(), $user)
+            ->where('merchant_id', $merchantId)
             ->where('type', 'delivery_charges')
             ->where('status', 'paid')
             ->selectRaw('COUNT(*) as count, SUM(total_amount) as total')
@@ -427,6 +465,8 @@ class InvoiceController extends Controller
      */
     public function payHamroPay(Request $request, Invoice $invoice)
     {
+        $this->authorizeInvoice($request, $invoice);
+
         if (strtolower((string) $invoice->status) === 'paid') {
             throw ValidationException::withMessages([
                 'invoice' => ['Invoice is already paid.'],

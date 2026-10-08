@@ -56,6 +56,10 @@ class AccountsPaymentLifecycleController extends Controller
 
     public function markSettlementPaid(Request $request, int $settlement, PaymentWorkflowService $service): JsonResponse
     {
+        // Same finance branch rule as SettlementController: 404 outside the user's branch.
+        $model = \Modules\Settlement\Models\MerchantSettlement::query()->findOrFail($settlement);
+        abort_unless(\App\Support\FinanceBranchScope::canSeeSettlement($request->user(), $model), 404, 'Settlement not found.');
+
         $row = $service->markSettlementPaid($settlement, $request->user()->id);
 
         return response()->json(['message' => 'Settlement marked paid.', 'data' => $row]);

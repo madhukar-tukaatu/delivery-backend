@@ -4,6 +4,7 @@ namespace Modules\POD\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
+use App\Support\FinanceBranchScope;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 use Modules\POD\Models\PodDeposit;
@@ -17,12 +18,16 @@ class PodController extends Controller
     {
         $query = PodRecord::with('shipment')->latest();
         if ($request->user()->role === 'merchant') $query->where('merchant_id', $request->user()->merchant_id);
+        // Branch users: deposited_to_branch_id, or the shipment's owning branch before deposit.
+        FinanceBranchScope::scopePodRecords($query, $request->user());
         if ($request->filled('status')) $query->where('status', $request->status);
         return ApiResponse::success($query->paginate((int) $request->get('per_page', 20)));
     }
 
     public function collect(Request $request, PodRecord $pod)
     {
+        abort_unless(FinanceBranchScope::canSeePod($request->user(), $pod), 404, 'POD record not found.');
+
         if ($pod->payment_destination === 'merchant') {
             throw ValidationException::withMessages([
                 'pod' => ['This payment was already paid directly to the merchant and cannot be collected by the platform.'],
@@ -61,6 +66,14 @@ class PodController extends Controller
         ]);
 
         $recordIds = array_values(array_unique($data['pod_record_ids']));
+
+        // Branch users can only deposit their own branch's POD.
+        $visibleQuery = PodRecord::query()->whereIn('id', $recordIds);
+        FinanceBranchScope::scopePodRecords($visibleQuery, $request->user());
+        if ($visibleQuery->count() !== count($recordIds)) {
+            abort(404, 'POD record not found.');
+        }
+
         $records = PodRecord::whereIn('id', $recordIds)
             ->where(function ($query) {
                 $query->whereNull('payment_destination')
@@ -82,7 +95,8 @@ class PodController extends Controller
             }
         }
 
-        $branchId = $data['branch_id'] ?? $request->user()->branch_id;
+        // Branch users always deposit into their own branch; HQ may choose.
+        $branchId = FinanceBranchScope::writeBranchId($request->user(), $data['branch_id'] ?? null);
         $amount = $records->sum('collected_amount');
         $deposit = PodDeposit::create([
             'branch_id' => $branchId,

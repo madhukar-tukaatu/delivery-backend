@@ -4,6 +4,7 @@ namespace Modules\Billing\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
+use App\Support\FinanceBranchScope;
 use Illuminate\Http\Request;
 use Modules\Billing\Models\BranchCommissionBill;
 use Modules\Billing\Models\BranchCommissionSettlement;
@@ -17,10 +18,15 @@ class BranchCommissionController extends Controller
 
     public function settings(Request $request)
     {
+        // Branch users only read their own branch rate; another branch_id is ignored.
+        $branchId = $request->filled('branch_id') && FinanceBranchScope::canSeeBranch($request->user(), $request->branch_id)
+            ? (int) $request->branch_id
+            : null;
+
         return ApiResponse::success([
             'hq_percent' => $this->commissions->commissionRatePercent(),
-            'branch_percent' => $request->filled('branch_id')
-                ? $this->commissions->commissionRatePercent((int) $request->branch_id)
+            'branch_percent' => $branchId !== null
+                ? $this->commissions->commissionRatePercent($branchId)
                 : null,
         ]);
     }
@@ -54,17 +60,15 @@ class BranchCommissionController extends Controller
     {
         $q = BranchCommissionBill::query()->with(['branch', 'shipment'])->latest('id');
 
-        if ($request->filled('branch_id')) {
-            $q->where('branch_id', $request->branch_id);
+        $user = $request->user();
+        // Branch users: own branch only (no branch => nothing). Other-branch branch_id is ignored.
+        FinanceBranchScope::scopeBranchColumn($q, $user);
+
+        if ($request->filled('branch_id') && FinanceBranchScope::canSeeBranch($user, $request->branch_id)) {
+            $q->where('branch_id', (int) $request->branch_id);
         }
         if ($request->filled('status')) {
             $q->where('status', $request->status);
-        }
-
-        $user = $request->user();
-        $isHq = ($user->isSuperAdmin() ?? false) || $user->hasRole(['super_admin', 'main_admin', 'admin']);
-        if (! $isHq && $user->branch_id) {
-            $q->where('branch_id', $user->branch_id);
         }
 
         return ApiResponse::success($q->paginate((int) $request->get('per_page', 50)));
@@ -73,17 +77,15 @@ class BranchCommissionController extends Controller
     public function settlements(Request $request)
     {
         $q = BranchCommissionSettlement::query()->with('bills')->latest('id');
-        if ($request->filled('branch_id')) {
-            $q->where('branch_id', $request->branch_id);
+
+        $user = $request->user();
+        FinanceBranchScope::scopeBranchColumn($q, $user);
+
+        if ($request->filled('branch_id') && FinanceBranchScope::canSeeBranch($user, $request->branch_id)) {
+            $q->where('branch_id', (int) $request->branch_id);
         }
         if ($request->filled('status')) {
             $q->where('status', $request->status);
-        }
-
-        $user = $request->user();
-        $isHq = ($user->isSuperAdmin() ?? false) || $user->hasRole(['super_admin', 'main_admin', 'admin']);
-        if (! $isHq && $user->branch_id) {
-            $q->where('branch_id', $user->branch_id);
         }
 
         return ApiResponse::success($q->paginate((int) $request->get('per_page', 50)));
@@ -99,10 +101,7 @@ class BranchCommissionController extends Controller
         ]);
 
         $user = $request->user();
-        $isHq = ($user->isSuperAdmin() ?? false) || $user->hasRole(['super_admin', 'main_admin', 'admin']);
-        if (! $isHq) {
-            abort_unless((int) ($user->branch_id ?? 0) === (int) $data['branch_id'], 403);
-        }
+        abort_unless(FinanceBranchScope::canSeeBranch($user, $data['branch_id']), 403);
 
         $settlement = $this->commissions->createSettlement(
             (int) $data['branch_id'],
@@ -113,8 +112,10 @@ class BranchCommissionController extends Controller
         return ApiResponse::success($settlement, 'HQ commission settlement created.', 201);
     }
 
-    public function payHamroPay(BranchCommissionSettlement $settlement)
+    public function payHamroPay(Request $request, BranchCommissionSettlement $settlement)
     {
+        abort_unless(FinanceBranchScope::canSeeBranch($request->user(), $settlement->branch_id), 404, 'Settlement not found.');
+
         $session = $this->commissions->payViaHamroPay($settlement);
 
         return ApiResponse::success($session, 'HamroPay session created for HQ commission payment.');
@@ -122,6 +123,8 @@ class BranchCommissionController extends Controller
 
     public function markPaid(Request $request, BranchCommissionSettlement $settlement)
     {
+        abort_unless(FinanceBranchScope::canSeeBranch($request->user(), $settlement->branch_id), 404, 'Settlement not found.');
+
         $data = $request->validate([
             'payment_reference' => ['nullable', 'string', 'max:191'],
         ]);
@@ -138,18 +141,24 @@ class BranchCommissionController extends Controller
     public function summary(Request $request)
     {
         $base = BranchCommissionBill::query();
-        if ($request->filled('branch_id')) {
-            $base->where('branch_id', $request->branch_id);
+        $user = $request->user();
+        FinanceBranchScope::scopeBranchColumn($base, $user);
+
+        $branchFilter = null;
+        if ($request->filled('branch_id') && FinanceBranchScope::canSeeBranch($user, $request->branch_id)) {
+            $branchFilter = (int) $request->branch_id;
+            $base->where('branch_id', $branchFilter);
         }
+        // Branch users see their own branch rate on the summary.
+        $rateBranch = $branchFilter
+            ?? (FinanceBranchScope::applies($user) && $user->branch_id ? (int) $user->branch_id : null);
 
         return ApiResponse::success([
             'unpaid_amount' => (float) (clone $base)->where('status', 'unpaid')->sum('commission_amount'),
             'processing_amount' => (float) (clone $base)->where('status', 'processing')->sum('commission_amount'),
             'paid_amount' => (float) (clone $base)->where('status', 'paid')->sum('commission_amount'),
             'unpaid_count' => (clone $base)->where('status', 'unpaid')->count(),
-            'hq_percent' => $this->commissions->commissionRatePercent(
-                $request->filled('branch_id') ? (int) $request->branch_id : null
-            ),
+            'hq_percent' => $this->commissions->commissionRatePercent($rateBranch),
         ]);
     }
 }

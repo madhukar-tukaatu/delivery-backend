@@ -927,7 +927,7 @@ class MerchantDeliveryBillingService
 
      */
 
-    public function getUnpaidInvoicesForMerchant(int $merchantId, ?string $fromDate = null, ?string $toDate = null): \Illuminate\Database\Eloquent\Collection
+    public function getUnpaidInvoicesForMerchant(int $merchantId, ?string $fromDate = null, ?string $toDate = null, ?array $branchIds = null): \Illuminate\Database\Eloquent\Collection
 
     {
 
@@ -965,6 +965,11 @@ class MerchantDeliveryBillingService
 
             $query->whereDate('invoice_date', '<=', $toDate);
 
+        }
+
+        // Manual digest from a branch user: only that branch's bills (invoices.branch_id).
+        if ($branchIds !== null) {
+            $query->whereIn('branch_id', $branchIds === [] ? [0] : $branchIds);
         }
 
 

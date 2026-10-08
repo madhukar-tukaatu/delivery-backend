@@ -4,6 +4,7 @@ namespace Modules\Settlement\Http\Controllers;
 
 use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
+use App\Support\FinanceBranchScope;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -37,6 +38,9 @@ class SettlementController extends Controller
             $query->where('merchant_id', $request->user()->merchant_id);
         }
 
+        // Branch users: only settlements with shipments owned by their branch.
+        FinanceBranchScope::scopeSettlements($query, $request->user());
+
         $this->applySettlementFilters($query, $request);
 
         $paginator = $query->paginate((int) $request->get('per_page', 20));
@@ -56,7 +60,12 @@ class SettlementController extends Controller
         $marketplaceId = $request->filled('marketplace_id') ? (int) $request->input('marketplace_id') : null;
         $merchantSearch = trim((string) $request->input('merchant', $request->input('q', '')));
 
-        $records = PodRecord::query()
+        $user = $request->user();
+
+        $recordsQuery = PodRecord::query();
+        FinanceBranchScope::scopePodRecords($recordsQuery, $user);
+
+        $records = $recordsQuery
             ->with([
                 'shipment',
                 'merchant:id,name,code,external_store_id,marketplace_id',
@@ -90,7 +99,10 @@ class SettlementController extends Controller
         $coveredShipmentIds = $records->pluck('shipment_id')->filter()->all();
 
         // Fallback: shipment marked pending_deposit but POD row missing / wrong status.
-        $orphanShipments = Shipment::query()
+        $orphanQuery = Shipment::query();
+        FinanceBranchScope::scopeShipments($orphanQuery, $user);
+
+        $orphanShipments = $orphanQuery
             ->with([
                 'merchant:id,name,code,external_store_id,marketplace_id',
                 'merchant.marketplace:id,name,code',
@@ -168,17 +180,22 @@ class SettlementController extends Controller
             ]);
         }
 
-        $readyCount = Shipment::query()
+        $readyQuery = Shipment::query();
+        FinanceBranchScope::scopeShipments($readyQuery, $user);
+        $readyCount = $readyQuery
             ->where('status', 'delivered')
             ->where('settlement_status', 'ready')
             ->count();
+
+        $settlementCountQuery = MerchantSettlement::query();
+        FinanceBranchScope::scopeSettlements($settlementCountQuery, $user);
 
         return ApiResponse::success([
             'pending_deposit' => $rows,
             'counts' => [
                 'awaiting_branch_deposit' => $rows->count(),
                 'ready_to_settle' => $readyCount,
-                'settlements' => MerchantSettlement::query()->count(),
+                'settlements' => $settlementCountQuery->count(),
             ],
             'hint' => 'Cash POD from rider complete appears here first. Settlements table stays empty until you Generate settlement after deposit (or on_collection path).',
             'filters' => [
@@ -203,12 +220,12 @@ class SettlementController extends Controller
         ]);
 
         $cashPath = $data['cash_path'] ?? SettlementWorkflowService::PATH_AFTER_DEPOSIT;
-        $shipments = $this->settlements->eligibleShipments(
+        $shipments = $this->onlyBranchShipments($this->settlements->eligibleShipments(
             (int) $data['merchant_id'],
             $cashPath,
             $data['period_from'] ?? null,
             $data['period_to'] ?? null,
-        );
+        ), $request->user());
 
         $lines = [];
         $totalPod = 0.0;
@@ -267,13 +284,14 @@ class SettlementController extends Controller
 
         $cashPath = $data['cash_path'] ?? SettlementWorkflowService::PATH_AFTER_DEPOSIT;
 
-        $settlement = DB::transaction(function () use ($data, $cashPath) {
-            $shipments = $this->settlements->eligibleShipments(
+        $user = $request->user();
+        $settlement = DB::transaction(function () use ($data, $cashPath, $user) {
+            $shipments = $this->onlyBranchShipments($this->settlements->eligibleShipments(
                 (int) $data['merchant_id'],
                 $cashPath,
                 $data['period_from'] ?? null,
                 $data['period_to'] ?? null,
-            );
+            ), $user);
 
             if ($shipments->isEmpty()) {
                 throw ValidationException::withMessages([
@@ -356,6 +374,8 @@ class SettlementController extends Controller
 
     public function markPaid(Request $request, MerchantSettlement $settlement)
     {
+        $this->authorizeSettlement($request, $settlement);
+
         $data = $request->validate([
             'payment_method' => ['nullable', 'string'],
             'bank_reference_number' => ['nullable', 'string'],
@@ -392,8 +412,10 @@ class SettlementController extends Controller
         );
     }
 
-    public function show(MerchantSettlement $settlement)
+    public function show(Request $request, MerchantSettlement $settlement)
     {
+        $this->authorizeSettlement($request, $settlement);
+
         return ApiResponse::success($this->presentSettlement($settlement->load([
             'items.shipment',
             'merchant:id,name,code,external_store_id,marketplace_id',
@@ -401,8 +423,10 @@ class SettlementController extends Controller
         ])));
     }
 
-    public function payHamroPay(MerchantSettlement $settlement)
+    public function payHamroPay(Request $request, MerchantSettlement $settlement)
     {
+        $this->authorizeSettlement($request, $settlement);
+
         $session = $this->hamroPaySettlements->createPayoutSession($settlement);
 
         return ApiResponse::success($session, 'HamroPay checkout session created for POD settlement.');
@@ -410,6 +434,8 @@ class SettlementController extends Controller
 
     public function confirmHamroPay(Request $request, MerchantSettlement $settlement)
     {
+        $this->authorizeSettlement($request, $settlement);
+
         $data = $request->validate([
             'merchant_txn_id' => ['required', 'string'],
         ]);
@@ -425,6 +451,36 @@ class SettlementController extends Controller
         ]);
 
         return $this->markPaid($request, $settlement);
+    }
+
+    /**
+     * Branch users get 404 for a settlement with no shipment of their branch.
+     * Merchant users only see their own merchant settlements.
+     */
+    private function authorizeSettlement(Request $request, MerchantSettlement $settlement): void
+    {
+        abort_unless(
+            FinanceBranchScope::canSeeSettlement($request->user(), $settlement),
+            404,
+            'Settlement not found.'
+        );
+    }
+
+    /**
+     * When a branch user previews or generates a settlement, only that branch's
+     * shipments go into it. HQ keeps every eligible shipment.
+     */
+    private function onlyBranchShipments($shipments, $user)
+    {
+        if (! FinanceBranchScope::applies($user) || $shipments->isEmpty()) {
+            return $shipments;
+        }
+
+        $query = Shipment::query()->whereIn('id', $shipments->pluck('id')->all());
+        FinanceBranchScope::scopeShipments($query, $user);
+        $allowed = array_flip($query->pluck('id')->map(fn ($id) => (int) $id)->all());
+
+        return $shipments->filter(fn ($shipment) => isset($allowed[(int) $shipment->id]))->values();
     }
 
     private function applySettlementFilters($query, Request $request): void

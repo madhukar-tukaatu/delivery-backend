@@ -119,13 +119,19 @@ class RequestTukaatuPodPaymentJob implements ShouldQueue
         $timeout = (int) config('services.tukaatu.timeout', 20);
         $verifySsl = (bool) config('services.tukaatu.verify_ssl', true);
 
+        $headers = [
+            'Accept' => 'application/json',
+            'Content-Type' => 'application/json',
+        ];
+        if ($apiKey !== '') {
+            $headers['X-Tukaatu-Key'] = $apiKey;
+        }
+        if ($apiSecret !== '') {
+            $headers['X-Tukaatu-Secret'] = $apiSecret;
+        }
+
         try {
-            $request = Http::withHeaders([
-                'Accept' => 'application/json',
-                'Content-Type' => 'application/json',
-                'X-Tukaatu-Key' => $apiKey,
-                'X-Tukaatu-Secret' => $apiSecret,
-            ])->timeout($timeout);
+            $request = Http::withHeaders($headers)->timeout($timeout);
 
             if (! $verifySsl) {
                 $request = $request->withoutVerifying();
@@ -386,23 +392,22 @@ class RequestTukaatuPodPaymentJob implements ShouldQueue
         }
 
         // Same key Express issued to the marketplace (marketplace_api_keys).
-        // Do not use marketplaces.api_key / api_secret or .env.
-        $creds = app(MarketplaceApiKeyIssuer::class)->resolveOutboundCredentials(
-            (int) $marketplace->id,
-            $label
-        );
+        // Best effort: pod-qr does not require these headers, so a missing or
+        // undecryptable key never blocks the call.
+        $creds = app(MarketplaceApiKeyIssuer::class)->resolveOptionalOutboundHeaders((int) $marketplace->id);
 
-        $empty['key_prefix'] = (string) ($creds['key_prefix'] ?? '');
+        $empty['key_prefix'] = (string) $creds['key_prefix'];
         $empty['credential_source'] = 'marketplace_api_keys';
-
-        if (! ($creds['ok'] ?? false)) {
-            $empty['error'] = (string) ($creds['error'] ?? ('Marketplace '.$label.' has no outbound POD credentials.'));
-
-            return $empty;
-        }
-
         $empty['api_key'] = (string) $creds['api_key'];
         $empty['api_secret'] = (string) $creds['api_secret'];
+
+        if ($empty['api_key'] === '') {
+            Log::warning('RequestTukaatuPodPaymentJob: marketplace key cannot be sent; posting without X-Tukaatu-Key', [
+                'marketplace_id' => $marketplace->id,
+                'key_prefix' => $empty['key_prefix'],
+                'code' => $creds['code'],
+            ]);
+        }
 
         if (filled($session->last_error)) {
             $session->update(['last_error' => null]);

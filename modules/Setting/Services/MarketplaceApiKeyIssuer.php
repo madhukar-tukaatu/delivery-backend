@@ -229,6 +229,77 @@ final class MarketplaceApiKeyIssuer
     }
 
     /**
+     * Best-effort outbound headers for POD. Never blocks the call.
+     * Key and secret are decrypted independently; whatever decrypts is returned.
+     * code explains why the key could not be sent (null when it can).
+     *
+     * @return array{api_key: string, api_secret: string, key_prefix: string, api_key_id: ?int, code: ?string}
+     */
+    public function resolveOptionalOutboundHeaders(int $marketplaceId): array
+    {
+        $out = [
+            'api_key' => '',
+            'api_secret' => '',
+            'key_prefix' => '',
+            'api_key_id' => null,
+            'code' => null,
+        ];
+
+        $query = DB::table('marketplace_api_keys')
+            ->where('marketplace_id', $marketplaceId)
+            ->where('is_active', true)
+            ->orderByDesc('id');
+
+        if (Schema::hasColumn('marketplace_api_keys', 'revoked_at')) {
+            $query->whereNull('revoked_at');
+        }
+
+        if (Schema::hasColumn('marketplace_api_keys', 'expires_at')) {
+            $query->where(function ($q): void {
+                $q->whereNull('expires_at')->orWhere('expires_at', '>', now());
+            });
+        }
+
+        $row = $query->first();
+        if (! $row) {
+            $out['code'] = 'no_active_key';
+
+            return $out;
+        }
+
+        $out['key_prefix'] = (string) ($row->key_prefix ?? '');
+        $out['api_key_id'] = (int) $row->id;
+
+        $keyEncrypted = Schema::hasColumn('marketplace_api_keys', 'key_encrypted')
+            ? trim((string) ($row->key_encrypted ?? ''))
+            : '';
+
+        if ($keyEncrypted === '') {
+            $out['code'] = 'missing_key_encrypted';
+        } else {
+            try {
+                $out['api_key'] = trim((string) Crypt::decryptString($keyEncrypted));
+                if ($out['api_key'] === '') {
+                    $out['code'] = 'empty_after_decrypt';
+                }
+            } catch (Throwable) {
+                $out['code'] = 'decrypt_failed';
+            }
+        }
+
+        $secretEncrypted = trim((string) ($row->secret_encrypted ?? ''));
+        if ($secretEncrypted !== '') {
+            try {
+                $out['api_secret'] = trim((string) Crypt::decryptString($secretEncrypted));
+            } catch (Throwable) {
+                $out['api_secret'] = '';
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * Safe summary of the active issued key for admin UI (never includes secrets).
      *
      * @return array{id: int, name: ?string, key_prefix: string, has_key_encrypted: bool, is_active: bool, last_used_at: mixed, created_at: mixed}|null

@@ -41,9 +41,8 @@ final class TukaatuPodPaymentService
         $shipment->loadMissing('merchant');
         $merchant = $shipment->merchant;
         $this->assertEligibleShipment($shipment, $merchant);
-        // Fail fast with 422 before creating a pending session when Express cannot
-        // send the marketplace key (e.g. key_encrypted missing). Do not pretend a
-        // provider call happened.
+        // 422 only when there is no marketplace or no API base URL. Missing or
+        // undecryptable marketplace keys do not block: pod-qr accepts the call.
         $this->assertMarketplaceOutboundReady($shipment, $merchant);
 
         $existing = PodPaymentSession::query()
@@ -302,25 +301,74 @@ final class TukaatuPodPaymentService
         return $this->formatSession($session);
     }
 
+    /**
+     * Delivery POD rows only (delivery_assignment_id set).
+     * Order: payment_session_id / session_id, then merchant_txn_id, then
+     * tracking_number on a pending/ready row. Tukaatu pod-qr returns empty
+     * session ids, so later callbacks may carry only merchant_txn_id.
+     */
     private function findDeliveryPodSession(array $payload): ?PodPaymentSession
     {
-        $sessionId = trim((string) (
-            $payload['payment_session_id']
-            ?? $payload['session_id']
-            ?? data_get($payload, 'data.payment_session_id')
-            ?? data_get($payload, 'data.session_id')
-            ?? ''
-        ));
-        if ($sessionId === '') {
-            return null;
+        $deliveryOnly = function () {
+            $query = PodPaymentSession::query();
+            if (Schema::hasColumn('pod_payment_sessions', 'delivery_assignment_id')) {
+                $query->whereNotNull('delivery_assignment_id');
+            }
+
+            return $query;
+        };
+
+        $first = function (array $candidates): string {
+            foreach ($candidates as $value) {
+                if (is_scalar($value) && trim((string) $value) !== '') {
+                    return trim((string) $value);
+                }
+            }
+
+            return '';
+        };
+
+        $sessionId = $first([
+            $payload['payment_session_id'] ?? null,
+            $payload['session_id'] ?? null,
+            data_get($payload, 'data.payment_session_id'),
+            data_get($payload, 'data.session_id'),
+        ]);
+        if ($sessionId !== '') {
+            $found = $deliveryOnly()->where('payment_session_id', $sessionId)->latest('id')->first();
+            if ($found) {
+                return $found;
+            }
         }
 
-        $query = PodPaymentSession::query()->where('payment_session_id', $sessionId);
-        if (Schema::hasColumn('pod_payment_sessions', 'delivery_assignment_id')) {
-            $query->whereNotNull('delivery_assignment_id');
+        $merchantTxnId = $first([
+            $payload['merchant_txn_id'] ?? null,
+            $payload['merchantTxnId'] ?? null,
+            data_get($payload, 'data.merchant_txn_id'),
+            data_get($payload, 'params.merchant_transaction_id'),
+            data_get($payload, 'data.params.merchant_transaction_id'),
+        ]);
+        if ($merchantTxnId !== '') {
+            $found = $deliveryOnly()->where('merchant_txn_id', $merchantTxnId)->latest('id')->first();
+            if ($found) {
+                return $found;
+            }
         }
 
-        return $query->first();
+        $tracking = $first([
+            $payload['tracking_number'] ?? null,
+            data_get($payload, 'data.tracking_number'),
+            data_get($payload, 'shipment.tracking_number'),
+        ]);
+        if ($tracking !== '') {
+            return $deliveryOnly()
+                ->where('tracking_number', $tracking)
+                ->whereIn('status', ['pending', 'ready'])
+                ->latest('id')
+                ->first();
+        }
+
+        return null;
     }
 
     public function handleTukaatuEvent(
@@ -671,32 +719,14 @@ final class TukaatuPodPaymentService
             ]);
         }
 
-        $creds = app(MarketplaceApiKeyIssuer::class)->resolveOutboundCredentials(
-            (int) $marketplace->id,
-            $label
-        );
-
-        if ($creds['ok'] ?? false) {
-            return;
+        $headers = app(MarketplaceApiKeyIssuer::class)->resolveOptionalOutboundHeaders((int) $marketplace->id);
+        if ($headers['api_key'] === '') {
+            Log::warning('POD create: marketplace key cannot be sent; calling pod-qr without X-Tukaatu-Key', [
+                'marketplace_id' => $marketplace->id,
+                'key_prefix' => $headers['key_prefix'],
+                'code' => $headers['code'],
+            ]);
         }
-
-        Log::warning('POD create blocked: marketplace outbound credentials not ready', [
-            'marketplace_id' => $marketplace->id,
-            'marketplace_code' => $marketplace->code,
-            'shipment_id' => $shipment->id,
-            'code' => $creds['code'] ?? null,
-            'key_prefix' => $creds['key_prefix'] ?? '',
-            'detail' => $creds['error'] ?? null,
-        ]);
-
-        $rider = trim((string) ($creds['rider_error'] ?? ''));
-        if ($rider === '') {
-            $rider = MarketplaceApiKeyIssuer::RIDER_SETUP_MESSAGE;
-        }
-
-        throw ValidationException::withMessages([
-            'payment' => [$rider],
-        ]);
     }
 
     private function assertEligibleShipment(Shipment $shipment, ?Merchant $merchant): void

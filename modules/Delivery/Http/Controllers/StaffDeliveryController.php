@@ -108,14 +108,32 @@ class StaffDeliveryController extends Controller
             'method' => ['prohibited'],
         ]);
 
-        return ApiResponse::success(
-            $this->service->createPaymentSession(
-                $delivery,
-                $request->user(),
-                $data['idempotency_key'] ?? null,
-            ),
-            'POD payment session pending.'
+        $session = $this->service->createPaymentSession(
+            $delivery,
+            $request->user(),
+            $data['idempotency_key'] ?? null,
         );
+
+        return ApiResponse::success($session, $this->podSessionMessage($session, 'POD payment session pending.'));
+    }
+
+    /**
+     * Response message that matches the session state, so a failed Tukaatu
+     * pod-qr call is not reported as "pending". data.last_error keeps the
+     * marketplace reason for the rider page.
+     */
+    private function podSessionMessage(mixed $session, string $default): string
+    {
+        $status = is_array($session) ? (string) ($session['status'] ?? '') : '';
+        $lastError = is_array($session) ? trim((string) ($session['last_error'] ?? '')) : '';
+
+        return match (true) {
+            $status === 'failed' => 'Online payment request failed: ' . ($lastError !== '' ? $lastError : 'Tukaatu did not create the payment.') . ' Retry or collect cash.',
+            $status === 'paid' => 'Online payment confirmed.',
+            $status === 'ready' => 'Online payment QR ready.',
+            in_array($status, ['expired', 'cancelled', 'refunded'], true) => 'POD payment session ' . $status . '.',
+            default => $default,
+        };
     }
 
     /**
@@ -124,14 +142,13 @@ class StaffDeliveryController extends Controller
      */
     public function podPayment(Request $request, DeliveryAssignment $delivery)
     {
-        return ApiResponse::success(
-            $this->service->paymentSession(
-                $delivery,
-                $request->user(),
-                (bool) $request->boolean('refresh'),
-            ),
-            'POD payment session retrieved.'
+        $session = $this->service->paymentSession(
+            $delivery,
+            $request->user(),
+            (bool) $request->boolean('refresh'),
         );
+
+        return ApiResponse::success($session, $this->podSessionMessage($session, 'POD payment session retrieved.'));
     }
 
     /**

@@ -904,11 +904,19 @@ final class TukaatuPodPaymentService
             return;
         }
 
-        $session->update([
+        $updates = [
             'status' => 'pending',
             'failed_at' => null,
             'last_error' => null,
-        ]);
+        ];
+
+        // A retried session gets a fresh 30 min window, otherwise the next
+        // create call would immediately mark it expired.
+        if (! $session->expires_at || $session->expires_at->isPast() || $session->expires_at->lt(now()->addMinutes(5))) {
+            $updates['expires_at'] = now()->addMinutes(30);
+        }
+
+        $session->update($updates);
         $session->refresh();
     }
 

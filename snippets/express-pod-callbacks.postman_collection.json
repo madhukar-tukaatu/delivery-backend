@@ -1,0 +1,248 @@
+{
+  "info": {
+    "name": "Express POD callbacks",
+    "description": "One Express inbound URL: POST {{express_base_url}}/api/v1/express/callback. Events differ. express_base_url defaults to https://api.tukaatuexpress.com. For local Express, set express_base_url to the express_base_url_local value http://localhost:8081. marketplace_base_url defaults to https://api.tukaatu.com; FCA is https://api.fca.com.np. Key, secret, and callback secret variables are empty placeholders.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "express_base_url",
+      "value": "https://api.tukaatuexpress.com",
+      "description": "Live Express. For local, set this to http://localhost:8081 (see express_base_url_local)."
+    },
+    {
+      "key": "express_base_url_local",
+      "value": "http://localhost:8081",
+      "description": "Optional local Express base. Copy onto express_base_url when calling a local stack. Requests use express_base_url."
+    },
+    {
+      "key": "marketplace_base_url",
+      "value": "https://api.tukaatu.com",
+      "description": "Tukaatu marketplace. FCA is https://api.fca.com.np."
+    },
+    {
+      "key": "marketplace_key",
+      "value": ""
+    },
+    {
+      "key": "marketplace_secret",
+      "value": ""
+    },
+    {
+      "key": "callback_secret",
+      "value": "",
+      "description": "TUKAATU_CALLBACK_SECRET. Leave empty in the shared file. Pre-request script signs the raw body when this is set."
+    },
+    {
+      "key": "callback_signature",
+      "value": "",
+      "description": "X-Tukaatu-Signature hex. Filled by the pre-request script when callback_secret is set."
+    },
+    {
+      "key": "payment_session_id",
+      "value": "",
+      "description": "Express pod_payment_sessions.payment_session_id for a delivery assignment. Required to find the session."
+    }
+  ],
+  "item": [
+    {
+      "name": "pod_payment.ready",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Tukaatu-Event",
+            "value": "pod_payment.ready",
+            "description": "Required for the delivery POD branch. Body field event is the fallback."
+          },
+          {
+            "key": "X-Tukaatu-Signature",
+            "value": "{{callback_signature}}",
+            "description": "HMAC-SHA256 hex of the raw body using TUKAATU_CALLBACK_SECRET. Required when that secret (or the legacy Store Manager payment secret) is configured."
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"event\": \"pod_payment.ready\",\n  \"session_id\": \"{{payment_session_id}}\",\n  \"payment_session_id\": \"{{payment_session_id}}\",\n  \"merchant_txn_id\": \"PODF8B5NE62W047LPH8G\",\n  \"transaction_id\": \"\",\n  \"payment_url\": \"https://checkout.hamropatro.com/api/checkout\",\n  \"qr_string\": null,\n  \"amount\": 1699,\n  \"message\": \"\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{express_base_url}}/api/v1/express/callback",
+        "description": "Inbound callback. Express route POST /api/v1/express/callback -> StoreManagerPaymentWebhookController::handle, then TukaatuPodPaymentService::handleDeliveryPodCallback for pod_payment.ready|paid|failed.\n\nLookup: payment_session_id, else session_id (also data.payment_session_id / data.session_id). The row must have delivery_assignment_id. merchant_txn_id alone does not find the session (404).\n\nHeaders the POD path checks:\n- X-Tukaatu-Event: event name (or JSON field event).\n- X-Tukaatu-Signature: required when TUKAATU_CALLBACK_SECRET or the legacy Store Manager payment secret is set. HMAC-SHA256 hex of the raw JSON body. If X-Tukaatu-Timestamp is also sent (unix seconds), the signature is HMAC-SHA256 of timestamp + \".\" + raw body, and the timestamp must be within 300 seconds. Leave timestamp unset to sign the body only. Local/testing with no secret configured accepts an empty signature.\n- X-Tukaatu-Event-ID is optional idempotency, not required.\n\nSet collection variable callback_secret to fill X-Tukaatu-Signature in the pre-request script. Otherwise paste the hex into callback_signature. Do not put real secrets in this file.\n\namount is accepted in the sample body but this handler does not change the session amount.\n\nThis request: applyReady. Sets status ready (unless already paid), merchant_txn_id when present, checkout_url from payment_url, qr_payload from qr_string when non-empty. qr_string null is valid. transaction_id and message are not applied on ready. amount is not applied."
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const secret = pm.collectionVariables.get(\"callback_secret\") || \"\";",
+              "if (!secret) {",
+              "    return;",
+              "}",
+              "const raw = pm.request.body && pm.request.body.raw ? pm.request.body.raw : \"\";",
+              "const sig = CryptoJS.HmacSHA256(raw, secret).toString(CryptoJS.enc.Hex);",
+              "pm.request.headers.upsert({ key: \"X-Tukaatu-Signature\", value: sig });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "pod_payment.paid",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Tukaatu-Event",
+            "value": "pod_payment.paid",
+            "description": "Required for the delivery POD branch. Body field event is the fallback."
+          },
+          {
+            "key": "X-Tukaatu-Signature",
+            "value": "{{callback_signature}}",
+            "description": "HMAC-SHA256 hex of the raw body using TUKAATU_CALLBACK_SECRET. Required when that secret (or the legacy Store Manager payment secret) is configured."
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"event\": \"pod_payment.paid\",\n  \"session_id\": \"{{payment_session_id}}\",\n  \"payment_session_id\": \"{{payment_session_id}}\",\n  \"merchant_txn_id\": \"PODF8B5NE62W047LPH8G\",\n  \"transaction_id\": \"REPLACE_WITH_PROVIDER_TRANSACTION_ID\",\n  \"payment_url\": \"https://checkout.hamropatro.com/api/checkout\",\n  \"qr_string\": null,\n  \"amount\": 1699,\n  \"message\": \"\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{express_base_url}}/api/v1/express/callback",
+        "description": "Inbound callback. Express route POST /api/v1/express/callback -> StoreManagerPaymentWebhookController::handle, then TukaatuPodPaymentService::handleDeliveryPodCallback for pod_payment.ready|paid|failed.\n\nLookup: payment_session_id, else session_id (also data.payment_session_id / data.session_id). The row must have delivery_assignment_id. merchant_txn_id alone does not find the session (404).\n\nHeaders the POD path checks:\n- X-Tukaatu-Event: event name (or JSON field event).\n- X-Tukaatu-Signature: required when TUKAATU_CALLBACK_SECRET or the legacy Store Manager payment secret is set. HMAC-SHA256 hex of the raw JSON body. If X-Tukaatu-Timestamp is also sent (unix seconds), the signature is HMAC-SHA256 of timestamp + \".\" + raw body, and the timestamp must be within 300 seconds. Leave timestamp unset to sign the body only. Local/testing with no secret configured accepts an empty signature.\n- X-Tukaatu-Event-ID is optional idempotency, not required.\n\nSet collection variable callback_secret to fill X-Tukaatu-Signature in the pre-request script. Otherwise paste the hex into callback_signature. Do not put real secrets in this file.\n\namount is accepted in the sample body but this handler does not change the session amount.\n\nThis request: applyPaid. Sets status paid, merchant_txn_id, transaction_id and provider_reference when transaction_id is present, and merges payment_url / qr_string the same way as ready. message is not the failure reason on this event. amount is not applied."
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const secret = pm.collectionVariables.get(\"callback_secret\") || \"\";",
+              "if (!secret) {",
+              "    return;",
+              "}",
+              "const raw = pm.request.body && pm.request.body.raw ? pm.request.body.raw : \"\";",
+              "const sig = CryptoJS.HmacSHA256(raw, secret).toString(CryptoJS.enc.Hex);",
+              "pm.request.headers.upsert({ key: \"X-Tukaatu-Signature\", value: sig });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "pod_payment.failed",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Tukaatu-Event",
+            "value": "pod_payment.failed",
+            "description": "Required for the delivery POD branch. Body field event is the fallback."
+          },
+          {
+            "key": "X-Tukaatu-Signature",
+            "value": "{{callback_signature}}",
+            "description": "HMAC-SHA256 hex of the raw body using TUKAATU_CALLBACK_SECRET. Required when that secret (or the legacy Store Manager payment secret) is configured."
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"event\": \"pod_payment.failed\",\n  \"session_id\": \"{{payment_session_id}}\",\n  \"payment_session_id\": \"{{payment_session_id}}\",\n  \"merchant_txn_id\": \"PODF8B5NE62W047LPH8G\",\n  \"transaction_id\": \"\",\n  \"payment_url\": \"https://checkout.hamropatro.com/api/checkout\",\n  \"qr_string\": null,\n  \"amount\": 1699,\n  \"message\": \"Payment failed\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{express_base_url}}/api/v1/express/callback",
+        "description": "Inbound callback. Express route POST /api/v1/express/callback -> StoreManagerPaymentWebhookController::handle, then TukaatuPodPaymentService::handleDeliveryPodCallback for pod_payment.ready|paid|failed.\n\nLookup: payment_session_id, else session_id (also data.payment_session_id / data.session_id). The row must have delivery_assignment_id. merchant_txn_id alone does not find the session (404).\n\nHeaders the POD path checks:\n- X-Tukaatu-Event: event name (or JSON field event).\n- X-Tukaatu-Signature: required when TUKAATU_CALLBACK_SECRET or the legacy Store Manager payment secret is set. HMAC-SHA256 hex of the raw JSON body. If X-Tukaatu-Timestamp is also sent (unix seconds), the signature is HMAC-SHA256 of timestamp + \".\" + raw body, and the timestamp must be within 300 seconds. Leave timestamp unset to sign the body only. Local/testing with no secret configured accepts an empty signature.\n- X-Tukaatu-Event-ID is optional idempotency, not required.\n\nSet collection variable callback_secret to fill X-Tukaatu-Signature in the pre-request script. Otherwise paste the hex into callback_signature. Do not put real secrets in this file.\n\namount is accepted in the sample body but this handler does not change the session amount.\n\nThis request: applyFailed. Sets status failed and last_error from message (reason is preferred if sent; this sample uses message). Does not update merchant_txn_id, transaction_id, payment_url, or qr_string. amount is not applied. session_id or payment_session_id is still required to find the row."
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const secret = pm.collectionVariables.get(\"callback_secret\") || \"\";",
+              "if (!secret) {",
+              "    return;",
+              "}",
+              "const raw = pm.request.body && pm.request.body.raw ? pm.request.body.raw : \"\";",
+              "const sig = CryptoJS.HmacSHA256(raw, secret).toString(CryptoJS.enc.Hex);",
+              "pm.request.headers.upsert({ key: \"X-Tukaatu-Signature\", value: sig });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Marketplace pod-qr (Express calls this)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Tukaatu-Key",
+            "value": "{{marketplace_key}}",
+            "description": "Placeholder. Express sends the issued marketplace API key. Leave empty in this file."
+          },
+          {
+            "key": "X-Tukaatu-Secret",
+            "value": "{{marketplace_secret}}",
+            "description": "Placeholder. Express sends the issued marketplace API secret. Leave empty in this file."
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"external_store_id\": \"\",\n  \"merchant_order_id\": \"SAMPLE_MERCHANT_ORDER_ID\",\n  \"external_order_id\": \"SAMPLE_EXTERNAL_ORDER_ID\",\n  \"tracking_number\": \"SAMPLE_TRACKING_NUMBER\",\n  \"amount\": 1699,\n  \"session_id\": \"{{payment_session_id}}\",\n  \"payment_session_id\": \"{{payment_session_id}}\",\n  \"callback_url\": \"{{express_base_url}}/api/v1/express/callback\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": "{{marketplace_base_url}}/api/v1/gateway/payments/pod-qr",
+        "description": "Documentation only. This is the outbound call Express makes from RequestTukaatuPodPaymentJob, not an Express inbound route.\n\nPOST {{marketplace_base_url}}/api/v1/gateway/payments/pod-qr\nmarketplace_base_url default https://api.tukaatu.com. FCA is https://api.fca.com.np (change the variable; do not add a second live host here).\n\nHeaders: X-Tukaatu-Key and X-Tukaatu-Secret. No signature header on this request.\n\nBody matches the job: external_store_id, merchant_order_id, external_order_id, tracking_number, amount (number), session_id, payment_session_id, callback_url. callback_url is always {{express_base_url}}/api/v1/express/callback. session_id and payment_session_id are the same Express payment_session_id. The marketplace may ignore unknown fields.\n\nExpected success shape from the live pod-qr API: success true, data.payment_url, data.merchant_txn_id, data.qr_string (often null), data.params, data.expires_at, data.amount. Express then marks the session ready when success is true and payment_url is present."
+      }
+    }
+  ]
+}

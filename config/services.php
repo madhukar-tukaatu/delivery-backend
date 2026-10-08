@@ -85,6 +85,8 @@ return [
         'api_key' => env('EXPRESS_TUKAATU_API_KEY', env('TUKAATU_API_KEY')),
         'api_secret' => env('EXPRESS_TUKAATU_API_SECRET', env('TUKAATU_API_SECRET')),
         'callback_secret' => env('TUKAATU_CALLBACK_SECRET'),
+        // When a callback secret is set and X-Tukaatu-Signature is missing: false = accept (warning), true = 401.
+        'callback_require_signature' => filter_var(env('TUKAATU_CALLBACK_REQUIRE_SIGNATURE', false), FILTER_VALIDATE_BOOLEAN),
         'pod_payment_request_path' => env('TUKAATU_POD_PAYMENT_REQUEST_PATH', '/api/v1/gateway/payments/pod-qr'),
         'timeout' => (int) env('TUKAATU_API_TIMEOUT', 20),
         'webhook_tolerance' => (int) env('TUKAATU_CALLBACK_TOLERANCE', 300),

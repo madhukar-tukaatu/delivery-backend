@@ -8,6 +8,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Modules\POD\Services\StoreManagerPaymentService;
 use Modules\POD\Services\TukaatuPodPaymentService;
+use Symfony\Component\HttpKernel\Exception\HttpExceptionInterface;
 
 /**
  * Inbound payment events from Tukaatu / Store Manager.
@@ -83,20 +84,30 @@ final class StoreManagerPaymentWebhookController extends Controller
             return ApiResponse::error('Unsupported delivery POD event.', 422);
         }
 
-        $data = $tukaatu->handleDeliveryPodCallback(
-            event: $event,
-            payload: $payload,
-            rawBody: $rawBody,
-            timestamp: trim((string) $request->header('X-Tukaatu-Timestamp')),
-            signature: trim((string) $request->header('X-Tukaatu-Signature')),
-            eventId: trim((string) (
-                $request->header('X-Tukaatu-Event-ID')
-                ?: $request->header('X-Tukaatu-Event-Id')
-                ?: ''
-            )) ?: null,
-        );
+        try {
+            $data = $tukaatu->handleDeliveryPodCallback(
+                event: $event,
+                payload: $payload,
+                rawBody: $rawBody,
+                timestamp: trim((string) $request->header('X-Tukaatu-Timestamp')),
+                signature: trim((string) $request->header('X-Tukaatu-Signature')),
+                eventId: trim((string) (
+                    $request->header('X-Tukaatu-Event-ID')
+                    ?: $request->header('X-Tukaatu-Event-Id')
+                    ?: ''
+                )) ?: null,
+            );
+        } catch (HttpExceptionInterface $e) {
+            // 401 signature, 404 session not found, 422 amount mismatch / bad event.
+            return ApiResponse::error($e->getMessage() ?: 'POD payment event rejected.', $e->getStatusCode());
+        }
 
-        return ApiResponse::success($data, 'POD payment event processed.');
+        return response()->json([
+            'success' => true,
+            'status' => $data['status'] ?? null,
+            'message' => 'POD payment event processed.',
+            'data' => $data,
+        ]);
     }
 
     private function isDeliveryPodEvent(string $normalized): bool

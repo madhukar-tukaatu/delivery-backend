@@ -248,8 +248,6 @@ final class TukaatuPodPaymentService
         string $signature,
         ?string $eventId = null,
     ): array {
-        $this->verifyCallbackSignature($rawBody, $timestamp, $signature);
-
         $normalized = strtolower(str_replace(['-', ' '], '_', trim($event)));
         $kind = match ($normalized) {
             'pod_payment.ready', 'pod_payment_ready' => 'ready',
@@ -257,6 +255,9 @@ final class TukaatuPodPaymentService
             'pod_payment.failed', 'pod_payment_failed' => 'failed',
             default => null,
         };
+
+        $this->verifyCallbackSignature($rawBody, $timestamp, $signature, $normalized, $payload);
+
         if ($kind === null) {
             abort(422, 'Unsupported delivery POD event.');
         }
@@ -273,7 +274,19 @@ final class TukaatuPodPaymentService
             return $this->formatSession($session);
         }
 
+        // Paid is terminal: repeat paid is a no-op, and ready/failed never overwrite it.
+        if ($session->isPaid()) {
+            Log::info('Delivery POD callback ignored: session already paid', [
+                'event' => $normalized,
+                'payment_session_id' => $session->payment_session_id,
+                'merchant_txn_id' => $session->merchant_txn_id,
+            ]);
+
+            return $this->formatSession($session);
+        }
+
         if ($kind === 'paid') {
+            $this->assertCallbackAmount($session, $payload, $normalized);
             $this->applyPaid($session, $payload);
         } elseif ($kind === 'failed') {
             $this->applyFailed($session, $payload);
@@ -379,7 +392,7 @@ final class TukaatuPodPaymentService
         string $signature,
         ?string $eventId = null,
     ): array {
-        $this->verifyCallbackSignature($rawBody, $timestamp, $signature);
+        $this->verifyCallbackSignature($rawBody, $timestamp, $signature, strtolower(trim($event)), $payload);
 
         $event = strtolower(trim($event));
         $normalized = str_replace(['-', ' '], ['_', '_'], $event);
@@ -436,6 +449,31 @@ final class TukaatuPodPaymentService
         }
 
         return $this->formatSession($session);
+    }
+
+    /**
+     * When a paid callback carries an amount it must equal the session amount (2dp).
+     */
+    private function assertCallbackAmount(PodPaymentSession $session, array $payload, string $event): void
+    {
+        $raw = $payload['amount'] ?? data_get($payload, 'data.amount');
+        if ($raw === null || (is_string($raw) && trim($raw) === '')) {
+            return;
+        }
+
+        if (is_numeric($raw) && $this->cents((float) $raw) === $this->cents((float) $session->amount)) {
+            return;
+        }
+
+        Log::warning('Delivery POD callback rejected: amount mismatch', [
+            'event' => $event,
+            'payment_session_id' => $session->payment_session_id,
+            'merchant_txn_id' => $session->merchant_txn_id,
+            'callback_amount' => is_scalar($raw) ? (string) $raw : gettype($raw),
+            'session_amount' => number_format((float) $session->amount, 2, '.', ''),
+        ]);
+
+        abort(422, 'Callback amount does not match the payment session amount.');
     }
 
     private function applyPaid(PodPaymentSession $session, array $payload): void
@@ -624,8 +662,19 @@ final class TukaatuPodPaymentService
         return null;
     }
 
-    private function verifyCallbackSignature(string $rawBody, string $timestamp, string $signature): void
-    {
+    /**
+     * No secret configured: accept unsigned (warning).
+     * Secret configured + signature present: verify, 401 on mismatch.
+     * Secret configured + no signature: accept (warning) unless
+     * services.tukaatu.callback_require_signature is true, then 401.
+     */
+    private function verifyCallbackSignature(
+        string $rawBody,
+        string $timestamp,
+        string $signature,
+        string $event = '',
+        array $payload = [],
+    ): void {
         $secret = trim((string) config('services.tukaatu.callback_secret'));
 
         // Fall back to legacy Store Manager webhook secret so one endpoint can serve both.
@@ -633,12 +682,30 @@ final class TukaatuPodPaymentService
             $secret = trim((string) config('services.store_manager.payment.shared_secret'));
         }
 
+        $context = [
+            'event' => $event,
+            'merchant_txn_id' => (string) (
+                $payload['merchant_txn_id']
+                ?? data_get($payload, 'data.merchant_txn_id')
+                ?? data_get($payload, 'params.merchant_transaction_id')
+                ?? ''
+            ),
+            'ip' => request()?->ip(),
+        ];
+
         if ($secret === '') {
-            // Local/dev: allow unsigned when neither secret is configured.
-            if (app()->environment(['local', 'testing'])) {
-                return;
+            Log::warning('Tukaatu callback accepted unsigned: no callback secret configured', $context);
+
+            return;
+        }
+
+        if ($signature === '') {
+            if ((bool) config('services.tukaatu.callback_require_signature', false)) {
+                abort(401, 'X-Tukaatu-Signature header is required.');
             }
-            abort(401, 'Tukaatu callback secret is not configured (TUKAATU_CALLBACK_SECRET).');
+            Log::warning('Tukaatu callback accepted without X-Tukaatu-Signature (signature not required)', $context);
+
+            return;
         }
 
         if ($timestamp !== '' && ctype_digit($timestamp)) {
@@ -646,10 +713,6 @@ final class TukaatuPodPaymentService
             if (abs(now()->timestamp - (int) $timestamp) > $tolerance) {
                 abort(401, 'Invalid Tukaatu callback timestamp.');
             }
-        }
-
-        if ($signature === '') {
-            abort(401, 'X-Tukaatu-Signature header is required.');
         }
 
         $candidates = [];

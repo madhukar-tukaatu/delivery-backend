@@ -13,6 +13,7 @@ use Modules\Billing\Services\PaymentGatewayAccountService;
 use Modules\Merchant\Models\Merchant;
 use Modules\Setting\Models\Marketplace;
 use Modules\Setting\Services\MarketplaceApiKeyIssuer;
+use Modules\Setting\Services\MarketplaceShipmentResync;
 
 /**
  * Admin: multiple marketplaces (api.tukaatu.com, api.fca.com.np, ...).
@@ -85,10 +86,7 @@ class MarketplaceController extends Controller
 
         $hamro = $this->accounts->marketplaceAccount((int) $marketplace->id, 'hamropay');
 
-        $shipmentCount = 0;
-        if (Schema::hasTable('shipments') && Schema::hasColumn('shipments', 'marketplace_id')) {
-            $shipmentCount = (int) DB::table('shipments')->where('marketplace_id', $marketplace->id)->count();
-        }
+        $shipmentCount = $this->effectiveShipmentCount((int) $marketplace->id);
 
         return ApiResponse::success([
             'marketplace' => $this->present($marketplace, true),
@@ -245,9 +243,13 @@ class MarketplaceController extends Controller
             Merchant::query()->whereIn('id', $ids)->update(['marketplace_id' => $marketplace->id]);
         }
 
+        // Open shipments follow the store, so Online POD uses the new marketplace.
+        $resynced = app(MarketplaceShipmentResync::class)->forMerchants($ids);
+
         return ApiResponse::success([
             'marketplace_id' => $marketplace->id,
             'stores_count' => Merchant::query()->where('marketplace_id', $marketplace->id)->count(),
+            'shipments_resynced' => MarketplaceShipmentResync::total($resynced),
         ], 'Stores updated.');
     }
 
@@ -316,6 +318,28 @@ class MarketplaceController extends Controller
             'revoked_ids' => $result['revoked_ids'],
             'warning' => 'Copy the public_key and secret now. They are shown only once. Share them with the marketplace partner; inbound Express calls and Express outbound POD both use this pair.',
         ], 'Marketplace API key reissued. Copy credentials now — they will not be shown again.');
+    }
+
+    /**
+     * Shipments that resolve to this marketplace the same way Online POD does:
+     * the store's marketplace, or the shipment's own copy when the store has none.
+     */
+    private function effectiveShipmentCount(int $marketplaceId): int
+    {
+        if (! Schema::hasTable('shipments') || ! Schema::hasColumn('shipments', 'marketplace_id')) {
+            return 0;
+        }
+
+        return (int) DB::table('shipments')
+            ->leftJoin('merchants', 'merchants.id', '=', 'shipments.merchant_id')
+            ->where(function ($q) use ($marketplaceId) {
+                $q->where('merchants.marketplace_id', $marketplaceId)
+                    ->orWhere(function ($inner) use ($marketplaceId) {
+                        $inner->whereNull('merchants.marketplace_id')
+                            ->where('shipments.marketplace_id', $marketplaceId);
+                    });
+            })
+            ->count();
     }
 
     private function present(Marketplace $m, bool $detail = false): array

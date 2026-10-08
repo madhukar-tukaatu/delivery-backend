@@ -271,7 +271,16 @@ class MerchantController extends Controller
             'bulk_pickup_discount_threshold' => ['nullable', 'integer', 'min:0', 'max:1000'],
             'bulk_pickup_discount_amount'    => ['nullable', 'numeric', 'min:0'],
         ]);
+        $previousMarketplaceId = $merchant->marketplace_id;
         $merchant->update($data);
+
+        // Moving a store to another marketplace (e.g. Tukaatu -> FCA) also
+        // moves its open shipments, so Online POD calls the new marketplace.
+        if (array_key_exists('marketplace_id', $data)
+            && (int) ($previousMarketplaceId ?? 0) !== (int) ($merchant->marketplace_id ?? 0)) {
+            app(\Modules\Setting\Services\MarketplaceShipmentResync::class)->forMerchants([$merchant->id]);
+        }
+
         return ApiResponse::success($merchant->fresh(), 'Merchant updated.');
     }
 

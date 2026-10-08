@@ -527,12 +527,12 @@ final class HamroPayPodPaymentService
     {
         $shipment?->loadMissing("merchant");
         $merchant = $shipment?->merchant;
-        $marketplace = Marketplace::resolveFromMerchant($merchant);
+        $marketplace = Marketplace::resolveForShipment($shipment, $merchant);
 
-        // Prefer shipment.marketplace_id when denormalized.
-        $marketplaceId = $shipment && ! empty($shipment->marketplace_id)
-            ? (int) $shipment->marketplace_id
-            : ($marketplace?->id ? (int) $marketplace->id : null);
+        // Store's current marketplace first; shipment copy only when the store has none.
+        $marketplaceId = $marketplace?->id
+            ? (int) $marketplace->id
+            : ($shipment && ! empty($shipment->marketplace_id) ? (int) $shipment->marketplace_id : null);
 
         $branchId = $shipment
             ? ($shipment->destination_branch_id ?? $shipment->current_branch_id ?? $shipment->origin_branch_id)

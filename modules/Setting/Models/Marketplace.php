@@ -83,10 +83,24 @@ class Marketplace extends Model
     }
 
     /**
-     * Shipment marketplace first, then the store's marketplace.
+     * The store's current marketplace (merchants.marketplace_id) wins.
+     * shipments.marketplace_id is only a copy taken when the shipment was
+     * created, so it goes stale when an admin moves the store (for example
+     * Tukaatu -> FCA). It is used only when the store has no marketplace.
+     * A store with an explicit but inactive/missing marketplace gets null,
+     * never the default marketplace.
      */
     public static function resolveForShipment($shipment, ?Merchant $merchant): ?self
     {
+        if (! $merchant && $shipment instanceof Model) {
+            $shipment->loadMissing('merchant');
+            $merchant = $shipment->merchant;
+        }
+
+        if ($merchant && $merchant->marketplace_id) {
+            return static::resolveFromMerchant($merchant);
+        }
+
         $marketplaceId = $shipment?->marketplace_id;
         if ($marketplaceId) {
             $row = static::query()->active()->find($marketplaceId);
@@ -173,6 +187,15 @@ class Marketplace extends Model
             if ($row) {
                 return $row;
             }
+
+            // The admin linked this store to a marketplace that is inactive or
+            // gone. Do not silently route its calls to the default marketplace.
+            Log::warning('Marketplace: store is linked to an inactive or missing marketplace; not falling back to default', [
+                'merchant_id' => $merchant->id,
+                'marketplace_id' => $merchant->marketplace_id,
+            ]);
+
+            return null;
         }
 
         $platform = trim((string) ($merchant->external_platform ?? ''));

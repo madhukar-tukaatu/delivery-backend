@@ -31,10 +31,9 @@ use Modules\Shipment\Models\Shipment;
  *    also matches so sub-branch users see their deliveries.
  *  - shipment_branch_shares: branch_id (a branch sees only its own share rows).
  *  - inter_branch_statements: from_branch_id or to_branch_id.
- *  - invoices: invoices.branch_id (payee branch = ORIGIN branch for delivery bills since
- *    transfer settlement; older rows may still carry the destination). Legacy rows with NULL branch_id fall
- *    back to the shipment owner. Company (marketplace) invoices follow the same rule,
- *    so a branch only sees a Tukaatu/FCA bill for a shipment its branch delivered.
+ *  - invoices: invoices.branch_id = ORIGIN (billing) branch. Legacy rows with NULL branch_id fall
+ *    back to shipments.origin_branch_id. Transit/destination branches never see the merchant bill;
+ *    they get paid via shipment_branch_shares and inter_branch_statements.
  *  - merchant_settlements: no branch column; visible when any item shipment is owned by the branch.
  *  - pod_records: deposited_to_branch_id, or the shipment owner before deposit.
  *  - branch_commission_bills / branch_commission_settlements: branch_id.
@@ -174,6 +173,8 @@ class FinanceBranchScope
 
         $table = $query->getModel()->getTable();
 
+        // Delivery bills belong to the ORIGIN (billing) branch only. Transit and
+        // destination branches see their money via shares / inter-branch statements.
         return $query->where(function ($q) use ($ids, $table) {
             $q->whereIn("{$table}.branch_id", $ids)
                 ->orWhere(function ($legacy) use ($ids, $table) {
@@ -181,15 +182,9 @@ class FinanceBranchScope
                         ->whereExists(function (QueryBuilder $s) use ($ids, $table) {
                             $s->selectRaw('1')
                                 ->from('shipments as fs')
-                                ->whereColumn('fs.id', "{$table}.shipment_id");
-                            self::whereShipmentOwnedBy($s, $ids, 'fs');
+                                ->whereColumn('fs.id', "{$table}.shipment_id")
+                                ->whereIn('fs.origin_branch_id', $ids);
                         });
-                })
-                ->orWhereExists(function (QueryBuilder $s) use ($ids, $table) {
-                    $s->selectRaw('1')
-                        ->from('shipments as fsb')
-                        ->whereColumn('fsb.id', "{$table}.shipment_id")
-                        ->whereIn('fsb.destination_sub_branch_id', $ids);
                 });
         });
     }

@@ -36,8 +36,7 @@ class InvoiceController extends Controller
         }
 
         // Branch users: invoices.branch_id (payee branch) in their branch.
-        // Company (marketplace) bills follow the same column, so a branch only sees
-        // Tukaatu / FCA bills for shipments it delivered.
+        // Delivery bills are owned by the ORIGIN branch (it bills merchant / marketplace).
         FinanceBranchScope::scopeInvoices($query, $request->user());
         
         // Admin filters

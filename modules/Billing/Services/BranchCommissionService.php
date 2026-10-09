@@ -11,9 +11,10 @@ use Modules\Settlement\Services\SettlementWorkflowService;
 use Modules\Shipment\Models\Shipment;
 
 /**
- * HQ (Tukaatu Express superadmin) commission owed by the delivery branch
- * after each successful delivery. Independent of merchant POD settlements
- * and merchant delivery-fee invoices.
+ * HQ (Tukaatu Express superadmin) commission. After each delivery every
+ * branch that handled the shipment owes HQ its percent of its own share
+ * allocation (see BranchShareService). Independent of merchant POD
+ * settlements and merchant delivery-fee invoices.
  */
 class BranchCommissionService
 {
@@ -58,16 +59,14 @@ class BranchCommissionService
         );
     }
 
-    protected function responsibleBranchId(Shipment $shipment): ?int
-    {
-        // Last-mile / destination branch owes HQ commission on completed delivery.
-        return $shipment->destination_branch_id
-            ?? $shipment->current_branch_id
-            ?? $shipment->origin_branch_id
-            ?? null;
-    }
-
-    public function autoEnsureForShipment(Shipment $shipment): ?BranchCommissionBill
+    /**
+     * HQ commission per branch, on each branch's own allocation of the fare
+     * (shipment_branch_shares). One bill per (shipment, branch). The old
+     * single bill on the destination branch for the gross fare is replaced.
+     *
+     * Returns the first bill (kept for callers that expect one bill).
+     */
+    public function autoEnsureForShipment(Shipment $shipment, bool $recomputeShares = true): ?BranchCommissionBill
     {
         $shipment->refresh();
 
@@ -75,47 +74,78 @@ class BranchCommissionService
             return null;
         }
 
-        $branchId = $this->responsibleBranchId($shipment);
-        if (! $branchId) {
+        $rows = $recomputeShares
+            ? collect()
+            : \Modules\Billing\Models\ShipmentBranchShare::query()->where('shipment_id', $shipment->id)->orderBy('position')->get();
+
+        if ($rows->isEmpty()) {
+            $outcome = app(BranchShareService::class)->ensureForShipment($shipment);
+            $rows = $outcome['rows'] ?? collect();
+        }
+
+        // pending_config / no_fare / failed: nothing to bill until shares exist.
+        if ($rows->isEmpty()) {
             return null;
         }
 
-        $base = $this->settlements->checkoutDeliveryCharge($shipment);
-        if ($base <= 0) {
-            return null;
-        }
+        return DB::transaction(function () use ($shipment, $rows) {
+            $first = null;
 
-        $rate = $this->commissionRatePercent((int) $branchId);
-        if ($rate <= 0) {
-            return null;
-        }
+            foreach ($rows as $share) {
+                $amount = round((float) $share->hq_commission_amount, 2);
 
-        $amount = round($base * ($rate / 100), 2);
-        if ($amount <= 0) {
-            return null;
-        }
+                $existing = BranchCommissionBill::query()
+                    ->where('shipment_id', $shipment->id)
+                    ->where('branch_id', $share->branch_id)
+                    ->lockForUpdate()
+                    ->first();
 
-        return DB::transaction(function () use ($shipment, $branchId, $base, $rate, $amount) {
-            $existing = BranchCommissionBill::query()
-                ->where('shipment_id', $shipment->id)
-                ->lockForUpdate()
-                ->first();
+                $values = [
+                    'merchant_id' => $shipment->merchant_id,
+                    'delivery_charge_base' => round((float) $share->allocation_amount, 2),
+                    'commission_rate' => (float) $share->hq_rate,
+                    'commission_amount' => $amount,
+                    'shipment_branch_share_id' => $share->id,
+                ];
 
-            if ($existing) {
-                return $existing;
+                if ($existing) {
+                    // Only unpaid bills that are not in a settlement batch follow a recompute.
+                    if ($existing->status === 'unpaid' && ! $existing->settlement_id) {
+                        if ($amount <= 0) {
+                            $existing->delete();
+
+                            continue;
+                        }
+                        $existing->update($values);
+                    }
+                    $first ??= $existing;
+
+                    continue;
+                }
+
+                if ($amount <= 0) {
+                    continue;
+                }
+
+                $bill = BranchCommissionBill::create($values + [
+                    'bill_number' => 'HQ-COM-'.now()->format('YmdHis').'-'.random_int(100, 999).'-'.$share->position,
+                    'branch_id' => $share->branch_id,
+                    'shipment_id' => $shipment->id,
+                    'currency' => 'NPR',
+                    'status' => 'unpaid',
+                ]);
+                $first ??= $bill;
             }
 
-            return BranchCommissionBill::create([
-                'bill_number' => 'HQ-COM-'.now()->format('YmdHis').'-'.random_int(100, 999),
-                'branch_id' => $branchId,
-                'shipment_id' => $shipment->id,
-                'merchant_id' => $shipment->merchant_id,
-                'delivery_charge_base' => round($base, 2),
-                'commission_rate' => $rate,
-                'commission_amount' => $amount,
-                'currency' => 'NPR',
-                'status' => 'unpaid',
-            ]);
+            // A branch that is no longer in the split loses its untouched bill.
+            BranchCommissionBill::query()
+                ->where('shipment_id', $shipment->id)
+                ->whereNotIn('branch_id', $rows->pluck('branch_id')->all())
+                ->where('status', 'unpaid')
+                ->whereNull('settlement_id')
+                ->delete();
+
+            return $first;
         });
     }
 

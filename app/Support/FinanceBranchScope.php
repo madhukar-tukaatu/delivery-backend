@@ -29,7 +29,10 @@ use Modules\Shipment\Models\Shipment;
  *    the same order MerchantDeliveryBillingService uses for invoices.branch_id and
  *    SettlementHamroPayService uses to pick the paying branch. destination_sub_branch_id
  *    also matches so sub-branch users see their deliveries.
- *  - invoices: invoices.branch_id (payee branch). Legacy rows with NULL branch_id fall
+ *  - shipment_branch_shares: branch_id (a branch sees only its own share rows).
+ *  - inter_branch_statements: from_branch_id or to_branch_id.
+ *  - invoices: invoices.branch_id (payee branch = ORIGIN branch for delivery bills since
+ *    transfer settlement; older rows may still carry the destination). Legacy rows with NULL branch_id fall
  *    back to the shipment owner. Company (marketplace) invoices follow the same rule,
  *    so a branch only sees a Tukaatu/FCA bill for a shipment its branch delivered.
  *  - merchant_settlements: no branch column; visible when any item shipment is owned by the branch.
@@ -250,6 +253,32 @@ class FinanceBranchScope
         }
 
         return $query->whereIn($query->getModel()->getTable().'.'.$column, $ids);
+    }
+
+    /** shipment_branch_shares: only the user's own branch rows. */
+    public static function scopeShares(Builder $query, ?Authenticatable $user): Builder
+    {
+        return self::scopeBranchColumn($query, $user, 'branch_id');
+    }
+
+    /** inter_branch_statements: user's branch is the payer or the receiver. */
+    public static function scopeStatements(Builder $query, ?Authenticatable $user): Builder
+    {
+        if (! self::applies($user)) {
+            return $query;
+        }
+
+        $ids = self::branchIds($user);
+        if ($ids === []) {
+            return $query->whereRaw('1 = 0');
+        }
+
+        $table = $query->getModel()->getTable();
+
+        return $query->where(function ($q) use ($ids, $table) {
+            $q->whereIn("{$table}.from_branch_id", $ids)
+                ->orWhereIn("{$table}.to_branch_id", $ids);
+        });
     }
 
     /*

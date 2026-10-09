@@ -9,6 +9,13 @@ class DispatchManifestItem extends Model
 {
     protected $guarded = [];
 
+    protected $casts = [
+        'transport_cost' => 'float',
+        'received_at' => 'datetime',
+        'scanned_at' => 'datetime',
+        'is_extra' => 'boolean',
+    ];
+
     public function manifest()
     {
         return $this->belongsTo(DispatchManifest::class, 'dispatch_manifest_id');

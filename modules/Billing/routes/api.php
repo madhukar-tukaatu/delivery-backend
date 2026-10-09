@@ -2,6 +2,8 @@
 
 use Illuminate\Support\Facades\Route;
 use Modules\Billing\Http\Controllers\BranchCommissionController;
+use Modules\Billing\Http\Controllers\BranchShareController;
+use Modules\Billing\Http\Controllers\InterBranchStatementController;
 use Modules\Billing\Http\Controllers\HamroPayMerchantController;
 use Modules\Billing\Http\Controllers\InvoiceController;
 use Modules\Billing\Http\Controllers\PaymentGatewayAccountController;
@@ -78,6 +80,39 @@ Route::prefix('v1/admin')
                 ->name('hq-commissions.settlements.pay-hamropay');
             Route::post('hq-commissions/settlements/{settlement}/mark-paid', [BranchCommissionController::class, 'markPaid'])
                 ->name('hq-commissions.settlements.mark-paid');
+
+            // Transfer delivery-charge split per branch (origin / transit / delivery)
+            Route::get('branch-shares', [BranchShareController::class, 'index'])
+                ->name('branch-shares.index')
+                ->adminMenu('Branch shares', '/admin/branch-shares', 'money', 47, 'Finance');
+            Route::get('branch-shares/config', [BranchShareController::class, 'config'])
+                ->name('branch-shares.config');
+            Route::post('branch-shares/config', [BranchShareController::class, 'saveConfig'])
+                ->name('branch-shares.config.update');
+            Route::get('shipments/{shipment}/branch-shares', [BranchShareController::class, 'shipment'])
+                ->name('branch-shares.shipment');
+            Route::post('shipments/{shipment}/branch-shares/recompute', [BranchShareController::class, 'recompute'])
+                ->name('branch-shares.recompute');
+
+            // Collecting branch -> other branch statements
+            Route::get('inter-branch-settlements', [InterBranchStatementController::class, 'index'])
+                ->name('inter-branch-settlements.index')
+                ->adminMenu('Inter-branch settlements', '/admin/inter-branch-settlements', 'settlements', 48, 'Finance');
+            Route::post('inter-branch-settlements/generate', [InterBranchStatementController::class, 'generate'])
+                ->name('inter-branch-settlements.generate');
+            Route::get('inter-branch-settlements/{statement}', [InterBranchStatementController::class, 'show'])
+                ->whereNumber('statement')
+                ->name('inter-branch-settlements.show');
+            Route::post('inter-branch-settlements/{statement}/issue', [InterBranchStatementController::class, 'issue'])
+                ->name('inter-branch-settlements.issue');
+            Route::post('inter-branch-settlements/{statement}/pay-hamropay', [InterBranchStatementController::class, 'payHamroPay'])
+                ->name('inter-branch-settlements.pay-hamropay');
+            Route::post('inter-branch-settlements/{statement}/mark-paid', [InterBranchStatementController::class, 'markPaid'])
+                ->name('inter-branch-settlements.mark-paid');
+            Route::post('inter-branch-settlements/{statement}/mark-received', [InterBranchStatementController::class, 'markReceived'])
+                ->name('inter-branch-settlements.mark-received');
+            Route::post('inter-branch-settlements/{statement}/send-email', [InterBranchStatementController::class, 'sendEmail'])
+                ->name('inter-branch-settlements.send-email');
         });
     });
 

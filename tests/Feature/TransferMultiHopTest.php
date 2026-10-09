@@ -292,15 +292,20 @@ final class TransferMultiHopTest extends TestCase
             'Thin sort must not invent next_hop = final when no route exists'
         );
 
-        // Live resolve: if no route matched from OD lookup, next_hop must stay null (not final).
+        // Live resolve with NO configured KTM->BRN route: next_hop must stay null (not final).
+        $this->withOnlyOdRoutes([]);
+        $none = $this->progress->resolveForShipment($sorted->fresh(), self::KTM);
+        $this->assertFalse($none['has_route']);
+        $this->assertNull($none['next_hop_branch_id']);
+        $this->assertFalse($none['ready_for_last_mile']);
+
+        // With route 174 as the only KTM->BRN route, the OD lookup finds the
+        // multi-hop path: next must be Bharatpur, never a skip to the final.
+        $this->withOnlyOdRoutes([self::ROUTE_ID]);
         $before = $this->progress->resolveForShipment($sorted->fresh(), self::KTM);
-        if (!$before['has_route']) {
-            $this->assertNull($before['next_hop_branch_id']);
-            $this->assertFalse($before['ready_for_last_mile']);
-        } else {
-            // Configured OD match found the multi-hop path â€” next must still be Bharatpur, not skip.
-            $this->assertSame(self::BHARATPUR, (int) $before['next_hop_branch_id']);
-        }
+        $this->assertTrue($before['has_route']);
+        $this->assertSame(self::ROUTE_ID, (int) $before['transfer_route_id']);
+        $this->assertSame(self::BHARATPUR, (int) $before['next_hop_branch_id']);
 
         // Transfers Outbound reconcile: assign route then apply progress â†’ Bharatpur.
         $sorted->update(['transfer_route_id' => self::ROUTE_ID]);
@@ -320,6 +325,49 @@ final class TransferMultiHopTest extends TestCase
             $flat = collect($e->errors())->flatten()->implode(' ');
             $this->assertStringContainsStringIgnoringCase('skip-hop', $flat);
         }
+    }
+
+    /**
+     * Scenario 10: OD auto-match skips a route through a stop that has no
+     * branch (e.g. a coverage zone without a franchise). Such a route used to
+     * win as default and made "next hop" a coverage id that is not a branch.
+     */
+    public function test_scenario10_route_through_stop_without_branch_is_not_auto_matched(): void
+    {
+        $ghost = (int) max(
+            (int) \Illuminate\Support\Facades\DB::table('coverage_locations')->max('id'),
+            (int) \Illuminate\Support\Facades\DB::table('branches')->max('id'),
+        ) + 1000;
+
+        $route = BranchTransferRoute::query()->findOrFail(self::ROUTE_ID);
+        $path = array_map('intval', $route->getPathBranchIds());
+
+        $this->assertTrue($this->progress->pathIsOperable($path), 'Route 174 stops all have branches');
+        $this->assertFalse($this->progress->pathIsOperable([$path[0], $ghost, (int) end($path)]));
+    }
+
+    /**
+     * Keep only the given routes active among standard routes that run
+     * KTM -> Birendranagar, so OD auto-matching does not depend on whatever
+     * other routes exist in the local database. Rolled back with the test.
+     *
+     * @param  list<int>  $keepIds
+     */
+    private function withOnlyOdRoutes(array $keepIds): void
+    {
+        $from = $this->progress->coverageIdForBranch(self::KTM) ?? self::KTM;
+        $to = $this->progress->coverageIdForBranch(self::BIRENDRANAGAR) ?? self::BIRENDRANAGAR;
+
+        BranchTransferRoute::query()
+            ->where('service_type', 'standard')
+            ->get()
+            ->each(function (BranchTransferRoute $r) use ($from, $to, $keepIds) {
+                $path = array_map('intval', $r->getPathBranchIds());
+                if ($path === [] || !in_array($from, $path, true) || (int) end($path) !== (int) $to) {
+                    return;
+                }
+                $r->forceFill(['is_active' => in_array((int) $r->id, $keepIds, true)])->saveQuietly();
+            });
     }
 
     /** Scenario 9: At final destination branch, sort for delivery without needing a multi-hop route. */

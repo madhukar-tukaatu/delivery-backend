@@ -96,13 +96,11 @@ class MerchantDeliveryBillingService
 
 
 
-        $branchId = $shipment->destination_branch_id
+        // The ORIGIN branch (merchant's branch) bills the full fare for every
 
-            ?? $shipment->current_branch_id
+        // route. Other branches get their share through inter-branch statements.
 
-            ?? $shipment->origin_branch_id
-
-            ?? null;
+        $branchId = app(BranchShareService::class)->billingBranchId($shipment);
 
 
 

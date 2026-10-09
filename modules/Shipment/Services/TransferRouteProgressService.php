@@ -30,6 +30,9 @@ final class TransferRouteProgressService
     /** @var array<int, int|null> */
     private array $branchByCoverage = [];
 
+    /** @var array<int, bool> branch id => exists (route operability checks) */
+    private array $branchExists = [];
+
     public function __construct(
         private readonly ConfiguredTransferRouteService $configuredRoutes,
     ) {
@@ -276,9 +279,10 @@ final class TransferRouteProgressService
 
         $query = DispatchManifestItem::query()
             ->where('shipment_id', $shipment->id)
-            ->whereIn('status', ['sent', 'dispatched', 'in_transit', 'draft', 'pending'])
+            ->whereIn('status', ['sent', 'dispatched', 'in_transit', 'draft', 'pending', 'added'])
             ->whereHas('manifest', function ($q) {
-                $q->whereIn('status', ['draft', 'dispatched', 'in_transit', 'pending', 'created']);
+                // open = TR being loaded, partially_received = TR whose other parcels are still open.
+                $q->whereIn('status', ['open', 'draft', 'dispatched', 'in_transit', 'partially_received', 'pending', 'created']);
             });
 
         if ($exceptManifestId) {
@@ -347,6 +351,11 @@ final class TransferRouteProgressService
         foreach ($candidates as $route) {
             $path = array_map('intval', $route->getPathBranchIds());
             if ($path === []) {
+                continue;
+            }
+            // A stop with no branch behind it cannot receive a TR; using it
+            // would make "next hop" a coverage id that is not a branch.
+            if (!$this->pathIsOperable($path)) {
                 continue;
             }
             $pathStart = (int) $path[0];
@@ -471,6 +480,35 @@ final class TransferRouteProgressService
         $this->coverageByBranch[$branchId] = $cov !== null ? (int) $cov : null;
 
         return $this->coverageByBranch[$branchId];
+    }
+
+    /**
+     * True when every stop on a route path maps to a branch (by coverage
+     * location, or a path entry that is itself a branch id). Routes through a
+     * coverage location with no branch are skipped by origin/destination
+     * auto-matching; an explicitly assigned route is still honoured.
+     *
+     * @param  list<int>  $path
+     */
+    public function pathIsOperable(array $path): bool
+    {
+        foreach ($path as $stop) {
+            $stop = (int) $stop;
+            if ($stop <= 0) {
+                return false;
+            }
+            if ($this->branchIdForCoverage($stop) !== null) {
+                continue;
+            }
+            if (!array_key_exists($stop, $this->branchExists)) {
+                $this->branchExists[$stop] = Branch::query()->whereKey($stop)->exists();
+            }
+            if (!$this->branchExists[$stop]) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public function branchIdForCoverage(?int $coverageId): ?int

@@ -198,6 +198,13 @@ final class TransferService
 
             $this->track($shipment, $old, CourierStatus::RECEIVED_AT_DESTINATION_BRANCH, 'Received at destination branch.', $actorId);
 
+            // Close the dispatch manifest item / hop headed here, and the manifest
+            // when all its items are in (they used to stay "dispatched").
+            if ($shipment->destination_branch_id) {
+                app(\Modules\Dispatch\Services\ManifestHopService::class)
+                    ->markReceived((int) $shipment->id, (int) $shipment->destination_branch_id, $actorId);
+            }
+
             return $shipment->fresh();
         });
 

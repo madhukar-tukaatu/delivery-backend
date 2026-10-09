@@ -72,7 +72,10 @@ class ShipmentRoutingService
             'delivery_charge_breakdown' => $tariff['breakdown'],
         ]);
 
-        ShipmentRouteStep::where('shipment_id', $shipment->id)->delete();
+        // Only replace the planned route; actual hops (dispatch_manifest_id set) stay.
+        ShipmentRouteStep::where('shipment_id', $shipment->id)
+            ->when(\Illuminate\Support\Facades\Schema::hasColumn('shipment_route_steps', 'dispatch_manifest_id'), fn ($q) => $q->whereNull('dispatch_manifest_id'))
+            ->delete();
         foreach ($quote['steps'] as $step) {
             ShipmentRouteStep::create([
                 'shipment_id' => $shipment->id,

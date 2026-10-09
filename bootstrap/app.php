@@ -56,6 +56,7 @@ return Application::configure(
     })
     ->withCommands([
         \Modules\Billing\Console\Commands\SendMerchantBillDigests::class,
+        \Modules\Billing\Console\Commands\GenerateBranchSettlements::class,
     ])
     ->withSchedule(function (\Illuminate\Console\Scheduling\Schedule $schedule): void {
         // 06:17 Asia/Kathmandu via config app.timezone (APP_TIMEZONE, default Asia/Kathmandu). Do not change app timezone.
@@ -63,6 +64,8 @@ return Application::configure(
         // Monday 06:17. The command still skips weekly unless it is Monday.
         // Admin Send weekly dispatches SendMerchantBillDigest directly and is not blocked.
         $schedule->command('billing:send-merchant-digests --period=weekly')->weeklyOn(1, '06:17');
+        // Sunday 06:23: inter-branch statements for transfer delivery shares (previous 7 days).
+        $schedule->command('branch-settlements:generate --period=weekly')->weeklyOn(0, '06:23')->withoutOverlapping();
     })
 
     ->create();

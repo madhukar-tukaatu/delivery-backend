@@ -508,9 +508,17 @@ class DeliveryWorkflowService
                 report($e);
             }
 
-            // HQ commission bill (branch owes Tukaatu Express) — independent track
+            // 3) Transfer delivery-charge split per branch (origin / transit / delivery).
+            //    Saved in shipment_branch_shares; pending_config when no percent row exists.
             try {
-                app(BranchCommissionService::class)->autoEnsureForShipment($freshShipment);
+                app(\Modules\Billing\Services\BranchShareService::class)->ensureForShipment($freshShipment);
+            } catch (\Throwable $e) {
+                report($e);
+            }
+
+            // 4) HQ commission bills: one per branch on its own allocation.
+            try {
+                app(BranchCommissionService::class)->autoEnsureForShipment($freshShipment, false);
             } catch (\Throwable $e) {
                 report($e);
             }

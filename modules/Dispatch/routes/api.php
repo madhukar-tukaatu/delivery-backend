@@ -34,5 +34,11 @@ Route::prefix('v1/admin')
 
             Route::post('dispatches/{dispatch}/receive', [DispatchController::class, 'receive'])
                 ->name('dispatches.receive');
+
+            // Trip transport cost entered by the dispatching branch (split per shipment).
+            Route::get('dispatches/{dispatch}/transport-cost', [DispatchController::class, 'transportCost'])
+                ->name('dispatches.transport-cost');
+            Route::post('dispatches/{dispatch}/transport-cost', [DispatchController::class, 'updateTransportCost'])
+                ->name('dispatches.transport-cost.update');
         });
     });

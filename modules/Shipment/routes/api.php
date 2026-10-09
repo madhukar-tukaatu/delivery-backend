@@ -99,6 +99,32 @@ Route::prefix('v1/admin')
             Route::post('transfers/dispatch', [TransferController::class, 'dispatch'])
                 ->name('transfers.dispatch');
 
+            // TR transfer containers (one per branch -> next hop trip).
+            Route::get('transfers/containers', [TransferController::class, 'containers'])
+                ->name('transfers.containers.index');
+            Route::get('transfers/containers/{container}', [TransferController::class, 'containerShow'])
+                ->whereNumber('container')
+                ->name('transfers.containers.show');
+            Route::post('transfers/containers/{container}/receive', [TransferController::class, 'containerReceive'])
+                ->whereNumber('container')
+                ->name('transfers.containers.receive');
+            // Resolve a missing parcel (found / lost): part of receiving.
+            Route::post('transfers/containers/{container}/items/{item}/resolve', [TransferController::class, 'containerResolveItem'])
+                ->whereNumber(['container', 'item'])
+                ->name('transfers.containers.items.resolve.receive');
+            Route::post('transfers/containers/{container}/dispatch', [TransferController::class, 'containerDispatch'])
+                ->whereNumber('container')
+                ->name('transfers.containers.dispatch');
+            // Cancel an open TR: part of dispatching (maps to transfers.dispatch).
+            Route::post('transfers/containers/{container}/cancel', [TransferController::class, 'containerCancel'])
+                ->whereNumber('container')
+                ->name('transfers.containers.cancel.dispatch');
+            Route::get('transfers/riders', [TransferController::class, 'riders'])
+                ->name('transfers.riders.index');
+            Route::get('transfers/shipments/{shipment}/hops', [TransferController::class, 'shipmentHops'])
+                ->whereNumber('shipment')
+                ->name('transfers.shipments.hops.show');
+
             Route::post('transfers/{shipment}/receive', [TransferController::class, 'receive'])
                 ->name('transfers.receive');
 

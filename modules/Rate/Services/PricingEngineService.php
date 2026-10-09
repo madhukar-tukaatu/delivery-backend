@@ -63,6 +63,23 @@ final class PricingEngineService
         );
 
         /*
+         * Extra last-mile distance is measured from the operational branch that
+         * will deliver (same nearest-active-branch rule BranchAssignmentService
+         * uses for destination_branch_id), not from the nearest coverage zone.
+         * A zone without its own branch (e.g. Baglung) is delivered by another
+         * branch (e.g. Pokhara), so the rider's distance is from that branch.
+         * Route base rates still use the coverage zones above.
+         */
+        $zoneDeliveryDistanceKm = $deliveryDistanceKm;
+        $deliveringBranch = $this->deliveringBranch(
+            (float) ($data['delivery_latitude'] ?? 0),
+            (float) ($data['delivery_longitude'] ?? 0)
+        );
+        if ($deliveringBranch !== null) {
+            $deliveryDistanceKm = max(0, (float) $deliveringBranch['distance_km']);
+        }
+
+        /*
          * Step 1: Select the base-rate source.
          *
          * Marketplace multi-store pricing uses a complete configured route,
@@ -521,6 +538,19 @@ final class PricingEngineService
                 'distance_km' =>
                     round(
                         $deliveryDistanceKm,
+                        3
+                    ),
+
+                // Branch the extra distance is measured from.
+                'operational_branch_id' =>
+                    $deliveringBranch['branch_id'] ?? null,
+
+                'operational_branch_name' =>
+                    $deliveringBranch['name'] ?? null,
+
+                'zone_distance_km' =>
+                    round(
+                        $zoneDeliveryDistanceKm,
                         3
                     ),
             ],
@@ -1561,6 +1591,47 @@ final class PricingEngineService
         }
 
         return $allocations;
+    }
+
+    /**
+     * Operational branch that delivers to these coordinates and its distance.
+     * Null when coordinates are missing or no branch has a location.
+     *
+     * @return array{branch_id:int, name:?string, distance_km:float}|null
+     */
+    private function deliveringBranch(float $latitude, float $longitude): ?array
+    {
+        if ($latitude == 0.0 && $longitude == 0.0) {
+            return null;
+        }
+
+        try {
+            $assigner = app(\Modules\Shipment\Services\BranchAssignmentService::class);
+            $payload = $assigner->resolveDestination([
+                'latitude' => $latitude,
+                'longitude' => $longitude,
+            ]);
+
+            $node = $payload['sub_branch'] ?? $payload['branch'] ?? null;
+            if (! $node || $node->latitude === null || $node->longitude === null) {
+                return null;
+            }
+
+            return [
+                'branch_id' => (int) $node->id,
+                'name' => $node->name ?? null,
+                'distance_km' => (float) $assigner->distanceKm(
+                    $latitude,
+                    $longitude,
+                    (float) $node->latitude,
+                    (float) $node->longitude
+                ),
+            ];
+        } catch (\Throwable $e) {
+            report($e);
+
+            return null;
+        }
     }
 
     /**

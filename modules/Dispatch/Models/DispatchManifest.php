@@ -34,7 +34,11 @@ class DispatchManifest extends Model
         'received_count' => 'integer',
         'missing_count' => 'integer',
         'extra_count' => 'integer',
+        'auto_append' => 'boolean',
+        'seal_checked_at' => 'datetime',
     ];
+
+    public const SEAL_STATUSES = ['ok', 'mismatch', 'tampered'];
 
     protected $appends = ['display_number'];
 

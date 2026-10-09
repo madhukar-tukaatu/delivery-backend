@@ -137,6 +137,13 @@ final class ShipmentSortingService
                     $callbacks->sortedForDelivery($fresh);
                 } else {
                     $callbacks->sortedForTransfer($fresh);
+                    // Joins the branch's open TR to its next hop when that TR
+                    // has auto-append on. Never fails the sort.
+                    try {
+                        app(\Modules\Dispatch\Services\TransferContainerService::class)->autoAppend($fresh, $actorId);
+                    } catch (\Throwable $e) {
+                        // additive only
+                    }
                 }
 
                 return $fresh;

@@ -102,6 +102,9 @@ Route::prefix('v1/admin')
             // TR transfer containers (one per branch -> next hop trip).
             Route::get('transfers/containers', [TransferController::class, 'containers'])
                 ->name('transfers.containers.index');
+            // Open a TR from its bag-label barcode (receiving branch only).
+            Route::get('transfers/containers/lookup', [TransferController::class, 'containerLookup'])
+                ->name('transfers.containers.lookup.receive');
             Route::get('transfers/containers/{container}', [TransferController::class, 'containerShow'])
                 ->whereNumber('container')
                 ->name('transfers.containers.show');
@@ -115,6 +118,19 @@ Route::prefix('v1/admin')
             Route::post('transfers/containers/{container}/dispatch', [TransferController::class, 'containerDispatch'])
                 ->whereNumber('container')
                 ->name('transfers.containers.dispatch');
+            // Change the parcel list of an open TR before dispatch (maps to transfers.dispatch).
+            Route::get('transfers/containers/{container}/candidates', [TransferController::class, 'containerCandidates'])
+                ->whereNumber('container')
+                ->name('transfers.containers.candidates.dispatch');
+            Route::post('transfers/containers/{container}/items', [TransferController::class, 'containerAddItems'])
+                ->whereNumber('container')
+                ->name('transfers.containers.items.add.dispatch');
+            Route::post('transfers/containers/{container}/items/remove', [TransferController::class, 'containerRemoveItems'])
+                ->whereNumber('container')
+                ->name('transfers.containers.items.remove.dispatch');
+            Route::post('transfers/containers/{container}/auto-append', [TransferController::class, 'containerAutoAppend'])
+                ->whereNumber('container')
+                ->name('transfers.containers.auto_append.dispatch');
             // Cancel an open TR: part of dispatching (maps to transfers.dispatch).
             Route::post('transfers/containers/{container}/cancel', [TransferController::class, 'containerCancel'])
                 ->whereNumber('container')

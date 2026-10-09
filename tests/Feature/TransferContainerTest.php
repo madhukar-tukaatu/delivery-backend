@@ -358,4 +358,224 @@ final class TransferContainerTest extends TestCase
         $b = $this->svc->nextTransferNumber();
         $this->assertSame((int) substr($a, 3) + 1, (int) substr($b, 3));
     }
+    /* ---------------- open TR: add / remove before dispatch ---------------- */
+
+    private function openTr(array $shipments): DispatchManifest
+    {
+        $out = $this->svc->dispatch(collect($shipments), self::HOP, self::KTM, ['hold' => true], $this->actor);
+        $this->assertSame([], $out['skipped'], json_encode($out['skipped']));
+
+        return $out['manifests'][0];
+    }
+
+    private function bareOpenTr(int $from, int $to): DispatchManifest
+    {
+        $no = $this->svc->nextTransferNumber();
+
+        return DispatchManifest::query()->create([
+            'manifest_number' => $no, 'transfer_number' => $no,
+            'from_branch_id' => $from, 'to_branch_id' => $to, 'status' => 'open', 'created_by' => $this->actor,
+        ]);
+    }
+
+    public function test_new_parcel_appends_to_open_tr_remove_and_cost_split_over_final_set(): void
+    {
+        [$first] = $this->mixedBatch(2, 0);
+        $open = $this->openTr($first);
+
+        // New parcels sorted later for the same next hop join the same open TR.
+        [$lm, $on] = $this->mixedBatch(1, 1);
+        $res = $this->svc->addToOpen($open, array_merge($lm, $on), $this->actor);
+        $this->assertSame([], $res['skipped']);
+        $this->assertCount(2, $res['added']);
+        $this->assertSame('open', $res['container']->status);
+        $this->assertSame(1, DispatchManifest::query()->where('from_branch_id', self::KTM)->where('to_branch_id', self::HOP)->where('status', 'open')->count(), 'one open TR per branch -> next hop');
+
+        // Loading again through "Load only" still reuses it.
+        [$more] = $this->mixedBatch(1, 0);
+        $again = $this->svc->dispatch(collect($more), self::HOP, self::KTM, ['hold' => true], $this->actor);
+        $this->assertSame($open->id, $again['manifests'][0]->id);
+
+        // Remove one before dispatch: it stays ready at KTM.
+        $rm = $this->svc->removeFromOpen($open, [$first[1]->id], 'goes tomorrow', $this->actor);
+        $this->assertSame([(int) $first[1]->id], $rm['removed']);
+        $this->assertSame(CourierStatus::SORTED_FOR_TRANSFER, $first[1]->fresh()->status);
+
+        // Dispatch: cost split over the FINAL 4 parcels (2 + 1 + 1 + 1 - 1).
+        $sent = $this->svc->dispatchOpen($open, ['vehicle_type' => 'van', 'transport_cost' => 400], $this->actor);
+        $this->assertSame('dispatched', $sent->status);
+        $this->assertSame(4, (int) $sent->expected_count);
+        $this->assertEqualsWithDelta(400.0, (float) $sent->transport_cost, 0.001);
+        $items = DispatchManifestItem::query()->where('dispatch_manifest_id', $open->id)->get()->keyBy('shipment_id');
+        foreach ([$first[0], $lm[0], $on[0], $more[0]] as $s) {
+            $this->assertSame('sent', $items[$s->id]->status);
+            $this->assertEqualsWithDelta(100.0, (float) $items[$s->id]->transport_cost, 0.001);
+            $this->assertSame(CourierStatus::IN_TRANSIT, $s->fresh()->status);
+        }
+        $this->assertSame('cancelled', $items[$first[1]->id]->status);
+        $this->assertEqualsWithDelta(0.0, (float) $items[$first[1]->id]->transport_cost, 0.001);
+
+        // The removed parcel can ride the next TR.
+        $next = $this->svc->dispatch(collect([$first[1]->fresh()]), self::HOP, self::KTM, [], $this->actor);
+        $this->assertSame([], $next['skipped']);
+        $this->assertNotSame($open->id, $next['manifests'][0]->id);
+    }
+
+    public function test_add_validates_next_hop_branch_and_other_active_tr(): void
+    {
+        // Wrong next hop: KTM parcel via Bharatpur cannot go on a KTM -> Birendranagar TR.
+        $skip = $this->bareOpenTr(self::KTM, self::FINAL);
+        $p = $this->parcel();
+        $res = $this->svc->addToOpen($skip, [$p], $this->actor);
+        $this->assertSame([], $res['added']);
+        $this->assertStringContainsStringIgnoringCase('skip-hop', (string) $res['skipped'][$p->id]);
+
+        // Parcel already on another open TR is refused.
+        $open = $this->openTr([$p2 = $this->parcel()]);
+        $other = $this->bareOpenTr(self::KTM, self::HOP);
+        $res = $this->svc->addToOpen($other, [$p2], $this->actor);
+        $this->assertSame([], $res['added']);
+        $this->assertStringContainsString('active transfer', (string) $res['skipped'][$p2->id]);
+        $this->assertNotSame($open->id, $other->id);
+
+        // Parcel not at the sending branch is refused.
+        $atHop = $this->parcel(['current_branch_id' => self::HOP]);
+        $res = $this->svc->addToOpen($open, [$atHop], $this->actor);
+        $this->assertSame([], $res['added']);
+        $this->assertArrayHasKey($atHop->id, $res['skipped']);
+    }
+
+    public function test_add_and_remove_blocked_after_dispatch(): void
+    {
+        [$lm] = $this->mixedBatch(2, 0);
+        $tr = $this->dispatchFromKtm($lm);
+        [$late] = $this->mixedBatch(1, 0);
+
+        try {
+            $this->svc->addToOpen($tr, $late, $this->actor);
+            $this->fail('add after dispatch must be refused');
+        } catch (ValidationException $e) {
+            $this->assertStringContainsString('before dispatch', collect($e->errors())->flatten()->implode(' '));
+        }
+        try {
+            $this->svc->removeFromOpen($tr, [$lm[0]->id], null, $this->actor);
+            $this->fail('remove after dispatch must be refused');
+        } catch (ValidationException $e) {
+            $this->assertStringContainsString('before dispatch', collect($e->errors())->flatten()->implode(' '));
+        }
+        $this->assertSame(CourierStatus::SORTED_FOR_TRANSFER, $late[0]->fresh()->status);
+        $this->assertSame(2, DispatchManifestItem::query()->where('dispatch_manifest_id', $tr->id)->where('status', 'sent')->count());
+    }
+
+    public function test_auto_append_puts_newly_sorted_parcel_on_open_tr(): void
+    {
+        [$lm] = $this->mixedBatch(1, 0);
+        $open = $this->openTr($lm);
+        $p = $this->parcel();
+        $this->assertNull($this->svc->autoAppend($p, $this->actor), 'off by default');
+
+        $this->svc->setAutoAppend($open, true);
+        $hit = $this->svc->autoAppend($p->fresh(), $this->actor);
+        $this->assertNotNull($hit);
+        $this->assertSame($open->id, $hit->id);
+        $this->assertSame('added', DispatchManifestItem::query()->where('dispatch_manifest_id', $open->id)->where('shipment_id', $p->id)->value('status'));
+    }
+
+    public function test_api_add_remove_items_on_open_tr(): void
+    {
+        $this->actingAs(User::query()->findOrFail($this->actor), 'sanctum');
+        [$lm] = $this->mixedBatch(1, 0);
+        $open = $this->openTr($lm);
+        $new = $this->parcel();
+
+        $cand = $this->getJson('/api/v1/admin/transfers/containers/'.$open->id.'/candidates?branch_id='.self::KTM);
+        $cand->assertOk();
+        $this->assertContains($new->id, collect($cand->json('data'))->pluck('shipment_id')->all());
+
+        $add = $this->postJson('/api/v1/admin/transfers/containers/'.$open->id.'/items', ['branch_id' => self::KTM, 'shipment_ids' => [$new->id]]);
+        $add->assertOk();
+        $this->assertSame([$new->id], $add->json('data.added'));
+        $this->assertSame(2, $add->json('data.container.parcel_count'));
+
+        $rm = $this->postJson('/api/v1/admin/transfers/containers/'.$open->id.'/items/remove', ['branch_id' => self::KTM, 'shipment_ids' => [$new->id]]);
+        $rm->assertOk();
+        $this->assertSame(1, $rm->json('data.container.parcel_count'));
+
+        $this->svc->dispatchOpen($open, ['transport_cost' => 0], $this->actor);
+        $this->postJson('/api/v1/admin/transfers/containers/'.$open->id.'/items', ['branch_id' => self::KTM, 'shipment_ids' => [$new->id]])
+            ->assertStatus(422);
+    }
+
+    /* ---------------- seal check + lookup ---------------- */
+
+    public function test_seal_ok_is_recorded(): void
+    {
+        [$lm] = $this->mixedBatch(2, 0);
+        $tr = $this->dispatchFromKtm($lm, ['seal_number' => 'SEAL-77']);
+        $res = $this->svc->receive($tr, array_map(fn ($s) => $s->id, $lm), null, $this->actor, self::HOP, ['value' => ' seal-77 ', 'intact' => true]);
+
+        $c = $res['container'];
+        $this->assertSame('received', $c->status);
+        $this->assertSame('ok', $c->seal_status);
+        $this->assertSame('seal-77', $c->seal_checked_value);
+        $this->assertSame($this->actor, (int) $c->seal_checked_by);
+        $this->assertNotNull($c->seal_checked_at);
+    }
+
+    public function test_seal_mismatch_or_tampered_flags_and_notifies_sender(): void
+    {
+        [$lm] = $this->mixedBatch(2, 0);
+        $tr = $this->dispatchFromKtm($lm, ['seal_number' => 'SEAL-1']);
+
+        // Remark is required on a mismatch; nothing is received without it.
+        try {
+            $this->svc->receive($tr, [$lm[0]->id], null, $this->actor, self::HOP, ['value' => 'SEAL-9', 'intact' => true]);
+            $this->fail('remark must be required');
+        } catch (ValidationException $e) {
+            $this->assertArrayHasKey('seal_remark', $e->errors());
+        }
+        $this->assertSame(CourierStatus::IN_TRANSIT, $lm[0]->fresh()->status);
+
+        $before = DB::table('staff_notifications')->where('branch_id', self::KTM)->count();
+        $res = $this->svc->receive($tr, [$lm[0]->id, $lm[1]->id], null, $this->actor, self::HOP, ['value' => 'SEAL-9', 'intact' => true, 'remark' => 'different seal on bag']);
+        $c = $res['container'];
+        $this->assertSame('mismatch', $c->seal_status);
+        $this->assertSame('different seal on bag', $c->seal_remark);
+        $this->assertSame('received', $c->status, 'parcel check still runs');
+        $this->assertSame(CourierStatus::SORTED_FOR_DELIVERY, $lm[0]->fresh()->status);
+        $this->assertGreaterThan($before, DB::table('staff_notifications')->where('branch_id', self::KTM)->count());
+        $this->assertTrue(DB::table('staff_notifications')->where('branch_id', self::KTM)->where('title', 'like', '%'.$tr->transfer_number.'%seal%')->exists());
+
+        // Seal not intact -> tampered (even with the right number).
+        [$lm2] = $this->mixedBatch(1, 0);
+        $tr2 = $this->dispatchFromKtm($lm2, ['seal_number' => 'SEAL-2']);
+        $res2 = $this->svc->receive($tr2, [$lm2[0]->id], null, $this->actor, self::HOP, ['value' => 'SEAL-2', 'intact' => false, 'remark' => 'seal cut']);
+        $this->assertSame('tampered', $res2['container']->seal_status);
+    }
+
+    public function test_lookup_by_tr_number_only_for_receiving_branch_and_receive_api_with_seal(): void
+    {
+        $this->actingAs(User::query()->findOrFail($this->actor), 'sanctum');
+        [$lm] = $this->mixedBatch(1, 0);
+        $tr = $this->dispatchFromKtm($lm, ['seal_number' => 'BAG-5']);
+
+        $ok = $this->getJson('/api/v1/admin/transfers/containers/lookup?number='.strtolower($tr->transfer_number).'&branch_id='.self::HOP);
+        $ok->assertOk();
+        $this->assertSame($tr->id, $ok->json('data.id'));
+        $this->assertTrue($ok->json('data.can_receive'));
+        $this->assertTrue($ok->json('data.seal_check_required'));
+
+        $this->getJson('/api/v1/admin/transfers/containers/lookup?number='.$tr->transfer_number.'&branch_id='.self::KTM)->assertStatus(403);
+        $this->getJson('/api/v1/admin/transfers/containers/lookup?number=TR-999999999&branch_id='.self::HOP)->assertStatus(404);
+
+        $recv = $this->postJson('/api/v1/admin/transfers/containers/'.$tr->id.'/receive', [
+            'branch_id' => self::HOP,
+            'scanned' => [$lm[0]->tracking_number],
+            'seal_value' => 'BAG-5',
+            'seal_intact' => true,
+        ]);
+        $recv->assertOk();
+        $this->assertSame('ok', $recv->json('data.container.seal_status'));
+        $this->assertSame('ok', $recv->json('data.seal.status'));
+    }
 }

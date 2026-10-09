@@ -36,12 +36,22 @@ use Modules\Tracking\Services\TrackingService;
  *                 parcels that belong here are added as extras.
  *  - resolveItem(): a missing parcel is later found (received) or lost.
  *  - cancel():    only an open (not yet dispatched) TR.
+ *  - addToOpen() / removeFromOpen(): change the parcel list of an open TR
+ *                 before it leaves. The trip cost is split at dispatch over the
+ *                 final list, so nothing needs re-splitting here.
+ *  - autoAppend(): a parcel sorted for transfer joins the open TR for its
+ *                 next hop when that TR has auto-append switched on.
+ *  - seal check:  receive() records seal ok / mismatch / tampered.
  */
 final class TransferContainerService
 {
     public const OPEN_ITEM_STATUSES = ManifestHopService::OPEN_ITEM_STATUSES;
 
     public const RECEIVABLE_STATUSES = ['dispatched', 'in_transit', 'partially_received'];
+
+    public const SEAL_OK = 'ok';
+    public const SEAL_MISMATCH = 'mismatch';
+    public const SEAL_TAMPERED = 'tampered';
 
     private const IN_TRANSIT_SHIPMENT_STATUSES = [
         CourierStatus::IN_TRANSIT,
@@ -244,6 +254,201 @@ final class TransferContainerService
         return $container;
     }
 
+    /* ------------------------------------------------------------------ */
+    /* Open TR: add / remove parcels before dispatch                       */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Load more parcels on an open TR. Each parcel must be ready at the
+     * sending branch, have this TR's next hop and not ride another active TR.
+     *
+     * @param  iterable<Shipment>  $shipments
+     * @return array{container: DispatchManifest, added: list<int>, skipped: array<int,string>}
+     */
+    public function addToOpen(DispatchManifest $container, iterable $shipments, ?int $actorId): array
+    {
+        return DB::transaction(function () use ($container, $shipments, $actorId) {
+            $container = DispatchManifest::query()->lockForUpdate()->findOrFail($container->id);
+            $this->assertEditable($container);
+            $from = (int) $container->from_branch_id;
+            $hop = (int) $container->to_branch_id;
+
+            $added = [];
+            $skipped = [];
+            foreach ($shipments as $shipment) {
+                $shipment = $shipment instanceof Shipment ? Shipment::query()->find($shipment->id) : Shipment::query()->find((int) $shipment);
+                if (! $shipment) {
+                    continue;
+                }
+                $label = $shipment->tracking_number ?? (string) $shipment->id;
+                try {
+                    if (! $this->isDispatchableStatus($shipment)) {
+                        throw ValidationException::withMessages(['shipment_ids' => [
+                            sprintf('%s is not ready for transfer (status: %s).', $label, str_replace('_', ' ', (string) $shipment->status)),
+                        ]]);
+                    }
+                    $at = (int) ($this->progress->resolveOperationalBranchId(
+                        (int) ($shipment->current_branch_id ?: $shipment->origin_branch_id ?: 0)
+                    ) ?? 0);
+                    if ($at > 0 && $at !== $from && ! $this->progress->sameOperationalLocation($at, $from)) {
+                        throw ValidationException::withMessages(['shipment_ids' => [
+                            sprintf('%s is at %s, not at %s.', $label, $this->branchName($at), $this->branchName($from)),
+                        ]]);
+                    }
+                    $this->progress->assertNextHopMatches($shipment, $hop, $from);
+                    $this->progress->assertNotInActiveManifest($shipment, (int) $container->id);
+                } catch (ValidationException $e) {
+                    $skipped[(int) $shipment->id] = (string) (collect($e->errors())->flatten()->first() ?? $e->getMessage());
+                    continue;
+                }
+
+                $existing = DispatchManifestItem::query()
+                    ->where('dispatch_manifest_id', $container->id)
+                    ->where('shipment_id', $shipment->id)
+                    ->first();
+                if ($existing && $existing->status === 'added') {
+                    continue; // already loaded
+                }
+
+                $values = ['status' => 'added'];
+                foreach (['discrepancy' => null, 'discrepancy_note' => null, 'transport_cost' => 0, 'is_extra' => false] as $col => $val) {
+                    if (Schema::hasColumn('dispatch_manifest_items', $col)) {
+                        $values[$col] = $val;
+                    }
+                }
+                DispatchManifestItem::query()->updateOrCreate(
+                    ['dispatch_manifest_id' => $container->id, 'shipment_id' => $shipment->id],
+                    $values,
+                );
+                $added[] = (int) $shipment->id;
+                $this->trackInternal($shipment, "Loaded on {$container->display_number} (not dispatched yet).", $actorId);
+            }
+
+            $this->hops->refreshCounts((int) $container->id);
+
+            return ['container' => $container->fresh(['items.shipment', 'fromBranch', 'toBranch', 'rider']), 'added' => $added, 'skipped' => $skipped];
+        });
+    }
+
+    /**
+     * Take parcels off an open TR. The lines are kept as "cancelled" (audit)
+     * and the parcels stay sorted for transfer at the sending branch.
+     *
+     * @param  list<int>  $shipmentIds
+     * @return array{container: DispatchManifest, removed: list<int>}
+     */
+    public function removeFromOpen(DispatchManifest $container, array $shipmentIds, ?string $reason, ?int $actorId): array
+    {
+        $shipmentIds = array_values(array_unique(array_map('intval', $shipmentIds)));
+
+        return DB::transaction(function () use ($container, $shipmentIds, $reason, $actorId) {
+            $container = DispatchManifest::query()->lockForUpdate()->findOrFail($container->id);
+            $this->assertEditable($container);
+
+            $items = DispatchManifestItem::query()
+                ->where('dispatch_manifest_id', $container->id)
+                ->whereIn('shipment_id', $shipmentIds ?: [0])
+                ->where('status', 'added')
+                ->get();
+            if ($items->isEmpty()) {
+                throw ValidationException::withMessages(['shipment_ids' => ['None of these parcels is loaded on '.$container->display_number.'.']]);
+            }
+
+            $note = trim('Removed before dispatch'.($reason ? ': '.$reason : '.'));
+            foreach ($items as $item) {
+                $fill = ['status' => 'cancelled'];
+                if (Schema::hasColumn('dispatch_manifest_items', 'discrepancy_note')) {
+                    $fill['discrepancy_note'] = mb_substr($note, 0, 255);
+                }
+                if (Schema::hasColumn('dispatch_manifest_items', 'transport_cost')) {
+                    $fill['transport_cost'] = 0;
+                }
+                $item->forceFill($fill)->save();
+                if ($shipment = Shipment::query()->find($item->shipment_id)) {
+                    $this->trackInternal($shipment, "Removed from {$container->display_number} before dispatch".($reason ? ": {$reason}" : '.'), $actorId);
+                }
+            }
+
+            $this->hops->refreshCounts((int) $container->id);
+
+            return [
+                'container' => $container->fresh(['items.shipment', 'fromBranch', 'toBranch', 'rider']),
+                'removed' => $items->pluck('shipment_id')->map(fn ($v) => (int) $v)->values()->all(),
+            ];
+        });
+    }
+
+    /** Switch auto-append on / off for an open TR (one open TR per branch -> next hop). */
+    public function setAutoAppend(DispatchManifest $container, bool $on): DispatchManifest
+    {
+        $this->assertEditable($container);
+        if (Schema::hasColumn('dispatch_manifests', 'auto_append')) {
+            $container->forceFill(['auto_append' => $on])->save();
+        }
+
+        return $container->fresh();
+    }
+
+    /**
+     * Called after a parcel is sorted for transfer: when the branch keeps an
+     * open TR to the parcel's next hop with auto-append on, the parcel joins
+     * it. Never throws; sorting must not fail because of this.
+     */
+    public function autoAppend(Shipment $shipment, ?int $actorId): ?DispatchManifest
+    {
+        try {
+            if (! Schema::hasColumn('dispatch_manifests', 'auto_append')
+                || $shipment->status !== CourierStatus::SORTED_FOR_TRANSFER) {
+                return null;
+            }
+            $from = (int) ($this->progress->resolveOperationalBranchId((int) ($shipment->current_branch_id ?: 0)) ?? 0);
+            if ($from <= 0) {
+                return null;
+            }
+            $p = $this->progress->resolveForShipment($shipment, $from);
+            $hop = (int) ($p['next_hop_branch_id'] ?? 0);
+            if ($hop <= 0 || ($p['ready_for_last_mile'] ?? false)) {
+                return null;
+            }
+            $hop = (int) ($this->progress->resolveOperationalBranchId($hop) ?? $hop);
+
+            $open = DispatchManifest::query()
+                ->where('from_branch_id', $from)
+                ->where('to_branch_id', $hop)
+                ->where('status', DispatchManifest::STATUS_OPEN)
+                ->where('auto_append', true)
+                ->latest('id')
+                ->first();
+            if (! $open) {
+                return null;
+            }
+
+            $res = $this->addToOpen($open, [$shipment], $actorId);
+
+            return $res['added'] !== [] ? $res['container'] : null;
+        } catch (\Throwable $e) {
+            Log::info('transfer_container.auto_append_skipped', ['shipment_id' => $shipment->id, 'error' => $e->getMessage()]);
+
+            return null;
+        }
+    }
+
+    /** Open TR for a branch -> next hop, if any (one per pair). */
+    public function openFor(int $from, int $hop): ?DispatchManifest
+    {
+        return $this->openContainerFor($from, $hop);
+    }
+
+    private function assertEditable(DispatchManifest $container): void
+    {
+        if ($container->status !== DispatchManifest::STATUS_OPEN) {
+            throw ValidationException::withMessages(['status' => [
+                $container->display_number.' is '.str_replace('_', ' ', (string) $container->status)
+                    .'. Parcels can only be added or removed before dispatch.',
+            ]]);
+        }
+    }
+
     /** Cancel an open TR. Its parcels stay sorted for transfer at the branch. */
     public function cancel(DispatchManifest $container, ?string $reason, ?int $actorId): DispatchManifest
     {
@@ -276,14 +481,18 @@ final class TransferContainerService
      * Check a TR in at its next hop.
      *
      * @param  list<int|string>  $scanned  shipment ids or tracking numbers that physically arrived
-     * @return array{container: DispatchManifest, received: list<array>, missing: list<array>, extras: list<array>, rejected: list<array>}
+     * @param  array{value?:?string,intact?:?bool,remark?:?string}  $seal  seal check at arrival (empty = not checked)
+     * @return array{container: DispatchManifest, received: list<array>, missing: list<array>, extras: list<array>, rejected: list<array>, seal: ?array}
      */
-    public function receive(DispatchManifest $container, array $scanned, ?string $remarks, ?int $actorId, int $receivingBranchId): array
+    public function receive(DispatchManifest $container, array $scanned, ?string $remarks, ?int $actorId, int $receivingBranchId, array $seal = []): array
     {
-        $result = DB::transaction(function () use ($container, $scanned, $remarks, $actorId, $receivingBranchId) {
+        $result = DB::transaction(function () use ($container, $scanned, $remarks, $actorId, $receivingBranchId, $seal) {
             $container = DispatchManifest::query()->lockForUpdate()->findOrFail($container->id);
             $this->assertReceivable($container, $receivingBranchId);
             $here = (int) $container->to_branch_id;
+
+            // Seal first: a broken / wrong seal is recorded, the parcel check still runs.
+            $sealResult = $this->applySealCheck($container, $seal, $actorId);
 
             $scan = $this->normalizeScanned($scanned);
             $items = $container->items()->with('shipment')->get();
@@ -372,10 +581,26 @@ final class TransferContainerService
                 'missing' => $missing,
                 'extras' => $extras,
                 'rejected' => $rejected,
+                'seal' => $sealResult,
             ];
         });
 
         $result['container'] = $result['container']->fresh(['items.shipment', 'fromBranch', 'toBranch', 'rider']);
+        $sealRes = $result['seal'] ?? null;
+        if ($sealRes && $sealRes['status'] !== self::SEAL_OK) {
+            $c = $result['container'];
+            $this->notify(
+                (int) $c->from_branch_id,
+                null,
+                "{$c->display_number}: seal ".($sealRes['status'] === self::SEAL_TAMPERED ? 'broken / tampered' : 'number mismatch').' on arrival',
+                sprintf('%s checked %s in. Seal sent: %s, seal found: %s%s. Remark: %s',
+                    $this->branchName((int) $c->to_branch_id), $c->display_number,
+                    $sealRes['expected'] !== '' ? $sealRes['expected'] : '(none recorded)',
+                    $sealRes['value'] !== '' ? $sealRes['value'] : '(none)',
+                    $sealRes['status'] === self::SEAL_TAMPERED ? ', seal not intact' : '',
+                    $sealRes['remark']),
+            );
+        }
         if ($result['missing'] !== []) {
             $c = $result['container'];
             $n = count($result['missing']);
@@ -390,6 +615,58 @@ final class TransferContainerService
         }
 
         return $result;
+    }
+
+    /**
+     * Record the seal check of a TR at arrival.
+     *  - seal not intact                   -> tampered
+     *  - number entered differs from sent  -> mismatch
+     *  - otherwise                         -> ok
+     * Mismatch / tampered need a remark. Returns null when no check was sent.
+     *
+     * @return array{status:string, expected:string, value:string, remark:string}|null
+     */
+    private function applySealCheck(DispatchManifest $container, array $seal, ?int $actorId): ?array
+    {
+        $hasValue = array_key_exists('value', $seal) && $seal['value'] !== null && trim((string) $seal['value']) !== '';
+        $hasIntact = array_key_exists('intact', $seal) && $seal['intact'] !== null;
+        if (! $hasValue && ! $hasIntact) {
+            return null;
+        }
+
+        $expected = trim((string) ($container->seal_number ?? ''));
+        $value = trim((string) ($seal['value'] ?? ''));
+        $intact = $hasIntact ? (bool) $seal['intact'] : true;
+        $remark = trim((string) ($seal['remark'] ?? ''));
+
+        if (! $intact) {
+            $status = self::SEAL_TAMPERED;
+        } elseif ($expected !== '' && strcasecmp($value, $expected) !== 0) {
+            $status = self::SEAL_MISMATCH;
+        } else {
+            $status = self::SEAL_OK;
+        }
+
+        if ($status !== self::SEAL_OK && $remark === '') {
+            throw ValidationException::withMessages(['seal_remark' => [
+                $status === self::SEAL_TAMPERED
+                    ? 'Describe the seal damage (remark is required when the seal is not intact).'
+                    : sprintf('Seal %s does not match the seal sent (%s). Add a remark.', $value !== '' ? $value : '(blank)', $expected),
+            ]]);
+        }
+
+        $fill = array_intersect_key([
+            'seal_status' => $status,
+            'seal_checked_value' => $value !== '' ? mb_substr($value, 0, 50) : null,
+            'seal_checked_by' => $actorId,
+            'seal_checked_at' => now(),
+            'seal_remark' => $remark !== '' ? mb_substr($remark, 0, 500) : null,
+        ], array_flip(Schema::getColumnListing('dispatch_manifests')));
+        if ($fill !== []) {
+            $container->forceFill($fill)->save();
+        }
+
+        return ['status' => $status, 'expected' => $expected, 'value' => $value, 'remark' => $remark];
     }
 
     /**
@@ -521,7 +798,9 @@ final class TransferContainerService
 
         $lastMile = 0;
         $onward = [];
+        $totalWeight = 0.0;
         foreach ($active as $i) {
+            $totalWeight += (float) ($i->shipment?->chargeable_weight ?: $i->shipment?->weight ?: 0);
             $s = $i->shipment;
             if (! $s) {
                 continue;
@@ -569,6 +848,14 @@ final class TransferContainerService
             'cancelled_at' => optional($m->cancelled_at)->toIso8601String(),
             'cancel_reason' => $m->cancel_reason ?? null,
             'created_at' => optional($m->created_at)->toIso8601String(),
+            'total_weight' => round($totalWeight, 3),
+            'auto_append' => (bool) ($m->auto_append ?? false),
+            'seal_status' => $m->seal_status ?? null,
+            'seal_checked_value' => $m->seal_checked_value ?? null,
+            'seal_checked_by' => $m->seal_checked_by ?? null,
+            'seal_checked_by_name' => ! empty($m->seal_checked_by) ? DB::table('users')->where('id', $m->seal_checked_by)->value('name') : null,
+            'seal_checked_at' => ! empty($m->seal_checked_at) ? \Illuminate\Support\Carbon::parse($m->seal_checked_at)->toIso8601String() : null,
+            'seal_remark' => $m->seal_remark ?? null,
         ];
 
         if ($withItems) {

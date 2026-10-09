@@ -384,8 +384,21 @@ final class TransferController extends Controller
                 ->whereIn('to_branch_id', array_map(fn ($g) => $g['next_hop_branch_id'], $groups))
                 ->where('status', 'open')
                 ->withCount(['items as loaded_count' => fn ($q) => $q->where('status', 'added')])
+                ->latest('id')
                 ->get()
+                ->unique('to_branch_id')
                 ->keyBy('to_branch_id');
+        }
+        $loadedOn = []; // shipment id => TR number of the open TR it is loaded on
+        if ($openTr->isNotEmpty()) {
+            $rows = DB::table('dispatch_manifest_items')
+                ->whereIn('dispatch_manifest_id', $openTr->pluck('id'))
+                ->where('status', 'added')
+                ->get(['dispatch_manifest_id', 'shipment_id']);
+            $numbers = $openTr->mapWithKeys(fn ($m) => [$m->id => $m->display_number]);
+            foreach ($rows as $r) {
+                $loadedOn[(int) $r->shipment_id] = $numbers[$r->dispatch_manifest_id] ?? null;
+            }
         }
 
         $paginated = [];
@@ -404,11 +417,17 @@ final class TransferController extends Controller
                     'id' => $open->id,
                     'transfer_number' => $open->display_number,
                     'loaded_count' => (int) $open->loaded_count,
+                    'auto_append' => (bool) ($open->auto_append ?? false),
                 ] : null,
                 'count' => $group['count'],
                 'finals' => array_values($group['finals']),
                 'route_codes' => array_keys($group['route_codes']),
-                'shipments' => array_slice($group['shipments'], 0, $perPage),
+                // Each parcel says whether it is already loaded on the open TR.
+                'shipments' => array_map(function ($sh) use ($loadedOn) {
+                    $sh->setAttribute('open_tr_number', $loadedOn[(int) $sh->id] ?? null);
+
+                    return $sh;
+                }, array_slice($group['shipments'], 0, $perPage)),
                 'has_more' => count($group['shipments']) > $perPage,
             ];
         }
@@ -1875,6 +1894,12 @@ final class TransferController extends Controller
     public function containerShow(Request $request, \Modules\Dispatch\Models\DispatchManifest $container)
     {
         $this->assertContainerVisible($request, $container);
+
+        return ApiResponse::success($this->containerDetail($request, $container));
+    }
+
+    private function containerDetail(Request $request, \Modules\Dispatch\Models\DispatchManifest $container): array
+    {
         $container->load(['items.shipment.destinationBranch:id,name', 'fromBranch:id,name', 'toBranch:id,name', 'rider:id,name,phone']);
 
         $data = $this->containers->summarize($container, true);
@@ -1884,8 +1909,150 @@ final class TransferController extends Controller
             && $container->status === 'partially_received';
         $data['can_dispatch'] = $this->branchMatches($request, (int) $container->from_branch_id) && $container->status === 'open';
         $data['can_cancel'] = $data['can_dispatch'];
+        // Parcels can be added / removed only while the TR is open.
+        $data['can_edit'] = $data['can_dispatch'];
+        $data['seal_check_required'] = $data['can_receive'] && trim((string) ($container->seal_number ?? '')) !== '';
 
-        return ApiResponse::success($data);
+        return $data;
+    }
+
+    /**
+     * GET transfers/containers/lookup?number=TR-000001 : open a TR from its
+     * bag label barcode. Only the TR's receiving branch (or HQ) may look it up.
+     */
+    public function containerLookup(Request $request)
+    {
+        $data = $request->validate(['number' => ['required', 'string', 'max:64']]);
+        $number = strtoupper(trim($data['number']));
+
+        $q = \Modules\Dispatch\Models\DispatchManifest::query();
+        $hasTr = \Illuminate\Support\Facades\Schema::hasColumn('dispatch_manifests', 'transfer_number');
+        $q->where(function ($w) use ($number, $hasTr) {
+            $w->where('manifest_number', $number);
+            if ($hasTr) {
+                $w->orWhere('transfer_number', $number);
+            }
+        });
+        $container = $q->latest('id')->first();
+        if (! $container) {
+            return ApiResponse::error("No TR found with number {$number}.", 404);
+        }
+        if (! $this->branchMatches($request, (int) $container->to_branch_id)) {
+            $to = \Modules\Branch\Models\Branch::query()->whereKey($container->to_branch_id)->value('name') ?? 'another branch';
+
+            return ApiResponse::error("{$container->display_number} is headed to {$to}, not your branch.", 403);
+        }
+
+        return ApiResponse::success($this->containerDetail($request, $container));
+    }
+
+    /**
+     * GET transfers/containers/{container}/candidates : parcels ready at the
+     * sending branch whose next hop is this TR's next hop and that are not on
+     * any active TR (can be added while the TR is open).
+     */
+    public function containerCandidates(Request $request, \Modules\Dispatch\Models\DispatchManifest $container)
+    {
+        abort_unless($this->branchMatches($request, (int) $container->from_branch_id), 403, 'Only the sending branch can load this TR.');
+        if ($container->status !== 'open') {
+            return ApiResponse::success([]);
+        }
+        $from = (int) $container->from_branch_id;
+        $hop = (int) $container->to_branch_id;
+
+        $query = Shipment::query()->with('destinationBranch:id,name');
+        $this->applyOutboundScope($query, $from);
+        $query->whereNotExists(function ($sub) {
+            $sub->selectRaw('1')
+                ->from('dispatch_manifest_items as dmi')
+                ->join('dispatch_manifests as dm', 'dm.id', '=', 'dmi.dispatch_manifest_id')
+                ->whereColumn('dmi.shipment_id', 'shipments.id')
+                ->whereIn('dmi.status', ['added', 'sent', 'dispatched', 'in_transit'])
+                ->whereIn('dm.status', ['open', 'dispatched', 'in_transit', 'partially_received']);
+        });
+
+        $rows = [];
+        foreach ($query->latest('id')->limit(500)->get() as $s) {
+            $p = $this->progress->resolveForShipment($s, $from);
+            $next = (int) ($p['next_hop_branch_id'] ?? 0);
+            $next = (int) ($this->resolveOperationalBranchId($next) ?? $next);
+            if ($next <= 0 || ($p['ready_for_last_mile'] ?? false)) {
+                continue;
+            }
+            if ($next !== $hop && ! $this->progress->sameOperationalLocation($next, $hop)) {
+                continue;
+            }
+            $rows[] = [
+                'shipment_id' => $s->id,
+                'tracking_number' => $s->tracking_number,
+                'receiver_name' => $s->receiver_name,
+                'destination_branch_id' => $s->destination_branch_id,
+                'destination_name' => $s->destinationBranch?->name,
+                'is_final_here' => (int) $s->destination_branch_id === $hop || $this->progress->sameOperationalLocation((int) $s->destination_branch_id, $hop),
+                'weight' => (float) ($s->chargeable_weight ?: $s->weight ?: 0),
+                'status' => $s->status,
+            ];
+        }
+
+        return ApiResponse::success($rows);
+    }
+
+    /** POST transfers/containers/{container}/items { shipment_ids } : load more parcels on an open TR. */
+    public function containerAddItems(Request $request, \Modules\Dispatch\Models\DispatchManifest $container)
+    {
+        $data = $request->validate([
+            'shipment_ids' => ['required', 'array', 'min:1', 'max:1000'],
+            'shipment_ids.*' => ['integer'],
+        ]);
+        abort_unless($this->branchMatches($request, (int) $container->from_branch_id), 403, 'Only the sending branch can load this TR.');
+
+        $shipments = Shipment::query()->whereIn('id', array_map('intval', $data['shipment_ids']))->get();
+        $res = $this->containers->addToOpen($container, $shipments, (int) $request->user()->id);
+        $c = $res['container'];
+
+        if ($res['added'] === [] && $res['skipped'] !== []) {
+            return ApiResponse::error((string) collect($res['skipped'])->first(), 422, ['skipped' => $res['skipped']]);
+        }
+        $msg = count($res['added']).' parcel(s) added to '.$c->display_number.'.'
+            .($res['skipped'] ? ' '.count($res['skipped']).' skipped.' : '');
+
+        return ApiResponse::success([
+            'container' => $this->containers->summarize($c->load('items.shipment.destinationBranch:id,name'), true),
+            'added' => $res['added'],
+            'skipped' => $res['skipped'],
+        ], $msg);
+    }
+
+    /** POST transfers/containers/{container}/items/remove { shipment_ids, reason? } : take parcels off an open TR. */
+    public function containerRemoveItems(Request $request, \Modules\Dispatch\Models\DispatchManifest $container)
+    {
+        $data = $request->validate([
+            'shipment_ids' => ['required', 'array', 'min:1', 'max:1000'],
+            'shipment_ids.*' => ['integer'],
+            'reason' => ['nullable', 'string', 'max:200'],
+        ]);
+        abort_unless($this->branchMatches($request, (int) $container->from_branch_id), 403, 'Only the sending branch can change this TR.');
+
+        $res = $this->containers->removeFromOpen($container, $data['shipment_ids'], $data['reason'] ?? null, (int) $request->user()->id);
+        $c = $res['container'];
+
+        return ApiResponse::success([
+            'container' => $this->containers->summarize($c->load('items.shipment.destinationBranch:id,name'), true),
+            'removed' => $res['removed'],
+        ], count($res['removed']).' parcel(s) removed from '.$c->display_number.'. They stay ready for transfer.');
+    }
+
+    /** POST transfers/containers/{container}/auto-append { enabled } */
+    public function containerAutoAppend(Request $request, \Modules\Dispatch\Models\DispatchManifest $container)
+    {
+        $data = $request->validate(['enabled' => ['required', 'boolean']]);
+        abort_unless($this->branchMatches($request, (int) $container->from_branch_id), 403, 'Only the sending branch can change this TR.');
+
+        $c = $this->containers->setAutoAppend($container, (bool) $data['enabled']);
+
+        return ApiResponse::success($this->containers->summarize($c), $data['enabled']
+            ? "New parcels sorted for {$c->toBranch?->name} now join {$c->display_number} automatically."
+            : "Auto-add switched off for {$c->display_number}.");
     }
 
     /**
@@ -1898,8 +2065,21 @@ final class TransferController extends Controller
             'scanned' => ['present', 'array', 'max:2000'],
             'scanned.*' => ['nullable'],
             'remarks' => ['nullable', 'string', 'max:500'],
+            // Seal check at arrival (optional for older clients).
+            'seal_value' => ['nullable', 'string', 'max:50'],
+            'seal_intact' => ['nullable', 'boolean'],
+            'seal_remark' => ['nullable', 'string', 'max:500'],
         ]);
         $branchId = $this->resolveReceivingBranchId($request->user(), $request);
+
+        $seal = [];
+        if ($request->has('seal_intact') || filled($data['seal_value'] ?? null)) {
+            $seal = [
+                'value' => $data['seal_value'] ?? null,
+                'intact' => array_key_exists('seal_intact', $data) && $data['seal_intact'] !== null ? (bool) $data['seal_intact'] : null,
+                'remark' => $data['seal_remark'] ?? null,
+            ];
+        }
 
         $res = $this->containers->receive(
             $container,
@@ -1907,6 +2087,7 @@ final class TransferController extends Controller
             $data['remarks'] ?? null,
             (int) $request->user()->id,
             $branchId,
+            $seal,
         );
 
         $c = $res['container'];
@@ -1919,6 +2100,9 @@ final class TransferController extends Controller
             $res['missing'] ? ', '.count($res['missing']).' missing' : '',
             $res['extras'] ? ', '.count($res['extras']).' extra' : '',
         );
+        if (! empty($res['seal']) && $res['seal']['status'] !== 'ok') {
+            $msg .= ' Seal '.$res['seal']['status'].' recorded; '.($c->fromBranch?->name ?? 'the sending branch').' notified.';
+        }
 
         return ApiResponse::success([
             'container' => $this->containers->summarize($c->load('items.shipment.destinationBranch:id,name'), true),
@@ -1926,6 +2110,7 @@ final class TransferController extends Controller
             'missing' => $res['missing'],
             'extras' => $res['extras'],
             'rejected' => $res['rejected'],
+            'seal' => $res['seal'] ?? null,
         ], $msg);
     }
 

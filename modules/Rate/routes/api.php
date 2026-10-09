@@ -109,6 +109,12 @@ Route::middleware('auth:sanctum')
             [AdminBranchTransferLaneController::class, 'index']
         )->name('admin.pricing.transfer-lanes.index');
 
+        // Must stay above /{transferLane} routes.
+        Route::get(
+            '/branch-transfer-lanes/path-suggestions',
+            [AdminBranchTransferLaneController::class, 'pathSuggestions']
+        )->name('admin.pricing.transfer-lanes.path-suggestions');
+
         Route::post(
             '/branch-transfer-lanes',
             [AdminBranchTransferLaneController::class, 'store']

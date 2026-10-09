@@ -7,6 +7,8 @@ namespace Modules\Rate\Http\Controllers\Api\Admin;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Modules\Rate\Http\Requests\StoreBranchTransferRouteRequest;
 use Modules\Rate\Http\Requests\UpdateBranchTransferRouteRequest;
 use Modules\Rate\Models\BranchTransferRoute;
@@ -224,13 +226,120 @@ final class AdminBranchTransferRouteController extends Controller
         ]);
     }
 
+    /**
+     * Hard delete a transfer route (and its ordered lane rows) when nothing
+     * references it. Routes used by shipments, TRs/manifests, transfer
+     * batches/trackers or pricing rates are kept: 422 + usage counts so the
+     * admin can disable instead (PATCH /{id}/status still toggles).
+     */
     public function destroy(BranchTransferRoute $transferRoute): JsonResponse
     {
-        $transferRoute->update(['is_active' => false]);
+        $routeId = (int) $transferRoute->id;
+        $usage = $this->routeUsage($routeId);
+
+        if (array_sum($usage) > 0) {
+            $parts = [];
+            $labels = [
+                'shipments'        => ['shipment', 'shipments'],
+                'transfers'        => ['TR', 'TRs'],
+                'transfer_batches' => ['transfer batch', 'transfer batches'],
+                'trackers'         => ['transfer tracker', 'transfer trackers'],
+                'pricing_rates'    => ['pricing rate', 'pricing rates'],
+            ];
+            foreach ($labels as $key => [$one, $many]) {
+                $n = (int) ($usage[$key] ?? 0);
+                if ($n > 0) {
+                    $parts[] = $n . ' ' . ($n === 1 ? $one : $many);
+                }
+            }
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Route ' . ($transferRoute->route_code ?: "#{$routeId}")
+                    . ' cannot be deleted. Used by ' . implode(' / ', $parts)
+                    . ' - disable it instead.',
+                'data'    => [
+                    'id'          => $routeId,
+                    'route_code'  => $transferRoute->route_code,
+                    'is_active'   => (bool) $transferRoute->is_active,
+                    'usage'       => $usage,
+                    'can_disable' => (bool) $transferRoute->is_active,
+                ],
+            ], 422);
+        }
+
+        $code = $transferRoute->route_code;
+        $wasDefault = (bool) $transferRoute->is_default;
+        $origin = (int) $transferRoute->origin_branch_id;
+        $destination = (int) $transferRoute->destination_branch_id;
+        $service = (string) $transferRoute->service_type;
+
+        DB::transaction(function () use ($transferRoute, $routeId, $wasDefault, $origin, $destination, $service): void {
+            DB::table('branch_transfer_route_lanes')
+                ->where('branch_transfer_route_id', $routeId)
+                ->delete();
+
+            // forceDelete if the model ever gains SoftDeletes, so the
+            // route_code is really freed for reuse.
+            if (method_exists($transferRoute, 'forceDelete')) {
+                $transferRoute->forceDelete();
+            } else {
+                $transferRoute->delete();
+            }
+
+            // Keep one default for the same origin/destination/service.
+            if ($wasDefault) {
+                $next = BranchTransferRoute::query()
+                    ->where('origin_branch_id', $origin)
+                    ->where('destination_branch_id', $destination)
+                    ->where('service_type', $service)
+                    ->where('is_active', true)
+                    ->orderBy('priority')
+                    ->orderBy('id')
+                    ->first();
+                $next?->update(['is_default' => true]);
+            }
+        });
 
         return response()->json([
             'success' => true,
-            'message' => 'Transfer route disabled successfully.',
+            'message' => 'Transfer route ' . ($code ?: "#{$routeId}") . ' deleted.',
+            'data'    => ['id' => $routeId, 'deleted' => true],
         ]);
+    }
+
+    /**
+     * Count every place that references a transfer route id.
+     *
+     * @return array<string, int>
+     */
+    private function routeUsage(int $routeId): array
+    {
+        $count = function (string $table, array $columns) use ($routeId): int {
+            $columns = array_values(array_filter(
+                $columns,
+                fn (string $col): bool => Schema::hasColumn($table, $col),
+            ));
+            if (! $columns || ! Schema::hasTable($table)) {
+                return 0;
+            }
+
+            return (int) DB::table($table)
+                ->where(function ($q) use ($columns, $routeId): void {
+                    foreach ($columns as $col) {
+                        $q->orWhere($col, $routeId);
+                    }
+                })
+                ->count();
+        };
+
+        return [
+            'shipments'        => $count('shipments', ['transfer_route_id', 'route_id']),
+            'transfers'        => $count('dispatch_manifests', ['route_id']),
+            'transfer_batches' => $count('transfer_batches', ['branch_transfer_route_id'])
+                + $count('shipment_transfer_batches', ['transfer_route_id']),
+            'trackers'         => $count('transfer_shipment_trackers', ['branch_transfer_route_id']),
+            'pricing_rates'    => $count('branch_route_rates', ['branch_transfer_route_id']),
+        ];
     }
 }

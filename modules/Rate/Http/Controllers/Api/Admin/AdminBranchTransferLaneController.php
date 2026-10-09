@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Validation\Rule;
 use Modules\Rate\Models\BranchTransferLane;
 use Modules\Rate\Models\BranchTransferRoute;
+use Modules\Rate\Services\TransferLanePathFinder;
 
 /**
  * CRUD for branch transfer lanes (direct physical connections between branches).
@@ -98,6 +99,37 @@ final class AdminBranchTransferLaneController extends Controller
         );
 
         return response()->json(['success' => true, 'data' => $paginator]);
+    }
+
+    /**
+     * Suggested lane chains (direct + via transits) between two coverage
+     * locations, computed server-side over ALL active lanes for the service.
+     * Paths whose hops all have active routes are listed first.
+     *
+     * GET /v1/admin/branch-transfer-lanes/path-suggestions
+     *   ?from_branch_id=&to_branch_id=&service_type=standard&max_transits=2
+     */
+    public function pathSuggestions(Request $request, TransferLanePathFinder $finder): JsonResponse
+    {
+        $validated = $request->validate([
+            'from_branch_id' => ['required', 'integer', 'exists:coverage_locations,id'],
+            'to_branch_id'   => ['required', 'integer', 'different:from_branch_id', 'exists:coverage_locations,id'],
+            'service_type'   => ['nullable', Rule::in(['standard', 'express', 'same_day', 'flight'])],
+            'max_transits'   => ['nullable', 'integer', 'min:0', 'max:3'],
+            'limit'          => ['nullable', 'integer', 'min:1', 'max:50'],
+        ]);
+
+        $maxTransits = (int) ($validated['max_transits'] ?? (TransferLanePathFinder::DEFAULT_MAX_LANES - 1));
+
+        $paths = $finder->suggest(
+            (int) $validated['from_branch_id'],
+            (int) $validated['to_branch_id'],
+            strtolower((string) ($validated['service_type'] ?? 'standard')),
+            $maxTransits + 1,
+            (int) ($validated['limit'] ?? TransferLanePathFinder::DEFAULT_LIMIT),
+        );
+
+        return response()->json(['success' => true, 'data' => $paths]);
     }
 
     public function store(Request $request): JsonResponse

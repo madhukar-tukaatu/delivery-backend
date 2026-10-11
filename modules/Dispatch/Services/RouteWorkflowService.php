@@ -44,6 +44,10 @@ class RouteWorkflowService
     public function dispatchNextStep(Shipment $shipment, User $user, ?string $remarks = null): Shipment
     {
         return DB::transaction(function () use ($shipment, $user, $remarks) {
+            if ($pr = \Modules\Pickup\Support\PickupCustody::pendingPickupNumber($shipment)) {
+                abort(422, \Modules\Pickup\Support\PickupCustody::notReceivedMessage($shipment, $pr));
+            }
+
             $step = $shipment->routeSteps()
                 ->whereIn('status', ['ready', 'pending'])
                 ->orderBy('sequence')

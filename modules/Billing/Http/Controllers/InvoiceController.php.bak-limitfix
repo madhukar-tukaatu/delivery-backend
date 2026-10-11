@@ -1,0 +1,882 @@
+<?php
+
+namespace Modules\Billing\Http\Controllers;
+
+use App\Http\Controllers\Controller;
+use App\Support\ApiResponse;
+use App\Support\FinanceBranchScope;
+use Illuminate\Http\Request;
+use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
+use Modules\Billing\Models\BillingPaymentNotice;
+use Modules\Billing\Models\Invoice;
+use Modules\Billing\Models\MerchantInvoicePayment;
+use Modules\Billing\Services\BillingPaymentNoticeService;
+use Modules\Billing\Services\MarketplaceBillingService;
+use Modules\Billing\Services\MerchantInvoicePaymentService;
+use Modules\Billing\Services\MerchantDeliveryBillingService;
+use Modules\Billing\Services\PaymentGatewayAccountService;
+use Modules\Shipment\Models\Shipment;
+
+class InvoiceController extends Controller
+{
+    public function __construct(
+        private MerchantDeliveryBillingService $billing,
+        private PaymentGatewayAccountService $accounts,
+        private MarketplaceBillingService $marketplaceBilling,
+        private MerchantInvoicePaymentService $invPayments,
+        private BillingPaymentNoticeService $notices,
+    ) {
+    }
+
+    public function index(Request $request)
+    {
+        $query = Invoice::with([
+            'items',
+            'shipment',
+            'merchant:id,name,code,external_store_id,marketplace_id',
+            'merchant.marketplace:id,name,code',
+            'branch:id,name,code',
+            'marketplaceBill:id,bill_number,status,total_amount,paid_amount,outstanding_amount',
+        ])->latest();
+        
+        // Merchant can only see their own invoices
+        if ($request->user()->role === 'merchant') {
+            $query->where('merchant_id', $request->user()->merchant_id);
+        }
+
+        // Branch users: invoices.branch_id (payee branch) in their branch.
+        // Delivery bills are owned by the ORIGIN branch (it bills merchant / marketplace).
+        FinanceBranchScope::scopeInvoices($query, $request->user());
+        
+        // Admin filters
+        if ($request->filled('merchant_id')) {
+            $query->where('merchant_id', $request->merchant_id);
+        }
+        if ($request->filled('marketplace_id')) {
+            $marketplaceId = (int) $request->input('marketplace_id');
+            // Company invoices carry the marketplace frozen at creation; store
+            // invoices follow the store's marketplace.
+            $query->where(function ($w) use ($marketplaceId) {
+                $w->where('invoices.marketplace_id', $marketplaceId)
+                    ->orWhere(function ($legacy) use ($marketplaceId) {
+                        $legacy->whereNull('invoices.marketplace_id')
+                            ->whereHas('merchant', fn ($mq) => $mq->where('marketplace_id', $marketplaceId));
+                    });
+            });
+        }
+        $merchantSearch = trim((string) $request->input('merchant', $request->input('q', '')));
+        if ($merchantSearch !== '') {
+            if (ctype_digit($merchantSearch)) {
+                $query->where('merchant_id', (int) $merchantSearch);
+            } else {
+                $query->whereHas('merchant', function ($mq) use ($merchantSearch) {
+                    $like = '%'.$merchantSearch.'%';
+                    $mq->where('name', 'like', $like)
+                        ->orWhere('external_store_id', 'like', $like)
+                        ->orWhere('code', 'like', $like);
+                });
+            }
+        }
+        // HQ may filter any branch. A branch user's branch_id for another branch is ignored.
+        if ($request->filled('branch_id') && FinanceBranchScope::canSeeBranch($request->user(), $request->branch_id)) {
+            $query->where('branch_id', (int) $request->branch_id);
+        }
+        if ($request->routeIs('admin.delivery-charges.index')) {
+            $query->where('type', 'delivery_charges');
+        } elseif ($request->filled('type')) {
+            $query->where('type', $request->type);
+        }
+        if ($request->filled('status')) {
+            if ($request->status === 'open') {
+                $query->whereIn('status', MerchantInvoicePaymentService::OPEN_STATUSES);
+            } elseif ($request->status === 'has_notices') {
+                $query->whereIn('invoices.id', BillingPaymentNotice::query()->where('target_type', 'invoice')->where('status', 'pending_verification')->select('target_id'));
+            } else {
+                $query->where('status', $request->status);
+            }
+        }
+        if ($request->boolean('due_for_check') && \Illuminate\Support\Facades\Schema::hasColumn('invoices', 'sent_at')) {
+            $query->where('status', 'unpaid')
+                ->whereNotNull('sent_at')
+                ->where('sent_at', '<=', now()->subDays(3))
+                ->whereNull('manual_checked_at');
+        }
+
+        if ($request->filled('payer_type')) {
+            $payer = strtolower((string) $request->input('payer_type'));
+            if ($payer === 'company') {
+                $query->where('payer_type', 'company');
+            } elseif (in_array($payer, ['merchant', 'store'], true)) {
+                $query->where(function ($inner) {
+                    $inner->where('payer_type', 'merchant')->orWhereNull('payer_type');
+                });
+            }
+        }
+        
+        // Date range filters
+        if ($request->filled('from_date')) {
+            $query->whereDate('invoice_date', '>=', $request->from_date);
+        }
+        if ($request->filled('to_date')) {
+            $query->whereDate('invoice_date', '<=', $request->to_date);
+        }
+        
+        // Search by invoice number or tracking number
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('invoice_number', 'like', "%{$search}%")
+                  ->orWhereHas('shipment', function ($sq) use ($search) {
+                      $sq->where('tracking_number', 'like', "%{$search}%");
+                  });
+            });
+        }
+
+        $perPage = min((int) $request->get('per_page', 20), 100);
+
+        $totals = (clone $query)->reorder()->setEagerLoads([])
+            ->selectRaw("COUNT(*) c, COALESCE(SUM(total_amount),0) t, COALESCE(SUM(CASE WHEN status = 'paid' THEN total_amount WHEN status = 'partially_paid' THEN COALESCE(paid_amount,0) ELSE 0 END),0) p, COALESCE(SUM(CASE WHEN status = 'unpaid' THEN total_amount WHEN status = 'partially_paid' THEN COALESCE(outstanding_amount,total_amount) ELSE 0 END),0) u, SUM(CASE WHEN status IN ('unpaid','partially_paid') THEN 1 ELSE 0 END) uc, SUM(CASE WHEN status = 'partially_paid' THEN 1 ELSE 0 END) pc")
+            ->first();
+
+        $paginator = $query->paginate($perPage);
+        $paginator->getCollection()->transform(fn (Invoice $invoice) => $this->presentInvoice($invoice));
+
+        $payload = $paginator->toArray();
+        $payload['merchant_summary'] = $this->merchantBillingSummary(clone $query);
+        $payload['totals'] = [
+            'count' => (int) ($totals->c ?? 0),
+            'total' => round((float) ($totals->t ?? 0), 2),
+            'paid' => round((float) ($totals->p ?? 0), 2),
+            'unpaid' => round((float) ($totals->u ?? 0), 2),
+            'unpaid_count' => (int) ($totals->uc ?? 0),
+            'partially_paid_count' => (int) ($totals->pc ?? 0),
+        ];
+        $noticeScope = (clone $query)->reorder()->setEagerLoads([])->select('invoices.id');
+        $pendingNotices = BillingPaymentNotice::query()->where('target_type', 'invoice')->where('status', 'pending_verification')
+            ->whereIn('target_id', $noticeScope)->selectRaw('COUNT(*) c, COALESCE(SUM(amount),0) t')->first();
+        $payload['notices_pending'] = ['count' => (int) ($pendingNotices->c ?? 0), 'amount' => round((float) ($pendingNotices->t ?? 0), 2)];
+
+        return ApiResponse::success($payload);
+    }
+
+    /** GET admin/invoices/{invoice} : detail drawer (lines, shipment, payment info). */
+    public function show(Request $request, Invoice $invoice)
+    {
+        $this->authorizeInvoice($request, $invoice);
+
+        $invoice->load([
+            'items',
+            'shipment',
+            'merchant:id,name,code,external_store_id,marketplace_id',
+            'merchant.marketplace:id,name,code',
+            'branch:id,name,code',
+            'marketplaceBill:id,bill_number,status,total_amount,paid_amount,outstanding_amount',
+        ]);
+        $out = $this->presentInvoice($invoice);
+        if (MerchantInvoicePaymentService::isMerchantInvoice($invoice)) {
+            $out->setAttribute('payments', $this->invPayments->history($invoice, true));
+            $out->setAttribute('notices', $this->notices->forTarget('invoice', (int) $invoice->id, true));
+            $out->setAttribute('payable', $this->invPayments->payable($invoice));
+        }
+
+        return ApiResponse::success($out);
+    }
+
+    private function presentInvoice(Invoice $invoice): Invoice
+    {
+        $merchant = $invoice->merchant;
+        $shipment = $invoice->shipment;
+        $store = $merchant ?: $shipment?->merchant;
+        $mp = $invoice->marketplace_id
+            ? \Modules\Setting\Models\Marketplace::query()->select(['id', 'name', 'code'])->find($invoice->marketplace_id)
+            : ($merchant?->marketplace ?: $store?->marketplace);
+        if (! $mp && $shipment) {
+            $mp = \Modules\Setting\Models\Marketplace::resolveForShipment($shipment, $store);
+        }
+        $invoice->setAttribute('merchant_name', $store?->name);
+        $invoice->setAttribute('external_store_id', $store?->external_store_id);
+        $invoice->setAttribute('marketplace_id', $mp?->id ?? $store?->marketplace_id);
+        $invoice->setAttribute('marketplace_name', $mp?->name);
+        $invoice->setAttribute('marketplace_code', $mp?->code);
+        $invoice->setAttribute('bill_to', $this->billing->invoiceRecipient($invoice));
+        $invoice->setAttribute('tracking_number', $shipment?->tracking_number);
+        $invoice->setAttribute('delivery_count', $this->deliveryCount($invoice));
+        $invoice->setAttribute('due_for_check', $this->billing->isDueForCheck($invoice));
+        $invoice->setAttribute('days_since_sent', $invoice->sent_at ? (int) $invoice->sent_at->diffInDays(now()) : null);
+        $invoice->setAttribute('branch_name', $invoice->branch?->name);
+        $invoice->setAttribute('marketplace_bill_number', $invoice->marketplaceBill?->bill_number);
+        $invoice->setAttribute('marketplace_bill_status', $invoice->marketplaceBill?->status);
+        if ($invoice->marketplaceBill) {
+            // Bill payment progress (a marketplace can pay its bill in parts).
+            $mb = $invoice->marketplaceBill;
+            $invoice->setAttribute('marketplace_bill_progress', [
+                'total_amount' => round((float) $mb->total_amount, 2),
+                'paid_amount' => $mb->paidSoFar(),
+                'outstanding_amount' => $mb->outstanding(),
+                'paid_percent' => (float) $mb->total_amount > 0 ? round(min(100, $mb->paidSoFar() / (float) $mb->total_amount * 100), 1) : 0.0,
+                'status' => $mb->status,
+            ]);
+        }
+        $invoice->setAttribute('paid_by_label', $this->marketplaceBilling->payerLabel($invoice->paid_by_type ?? null, $invoice->paid_by ?? null));
+        $invoice->setAttribute('delivered_at', $shipment?->delivered_at);
+        if (MerchantInvoicePaymentService::isMerchantInvoice($invoice)) {
+            $total = round((float) $invoice->total_amount, 2);
+            $status = strtolower((string) $invoice->status);
+            $paidSoFar = $status === 'paid' ? $total : round((float) ($invoice->paid_amount ?? 0), 2);
+            $outstanding = $status === 'paid' ? 0.0 : round((float) ($invoice->outstanding_amount ?? max(0, $total - $paidSoFar)), 2);
+            $invoice->setAttribute('paid_so_far', $paidSoFar);
+            $invoice->setAttribute('outstanding', $outstanding);
+            $invoice->setAttribute('paid_percent', $total > 0 ? round(min(100, $paidSoFar / $total * 100), 1) : 0.0);
+            $invoice->setAttribute('pending_notices', [
+                'count' => $this->notices->openQuery('invoice', (int) $invoice->id)->where('status', 'pending_verification')->count(),
+                'amount' => $this->notices->pendingSum('invoice', (int) $invoice->id),
+            ]);
+        }
+
+        return $invoice;
+    }
+
+
+    /**
+     * 404 when a branch user opens another branch's bill; merchants only their own.
+     */
+    private function authorizeInvoice(Request $request, Invoice $invoice): void
+    {
+        abort_unless(
+            FinanceBranchScope::canSeeInvoice($request->user(), $invoice),
+            404,
+            'Invoice not found.'
+        );
+    }
+
+    /**
+     * One delivery-charge bill is one shipment. POD fee lines are not extra deliveries.
+     */
+    private function deliveryCount(Invoice $invoice): int
+    {
+        if ((string) $invoice->type !== 'delivery_charges') {
+            return 0;
+        }
+
+        if ($invoice->shipment_id) {
+            return 1;
+        }
+
+        return $invoice->items->filter(function ($item): bool {
+            return ! str_starts_with((string) $item->description, 'POD service fee');
+        })->count();
+    }
+
+
+    /**
+     * Merchant-wise unpaid/paid counts for the current filters.
+     * Marketplace (payer company) bills stay out of merchant totals.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder  $query
+     * @return list<array<string, mixed>>
+     */
+    private function merchantBillingSummary($query): array
+    {
+        $rows = (clone $query)
+            ->reorder()
+            ->setEagerLoads([])
+            ->selectRaw("merchant_id, payer_type, status, COUNT(*) as bill_count, COALESCE(SUM(CASE WHEN status = 'partially_paid' THEN COALESCE(outstanding_amount, total_amount) ELSE total_amount END), 0) as total")
+            ->groupBy('merchant_id', 'payer_type', 'status')
+            ->get();
+
+        $merchantIds = $rows->pluck('merchant_id')->filter()->unique()->values();
+        $merchants = $merchantIds->isEmpty()
+            ? collect()
+            : \Modules\Merchant\Models\Merchant::query()
+                ->whereIn('id', $merchantIds)
+                ->get(['id', 'name', 'external_store_id', 'code'])
+                ->keyBy('id');
+
+        $buckets = [];
+        $marketplace = [
+            'merchant_id' => null,
+            'merchant_name' => 'Marketplace bills',
+            'external_store_id' => null,
+            'unpaid_count' => 0,
+            'unpaid_total' => 0.0,
+            'paid_count' => 0,
+            'due_for_check_count' => 0,
+            'side' => 'marketplace',
+        ];
+
+        foreach ($rows as $row) {
+            $payer = strtolower((string) ($row->payer_type ?? 'merchant'));
+            $status = strtolower((string) $row->status);
+            $count = (int) $row->bill_count;
+            $total = (float) $row->total;
+            $isMarketplace = $payer === 'company' || $row->merchant_id === null;
+            if ($status === 'partially_paid') {
+                $status = 'unpaid'; // still owes the outstanding part
+            }
+            if ($isMarketplace) {
+                if ($status === 'unpaid') {
+                    $marketplace['unpaid_count'] += $count;
+                    $marketplace['unpaid_total'] += $total;
+                } elseif ($status === 'paid') {
+                    $marketplace['paid_count'] += $count;
+                }
+                continue;
+            }
+
+            $id = (int) $row->merchant_id;
+            if (! isset($buckets[$id])) {
+                $merchant = $merchants->get($id);
+                $buckets[$id] = [
+                    'merchant_id' => $id,
+                    'merchant_name' => $merchant?->name,
+                    'external_store_id' => $merchant?->external_store_id,
+                    'unpaid_count' => 0,
+                    'unpaid_total' => 0.0,
+                    'paid_count' => 0,
+                    'due_for_check_count' => 0,
+                    'side' => 'merchant',
+                ];
+            }
+            if ($status === 'unpaid') {
+                $buckets[$id]['unpaid_count'] += $count;
+                $buckets[$id]['unpaid_total'] += $total;
+            } elseif ($status === 'paid') {
+                $buckets[$id]['paid_count'] += $count;
+            }
+        }
+
+        if (\Illuminate\Support\Facades\Schema::hasColumn('invoices', 'sent_at')) {
+            $dueRows = (clone $query)
+                ->reorder()
+                ->setEagerLoads([])
+                ->where('status', 'unpaid')
+                ->whereNotNull('sent_at')
+                ->where('sent_at', '<=', now()->subDays(3))
+                ->whereNull('manual_checked_at')
+                ->selectRaw('merchant_id, payer_type, COUNT(*) as due_count')
+                ->groupBy('merchant_id', 'payer_type')
+                ->get();
+            foreach ($dueRows as $due) {
+                $payer = strtolower((string) ($due->payer_type ?? 'merchant'));
+                $dueCount = (int) $due->due_count;
+                if ($payer === 'company' || $due->merchant_id === null) {
+                    $marketplace['due_for_check_count'] += $dueCount;
+                    continue;
+                }
+                $id = (int) $due->merchant_id;
+                if (! isset($buckets[$id])) {
+                    continue;
+                }
+                $buckets[$id]['due_for_check_count'] += $dueCount;
+            }
+        }
+
+        $list = array_values($buckets);
+        usort($list, fn (array $a, array $b): int => $b['unpaid_total'] <=> $a['unpaid_total']);
+        if ($marketplace['unpaid_count'] > 0 || $marketplace['paid_count'] > 0 || $marketplace['due_for_check_count'] > 0) {
+            array_unshift($list, $marketplace);
+        }
+
+        return $list;
+    }
+
+    public function shipmentInvoice(Request $request, Shipment $shipment)
+    {
+        abort_unless(FinanceBranchScope::canSeeShipment($request->user(), $shipment), 404, 'Shipment not found.');
+
+        $invoice = $this->billing->autoEnsureForShipment($shipment);
+        if (! $invoice) {
+            return ApiResponse::success(null, 'No merchant-owed delivery charges to bill for this shipment.');
+        }
+
+        return ApiResponse::success($invoice->load('items'), 'Delivery charge bill ready.', 201);
+    }
+
+    /**
+     * POST invoices/{invoice}/mark-paid  ("Record payment")
+     * {amount|paid_amount?, method|payment_method?, reference|payment_reference?, paid_at?, note?, request_id?}
+     * Store bills: any amount 0.01 .. outstanding (part payment), omitted = full
+     * outstanding. Only a fully paid invoice becomes "paid".
+     * A merchant user calling this (old portal button) only sends a payment
+     * notice: the billing branch verifies it.
+     */
+    public function markPaid(Request $request, Invoice $invoice)
+    {
+        $this->authorizeInvoice($request, $invoice);
+
+        $data = $request->validate([
+            'amount' => ['nullable', 'numeric'],
+            'paid_amount' => ['nullable', 'numeric'],
+            'method' => ['nullable', 'string', 'max:64'],
+            'payment_method' => ['nullable', 'string', 'max:64'],
+            'reference' => ['nullable', 'string', 'max:191'],
+            'reference_number' => ['nullable', 'string', 'max:191'],
+            'payment_reference' => ['nullable', 'string', 'max:191'],
+            'paid_at' => ['nullable', 'date'],
+            'note' => ['nullable', 'string', 'max:500'],
+            'request_id' => ['nullable', 'string', 'max:100'],
+        ]);
+
+        if (strtolower((string) $invoice->status) === 'paid') {
+            return ApiResponse::error('Invoice is already paid.', 422);
+        }
+        $user = $request->user();
+        $amount = $data['amount'] ?? $data['paid_amount'] ?? null;
+        $method = $data['method'] ?? $data['payment_method'] ?? 'manual';
+        $reference = $data['reference'] ?? $data['payment_reference'] ?? $data['reference_number'] ?? null;
+        $requestId = ! empty($data['request_id']) ? 'ui:'.$user->id.':'.$data['request_id'] : null;
+
+        if (FinanceBranchScope::isMerchant($user)) {
+            abort_unless(MerchantInvoicePaymentService::isMerchantInvoice($invoice), 403);
+            $r = $this->notices->submit('invoice', $invoice, $amount, $method, $reference, $data['paid_at'] ?? null, $data['note'] ?? null,
+                'merchant_portal', ['type' => 'user', 'id' => $user->id], $requestId);
+
+            return ApiResponse::success(['notice' => $this->notices->present($r['notice'], false), 'idempotent_replay' => $r['replay']],
+                'Payment notice sent. The branch will verify it; the bill is not marked paid until then.', $r['replay'] ? 200 : 202);
+        }
+
+        if (MerchantInvoicePaymentService::isMerchantInvoice($invoice)) {
+            $type = MarketplaceBillingService::actorType($user) === 'admin' ? 'admin' : 'branch';
+            $r = $this->invPayments->record($invoice, $amount, $method, $reference, $type, ['type' => $type, 'id' => $user->id],
+                $requestId, $data['paid_at'] ?? null, $data['note'] ?? null);
+            $fresh = $r['invoice'];
+            $msg = $r['replay'] ? 'This payment was already recorded.'
+                : ($r['fully_paid']
+                    ? 'Payment Rs '.number_format((float) $r['payment']->amount, 2).' recorded. Invoice fully paid.'
+                    : 'Payment Rs '.number_format((float) $r['payment']->amount, 2).' recorded. Rs '.number_format($this->invPayments->outstanding($fresh), 2).' still outstanding.');
+
+            return ApiResponse::success($this->presentInvoice($fresh->fresh(['items', 'shipment', 'branch:id,name,code'])), $msg);
+        }
+
+        return ApiResponse::success($this->settlePaid($invoice, $request, [
+            'payment_method' => $method,
+            'payment_reference' => $reference,
+            'paid_at' => $data['paid_at'] ?? null,
+            'paid_amount' => $amount,
+        ]), 'Invoice marked paid.');
+    }
+
+    /** POST admin/invoices/{invoice}/payments/{payment}/reverse {reason, not_received?} */
+    public function reversePayment(Request $request, Invoice $invoice, int $payment)
+    {
+        $this->authorizeInvoice($request, $invoice);
+        abort_if(FinanceBranchScope::isMerchant($request->user()), 403);
+        $data = $request->validate([
+            'reason' => ['required', 'string', 'min:3', 'max:500'],
+            'not_received' => ['nullable', 'boolean'],
+        ]);
+        $row = MerchantInvoicePayment::query()->where('invoice_id', $invoice->id)->whereKey($payment)->first();
+        abort_unless($row, 404, 'Payment not found on this invoice.');
+
+        $r = $this->invPayments->reverse($row, $data['reason'], $request->user()->id, (bool) ($data['not_received'] ?? false));
+        $fresh = $r['invoice'];
+
+        return ApiResponse::success($this->presentInvoice($fresh->fresh(['items', 'shipment', 'branch:id,name,code'])),
+            'Payment Rs '.number_format((float) $r['payment']->amount, 2).' reversed. Outstanding: Rs '.number_format($this->invPayments->outstanding($fresh), 2).'.'
+            .($r['was_paid'] ? ' The invoice is open again.' : ''));
+    }
+
+    /** POST admin/invoices/{invoice}/notices/{notice}/verify {amount?, method?, reference?, paid_at?, note?} */
+    public function verifyNotice(Request $request, Invoice $invoice, int $notice)
+    {
+        $this->authorizeInvoice($request, $invoice);
+        abort_if(FinanceBranchScope::isMerchant($request->user()), 403);
+        $row = $this->invoiceNotice($invoice, $notice);
+        $data = $request->validate([
+            'amount' => ['nullable', 'numeric'],
+            'method' => ['nullable', 'string', 'max:64'],
+            'reference' => ['nullable', 'string', 'max:191'],
+            'paid_at' => ['nullable', 'date'],
+            'note' => ['nullable', 'string', 'max:500'],
+        ]);
+        $r = $this->notices->verify($row, $data['amount'] ?? null, $data['method'] ?? null, $data['reference'] ?? null, $data['paid_at'] ?? null, $data['note'] ?? null, $request->user());
+        $fresh = $r['target'];
+
+        return ApiResponse::success($this->presentInvoice($fresh->fresh(['items', 'shipment', 'branch:id,name,code'])),
+            'Notice verified: Rs '.number_format((float) $r['payment']->amount, 2).' recorded.'
+            .($r['fully_paid'] ? ' Invoice fully paid.' : ' Rs '.number_format($this->invPayments->outstanding($fresh), 2).' still outstanding.'));
+    }
+
+    /** POST admin/invoices/{invoice}/notices/{notice}/reject {reason} */
+    public function rejectNotice(Request $request, Invoice $invoice, int $notice)
+    {
+        $this->authorizeInvoice($request, $invoice);
+        abort_if(FinanceBranchScope::isMerchant($request->user()), 403);
+        $row = $this->invoiceNotice($invoice, $notice);
+        $data = $request->validate(['reason' => ['required', 'string', 'min:3', 'max:500']]);
+        $this->notices->reject($row, $data['reason'], $request->user());
+
+        return ApiResponse::success($this->presentInvoice($invoice->fresh(['items', 'shipment', 'branch:id,name,code'])), 'Payment notice rejected. The store was notified; nothing was recorded.');
+    }
+
+    /** GET admin/invoices/payment-notices?status=pending_verification|verified|rejected|all&merchant_id= */
+    public function notices(Request $request)
+    {
+        $user = $request->user();
+        abort_if(FinanceBranchScope::isMerchant($user), 403);
+        $q = BillingPaymentNotice::query()->where('target_type', 'invoice')->latest('id');
+        $status = (string) $request->query('status', 'pending_verification');
+        if ($status !== 'all') {
+            $q->where('status', $status);
+        }
+        if (FinanceBranchScope::applies($user)) {
+            $q->whereIn('branch_id', FinanceBranchScope::branchIds($user) ?: [0]);
+        } elseif ($request->filled('branch_id')) {
+            $q->where('branch_id', (int) $request->query('branch_id'));
+        }
+        if ($request->filled('merchant_id')) {
+            $q->where('payer_id', (int) $request->query('merchant_id'));
+        }
+        $page = $q->paginate(min(max((int) $request->query('per_page', 50), 1), 200));
+        $payload = $page->toArray();
+        $payload['data'] = collect($page->items())->map(fn ($n) => $this->notices->present($n, true))->values();
+
+        return ApiResponse::success($payload);
+    }
+
+    private function invoiceNotice(Invoice $invoice, int $notice): BillingPaymentNotice
+    {
+        $row = BillingPaymentNotice::query()->where('target_type', 'invoice')->where('target_id', $invoice->id)->whereKey($notice)->first();
+        abort_unless($row, 404, 'Payment notice not found on this invoice.');
+
+        return $row;
+    }
+
+    public function markChecked(Request $request, Invoice $invoice)
+    {
+        $this->authorizeInvoice($request, $invoice);
+
+        if (strtolower((string) $invoice->status) !== 'unpaid') {
+            return ApiResponse::error('Only an unpaid bill can be checked.', 422);
+        }
+        if (! $this->billing->isDueForCheck($invoice)) {
+            return ApiResponse::error('This bill is not due for check yet.', 422);
+        }
+
+        $invoice->forceFill(['manual_checked_at' => now()])->save();
+
+        return ApiResponse::success($invoice->fresh('items'), 'Marked checked. It stays unpaid until you close it.');
+    }
+
+    public function close(Request $request, Invoice $invoice)
+    {
+        $this->authorizeInvoice($request, $invoice);
+
+        if (strtolower((string) $invoice->status) === 'paid') {
+            return ApiResponse::error('Invoice is already paid.', 422);
+        }
+        if (! $invoice->sent_at) {
+            return ApiResponse::error('Send the bill before closing it.', 422);
+        }
+
+        abort_if(FinanceBranchScope::isMerchant($request->user()), 403);
+
+        // Store bills: records the outstanding amount as a payment (ledger row).
+        return ApiResponse::success($this->settlePaid($invoice, $request, [
+            'payment_method' => 'closed_after_check',
+            'payment_reference' => $request->input('payment_reference'),
+        ]), 'Invoice closed and marked paid.');
+    }
+
+    /** Saves who/when/how on the invoice (admin, branch or merchant). */
+    private function settlePaid(Invoice $invoice, Request $request, array $data): Invoice
+    {
+        $user = $request->user();
+
+        return $this->marketplaceBilling->settleInvoice(
+            $invoice,
+            $data,
+            MarketplaceBillingService::actorType($user),
+            $user?->id,
+        );
+    }
+
+    /**
+     * POST invoices/{invoice}/confirm-hamropay {merchant_txn_id}
+     * Asks HamroPay for an INVPAY- transaction and marks the invoice paid
+     * (paid_by_type=hamropay, reference = transaction id) when it succeeded.
+     */
+    public function confirmHamroPay(Request $request, Invoice $invoice)
+    {
+        $this->authorizeInvoice($request, $invoice);
+        $data = $request->validate(['merchant_txn_id' => ['required', 'string', 'max:64']]);
+
+        if (! str_starts_with($data['merchant_txn_id'], 'INVPAY-'.$invoice->id.'-')) {
+            return ApiResponse::error('This transaction is not for this invoice.', 422);
+        }
+
+        $check = $this->marketplaceBilling->confirmHamroPayTransaction($data['merchant_txn_id']);
+        if (! $check['paid']) {
+            return ApiResponse::error('HamroPay has not confirmed this payment yet.', 422, ['status' => $check['status']]);
+        }
+
+        $fresh = $check['invoice']->fresh('items');
+
+        return ApiResponse::success($fresh, strtolower((string) $fresh->status) === 'paid'
+            ? 'HamroPay payment confirmed. Invoice marked paid.'
+            : 'HamroPay payment confirmed. Rs '.number_format($this->invPayments->outstanding($fresh), 2).' still outstanding.');
+    }
+
+    /**
+     * Send invoice email immediately (manual trigger)
+     */
+    public function sendEmail(Request $request, Invoice $invoice)
+    {
+        // Check permissions
+        $user = $request->user();
+        $this->authorizeInvoice($request, $invoice);
+        if ($user->role === 'merchant') {
+            abort_unless((int) $user->merchant_id === (int) $invoice->merchant_id, 403);
+        }
+
+        if ($user->role === 'merchant' && strtolower((string) ($invoice->payer_type ?? 'merchant')) === 'company') {
+            abort(403);
+        }
+
+        if (! $this->billing->invoiceIsSendable($invoice)) {
+            return ApiResponse::error('Nothing to send. Paid bills are excluded.', 422);
+        }
+
+        if ($invoice->marketplace_bill_id) {
+            $bill = \Modules\Billing\Models\MarketplaceBill::query()->find($invoice->marketplace_bill_id);
+            if ($bill && $bill->isOpen()) {
+                return ApiResponse::error('This invoice is on marketplace bill '.$bill->bill_number.'. Resend the bill from Finance -> Marketplace bills.', 422);
+            }
+        }
+
+        $to = $this->billing->invoiceRecipient($invoice);
+        $sent = $this->billing->sendInvoiceEmail($invoice);
+
+        if ($sent) {
+            return ApiResponse::success(['to' => $to], 'Invoice email sent to '.$to.'.');
+        }
+
+        $payer = strtolower((string) ($invoice->payer_type ?? 'merchant'));
+        $hint = $payer === 'company'
+            ? 'Set the marketplace billing email on Admin -> Marketplaces, or BILLING_MARKETPLACE_EMAIL.'
+            : 'The store has no email on file.';
+
+        return ApiResponse::error('Failed to send email. '.$hint, 500);
+    }
+
+    /**
+     * Send digest email for merchant (manual trigger for admin)
+     */
+    public function sendDigest(Request $request)
+    {
+        $request->validate([
+            'merchant_id' => ['required', 'integer', 'exists:merchants,id'],
+            'period' => ['required', 'in:daily,weekly'],
+        ]);
+
+        $merchantId = $request->merchant_id;
+        $period = $request->period;
+
+        // Check permissions
+        $user = $request->user();
+        if ($user->role === 'merchant') {
+            abort_unless((int) $user->merchant_id === $merchantId, 403);
+        }
+
+        // Branch users: digest only carries their branch's bills.
+        $branchIds = FinanceBranchScope::applies($user) ? FinanceBranchScope::branchIds($user) : null;
+        if ($branchIds === []) {
+            abort(404, 'Merchant not found.');
+        }
+
+        $fromDate = $period === 'weekly' ? now()->subWeek()->toDateString() : now()->subDay()->toDateString();
+        $unpaid = $this->billing->getUnpaidInvoicesForMerchant((int) $merchantId, $fromDate, now()->toDateString(), $branchIds);
+        if ($unpaid->isEmpty()) {
+            return ApiResponse::success(null, 'Nothing to send. Paid bills are excluded.');
+        }
+
+        \Modules\Billing\Jobs\SendMerchantBillDigest::dispatch((int) $merchantId, $period, $branchIds);
+
+        return ApiResponse::success(
+            ['count' => $unpaid->count()],
+            $period.' digest email queued for merchant. Paid bills are excluded.'
+        );
+    }
+
+    /**
+     * Get invoice summary for merchant (for dashboard)
+     */
+    public function summary(Request $request)
+    {
+        $merchantId = $request->user()->role === 'merchant' 
+            ? $request->user()->merchant_id 
+            : $request->get('merchant_id');
+
+        if (! $merchantId) {
+            return ApiResponse::error('Merchant ID required', 400);
+        }
+
+        $user = $request->user();
+
+        $unpaid = FinanceBranchScope::scopeInvoices(Invoice::query(), $user)
+            ->where('merchant_id', $merchantId)
+            ->where('type', 'delivery_charges')
+            ->whereIn('status', MerchantInvoicePaymentService::OPEN_STATUSES)
+            ->selectRaw("COUNT(*) as count, SUM(CASE WHEN status = 'partially_paid' THEN COALESCE(outstanding_amount, total_amount) ELSE total_amount END) as total")
+            ->first();
+
+        $paid = FinanceBranchScope::scopeInvoices(Invoice::query(), $user)
+            ->where('merchant_id', $merchantId)
+            ->where('type', 'delivery_charges')
+            ->where('status', 'paid')
+            ->selectRaw('COUNT(*) as count, SUM(total_amount) as total')
+            ->first();
+
+        return ApiResponse::success([
+            'unpaid' => [
+                'count' => (int) ($unpaid->count ?? 0),
+                'total' => (float) ($unpaid->total ?? 0),
+            ],
+            'paid' => [
+                'count' => (int) ($paid->count ?? 0),
+                'total' => (float) ($paid->total ?? 0),
+            ],
+        ]);
+    }
+
+    /**
+     * Merchant pays delivery-fee invoice into the branch HamroPay account.
+     */
+    public function payHamroPay(Request $request, Invoice $invoice)
+    {
+        $this->authorizeInvoice($request, $invoice);
+        $request->validate(['amount' => ['nullable', 'numeric']]);
+
+        if (strtolower((string) $invoice->status) === 'paid') {
+            throw ValidationException::withMessages([
+                'invoice' => ['Invoice is already paid.'],
+            ]);
+        }
+
+        if (($invoice->type ?? '') !== 'delivery_charges') {
+            throw ValidationException::withMessages([
+                'invoice' => ['Only delivery_charges invoices can be paid to the branch this way.'],
+            ]);
+        }
+
+        $amount = (float) $invoice->total_amount;
+        if (MerchantInvoicePaymentService::isMerchantInvoice($invoice)) {
+            // Pay the outstanding part, or a smaller part amount.
+            $due = $this->invPayments->outstanding($invoice);
+            $amount = $request->filled('amount') ? round((float) $request->input('amount'), 2) : $due;
+            if ($amount - $due > 0.004) {
+                throw ValidationException::withMessages(['amount' => ['Amount exceeds outstanding Rs '.number_format($due, 2).'.']]);
+            }
+        }
+        if ($amount <= 0) {
+            throw ValidationException::withMessages([
+                'invoice' => ['Invoice amount must be greater than zero.'],
+            ]);
+        }
+
+        $user = $request->user();
+        if (($user->role ?? '') === 'merchant') {
+            abort_unless((int) $user->merchant_id === (int) $invoice->merchant_id, 403);
+        }
+
+        if ($invoice->marketplace_bill_id) {
+            $bill = \Modules\Billing\Models\MarketplaceBill::query()->find($invoice->marketplace_bill_id);
+            if ($bill && $bill->isOpen()) {
+                throw ValidationException::withMessages([
+                    'invoice' => ['This invoice is on marketplace bill '.$bill->bill_number.'. The marketplace pays the whole bill.'],
+                ]);
+            }
+        }
+
+        $invoice->loadMissing('shipment.merchant');
+        $paymentTarget = app(\Modules\Setting\Services\MarketplacePaymentUrlResolver::class)
+            ->resolve($invoice->shipment, $invoice->shipment?->merchant);
+        if ($paymentTarget['api_base_url'] === '') {
+            $label = $paymentTarget['marketplace']?->name ?: 'this store';
+            throw ValidationException::withMessages([
+                'payment' => ['No payment API base URL for '.$label.'. Set API base URL on Admin -> Marketplaces.'],
+            ]);
+        }
+
+        // Delivery-charge money always goes to the BILLING branch (origin), for
+        // store bills and marketplace free-delivery bills alike. The marketplace
+        // HamroPay account is the payer side, never the payee.
+        $branchId = $invoice->branch_id;
+        $payAccount = $branchId ? $this->accounts->branchAccount((int) $branchId, 'hamropay') : null;
+
+        if (! $payAccount) {
+            throw ValidationException::withMessages([
+                'gateway' => ['Billing branch HamroPay account is not configured. The branch must save credentials under Payment gateways.'],
+            ]);
+        }
+
+        $client = $this->accounts->hamroPayClientFromAccount($payAccount);
+        $paymentBase = (string) ($paymentTarget['api_base_url'] ?? '');
+        if ($paymentBase !== '') {
+            // Same host Admin -> Marketplaces stores (api.tukaatu.com, api.fca.com.np, ...).
+            $client = $client->withEndpoints($paymentBase);
+        }
+        $branchMerchantId = $payAccount->credential('merchant_id');
+        if (! filled($branchMerchantId)) {
+            throw ValidationException::withMessages([
+                'gateway' => ['Billing branch HamroPay merchant_id is missing.'],
+            ]);
+        }
+
+        $paisa = (int) round($amount * 100);
+        $txnId = 'INVPAY-'.$invoice->id.'-'.Str::upper(Str::random(8));
+
+        $session = $client->createSession([
+            'merchantTxnId' => $txnId,
+            'transactionAmount' => $paisa,
+            'remarks' => 'Delivery bill '.$invoice->invoice_number,
+            'metadata' => [
+                'payment_api_base_url' => $paymentBase,
+                'marketplace_code' => $paymentTarget['marketplace']?->code,
+            ],
+        ], (string) $branchMerchantId, null);
+
+        $sessionId = data_get($session, 'sessionId')
+            ?? data_get($session, 'data.sessionId')
+            ?? data_get($session, 'session_id');
+
+        if (! $sessionId) {
+            throw ValidationException::withMessages([
+                'hamropay' => [data_get($session, 'message', 'HamroPay did not return a session id.')],
+            ]);
+        }
+        if (\Illuminate\Support\Facades\Schema::hasColumn('invoices', 'hamropay_sessions')) {
+            $sessions = $invoice->hamropay_sessions ?? [];
+            $sessions[$txnId] = ['amount' => $amount, 'created_at' => now()->toIso8601String()];
+            $invoice->forceFill(['hamropay_sessions' => $sessions])->save();
+        }
+
+        $params = $client->buildCheckoutParams(
+            (string) $sessionId,
+            $txnId,
+            $paisa,
+            'Delivery bill '.$invoice->invoice_number,
+            (string) $branchMerchantId,
+        );
+
+        return ApiResponse::success([
+            'invoice_id' => $invoice->id,
+            'merchant_txn_id' => $txnId,
+            'session_id' => $sessionId,
+            'amount' => $amount,
+            'payee' => 'branch',
+            'branch_id' => $branchId,
+            'gateway_url' => $client->getGatewayUrl(),
+            'payment_api_base_url' => $paymentTarget['api_base_url'],
+            'payment_request_url' => $paymentTarget['payment_request_url'],
+            'marketplace' => $paymentTarget['marketplace'] ? [
+                'id' => $paymentTarget['marketplace']->id,
+                'code' => $paymentTarget['marketplace']->code,
+                'name' => $paymentTarget['marketplace']->name,
+            ] : null,
+            'checkout' => $params,
+            'provider' => $session,
+        ], 'HamroPay session created — merchant pays branch for delivery charges.');
+    }
+}

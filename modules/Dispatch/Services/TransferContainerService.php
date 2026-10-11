@@ -15,6 +15,7 @@ use Modules\Branch\Models\Branch;
 use Modules\Dispatch\Models\DispatchManifest;
 use Modules\Dispatch\Models\DispatchManifestItem;
 use Modules\Shipment\Models\Shipment;
+use Modules\Pickup\Support\PickupCustody;
 use Modules\Shipment\Services\ShipmentSortingService;
 use Modules\Shipment\Services\TransferRouteProgressService;
 use Modules\Shipment\Services\TransferService;
@@ -137,6 +138,12 @@ final class TransferContainerService
         $forcedNextHopId = $forcedNextHopId ? ($this->progress->resolveOperationalBranchId($forcedNextHopId) ?? $forcedNextHopId) : null;
 
         foreach ($shipments as $shipment) {
+            // Never put a parcel on a TR before the branch received it from the pickup.
+            if ($pr = PickupCustody::pendingPickupNumber($shipment)) {
+                $skipped[(int) $shipment->id] = PickupCustody::notReceivedMessage($shipment, $pr);
+                continue;
+            }
+
             $from = $scopeBranchId !== 0
                 ? $scopeBranchId
                 : (int) ($this->progress->resolveOperationalBranchId(
@@ -302,6 +309,9 @@ final class TransferContainerService
                 }
                 $label = $shipment->tracking_number ?? (string) $shipment->id;
                 try {
+                    if ($pr = PickupCustody::pendingPickupNumber($shipment)) {
+                        throw ValidationException::withMessages(['shipment_ids' => [PickupCustody::notReceivedMessage($shipment, $pr)]]);
+                    }
                     if (! $this->isDispatchableStatus($shipment)) {
                         throw ValidationException::withMessages(['shipment_ids' => [
                             sprintf('%s is not ready for transfer (status: %s).', $label, str_replace('_', ' ', (string) $shipment->status)),
@@ -816,6 +826,162 @@ final class TransferContainerService
     }
 
     /**
+     * Repair a TR that was checked in wrongly. Shared by the admin "Repair receive"
+     * dialog and `php artisan transfers:repair-receive`.
+     *  - clearSeal: remove the arrival seal result (status, entered value, remark, checked by / at)
+     *  - foundAll:  every parcel still "missing" on the TR is received at the TR's receiving
+     *               branch and auto-sorted (last mile -> sorted for delivery, onward -> sorted
+     *               for transfer); a parcel that already reached that branch only has its line closed
+     * dryRun returns the plan and changes nothing. Each parcel is applied on its own, so one
+     * bad parcel is reported in "errors" instead of stopping the rest. Works without a
+     * logged-in user (actorId null). Every applied repair is written to audit_logs.
+     *
+     * @return array{dry_run: bool, applied: bool, tr: array, before: array, after: ?array, changes: list<array>, errors: list<string>}
+     */
+    public function repairReceive(DispatchManifest $container, bool $clearSeal, bool $foundAll, bool $dryRun, ?int $actorId, string $source = 'admin'): array
+    {
+        $container = DispatchManifest::query()->findOrFail($container->id);
+        $columns = Schema::getColumnListing('dispatch_manifests');
+        $sealCols = array_values(array_intersect(['seal_status', 'seal_checked_value', 'seal_checked_by', 'seal_checked_at', 'seal_remark'], $columns));
+        $before = $this->repairSnapshot($container);
+        $changes = [];
+        $errors = [];
+
+        if (! $clearSeal && ! $foundAll) {
+            $errors[] = 'Pick at least one repair: clear the seal flag and/or receive the missing parcels.';
+        }
+
+        if ($clearSeal) {
+            $hasSeal = $sealCols !== [] && (filled($container->seal_status ?? null) || filled($container->seal_checked_value ?? null) || filled($container->seal_remark ?? null));
+            $changes[] = $hasSeal
+                ? ['type' => 'clear_seal', 'action' => true, 'label' => sprintf('Clear seal result "%s" (entered at receive: %s; remark: %s)',
+                    $container->seal_status ?? '-', $container->seal_checked_value ?: 'not typed', $container->seal_remark ?: '-')]
+                : ['type' => 'clear_seal', 'action' => false, 'label' => 'No seal result recorded on this TR: nothing to clear.'];
+        }
+
+        $plan = [];
+        if ($foundAll) {
+            if (! in_array($container->status, [DispatchManifest::STATUS_RECEIVED, DispatchManifest::STATUS_PARTIALLY_RECEIVED], true)) {
+                $errors[] = $container->display_number.' is '.$container->status.': only a received TR can be repaired. Receive it first.';
+            } else {
+                $here = (int) $container->to_branch_id;
+                $missing = DispatchManifestItem::query()->where('dispatch_manifest_id', $container->id)->where('status', 'missing')->get();
+                if ($missing->isEmpty()) {
+                    $changes[] = ['type' => 'found', 'action' => false, 'label' => 'No parcel is marked missing on this TR.'];
+                }
+                foreach ($missing as $item) {
+                    $shipment = Shipment::query()->find($item->shipment_id);
+                    $tn = $shipment?->tracking_number ?? '#'.$item->shipment_id;
+                    if (! $shipment) {
+                        $changes[] = ['type' => 'found', 'action' => false, 'tracking_number' => $tn, 'label' => "{$tn}: parcel record not found, skipped."];
+                    } elseif ($this->alreadyHere($shipment, $here)) {
+                        $plan[] = ['item_id' => (int) $item->id, 'mode' => 'close'];
+                        $changes[] = ['type' => 'found', 'action' => true, 'tracking_number' => $tn,
+                            'label' => "{$tn}: already at {$this->branchName($here)} ({$shipment->status}); close the line as received."];
+                    } elseif (in_array($shipment->status, self::IN_TRANSIT_SHIPMENT_STATUSES, true)) {
+                        $plan[] = ['item_id' => (int) $item->id, 'mode' => 'receive'];
+                        $changes[] = ['type' => 'found', 'action' => true, 'tracking_number' => $tn,
+                            'label' => sprintf('%s: receive at %s and sort -> %s.', $tn, $this->branchName($here),
+                                $this->isFinalHere($shipment, $here) ? CourierStatus::SORTED_FOR_DELIVERY.' (last mile)' : CourierStatus::SORTED_FOR_TRANSFER.' (onward)')];
+                    } else {
+                        $changes[] = ['type' => 'found', 'action' => false, 'tracking_number' => $tn,
+                            'label' => "{$tn}: status {$shipment->status}, no longer in transit; check its timeline (skipped)."];
+                    }
+                }
+            }
+        }
+
+        $actionable = collect($changes)->where('action', true)->isNotEmpty();
+        $out = ['dry_run' => $dryRun, 'applied' => false, 'tr' => $this->summarize($container), 'before' => $before, 'after' => null, 'changes' => $changes, 'errors' => $errors];
+        if ($dryRun || ! $actionable) {
+            return $out;
+        }
+
+        DB::transaction(function () use ($container, $clearSeal, $sealCols, $plan, $actorId, &$errors, &$changes) {
+            $container = DispatchManifest::query()->lockForUpdate()->findOrFail($container->id);
+            if ($clearSeal && $sealCols !== []) {
+                DB::table('dispatch_manifests')->where('id', $container->id)->update(array_fill_keys($sealCols, null));
+            }
+            $here = (int) $container->to_branch_id;
+            foreach ($plan as $step) {
+                try {
+                    // Savepoint per parcel: a failure rolls back only that parcel.
+                    DB::transaction(function () use ($container, $step, $here, $actorId) {
+                        $item = DispatchManifestItem::query()->lockForUpdate()->findOrFail($step['item_id']);
+                        if ($item->status !== 'missing') {
+                            return;
+                        }
+                        $shipment = Shipment::query()->findOrFail($item->shipment_id);
+                        if ($step['mode'] === 'close') {
+                            $this->closeAlreadyHere($container, $item, $shipment, $actorId);
+                        } else {
+                            $this->receiveItem($container, $item, $shipment, $here, $actorId);
+                        }
+                        $item->forceFill(['discrepancy_note' => trim('Repair: received after a wrong check-in. '.(string) $item->discrepancy_note)])->save();
+                    });
+                } catch (\Throwable $e) {
+                    $msg = $e instanceof ValidationException ? collect($e->errors())->flatten()->first() : $e->getMessage();
+                    $errors[] = 'Item '.$step['item_id'].': '.$msg;
+                }
+            }
+            $this->hops->refreshCounts((int) $container->id);
+            $short = DispatchManifestItem::query()->where('dispatch_manifest_id', $container->id)->whereIn('status', ['missing', 'lost'])->exists();
+            $container->refresh();
+            $container->forceFill([
+                'status' => $short ? DispatchManifest::STATUS_PARTIALLY_RECEIVED : DispatchManifest::STATUS_RECEIVED,
+                'notes' => trim(($container->notes ? $container->notes."\n" : '').'Repair receive '.now()->toDateTimeString().': '
+                    .collect($changes)->where('action', true)->pluck('label')->implode(' | ')),
+            ])->save();
+        });
+
+        $container = $container->fresh();
+        $after = $this->repairSnapshot($container);
+        $this->auditRepair($container, $actorId, $source, $before, $after, $changes, $errors);
+
+        return array_merge($out, ['applied' => true, 'tr' => $this->summarize($container), 'after' => $after, 'errors' => $errors]);
+    }
+
+    /** Fields a repair can change, for the preview and the audit log. */
+    private function repairSnapshot(DispatchManifest $m): array
+    {
+        $counts = DispatchManifestItem::query()->where('dispatch_manifest_id', $m->id)
+            ->selectRaw('status, COUNT(*) as n')->groupBy('status')->pluck('n', 'status')->map(fn ($n) => (int) $n)->all();
+
+        return [
+            'status' => $m->status,
+            'seal_status' => $m->seal_status ?? null,
+            'seal_checked_value' => $m->seal_checked_value ?? null,
+            'seal_remark' => $m->seal_remark ?? null,
+            'seal_checked_by' => $m->seal_checked_by ?? null,
+            'seal_checked_at' => isset($m->seal_checked_at) ? (string) $m->seal_checked_at : null,
+            'items' => $counts,
+        ];
+    }
+
+    private function auditRepair(DispatchManifest $m, ?int $actorId, string $source, array $before, array $after, array $changes, array $errors): void
+    {
+        Log::info('transfer_container.repair_receive', ['tr' => $m->display_number, 'actor_id' => $actorId, 'source' => $source, 'before' => $before, 'after' => $after, 'errors' => $errors]);
+        try {
+            if (! Schema::hasTable('audit_logs')) {
+                return;
+            }
+            DB::table('audit_logs')->insert(array_intersect_key([
+                'user_id' => $actorId,
+                'action' => 'transfers.repair_receive',
+                'auditable_type' => DispatchManifest::class,
+                'auditable_id' => $m->id,
+                'old_values' => json_encode($before),
+                'new_values' => json_encode(['after' => $after, 'changes' => collect($changes)->where('action', true)->pluck('label')->values(), 'errors' => $errors, 'source' => $source, 'tr' => $m->display_number]),
+                'ip_address' => app()->runningInConsole() ? 'console' : request()?->ip(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ], array_flip(Schema::getColumnListing('audit_logs'))));
+        } catch (\Throwable $e) {
+            Log::warning('transfer_container.repair_audit_failed', ['tr' => $m->id, 'error' => $e->getMessage()]);
+        }
+    }
+
+    /**
      * Receive one parcel at $branchId and sort it: final destination -> last
      * mile (sorted_for_delivery + pending delivery), otherwise received at
      * transit hub -> sorted_for_transfer with the next hop recalculated.
@@ -1278,7 +1444,9 @@ final class TransferContainerService
             CourierStatus::RECEIVED_AT_TRANSIT_HUB,
             CourierStatus::PICKED_UP,
             CourierStatus::SORTED_FOR_DELIVERY,
-        ], true);
+        ], true)
+            // A picked-up parcel still waiting for pickup verification is with the rider.
+            && ! PickupCustody::isAwaitingBranchReceive($shipment);
     }
 
     private function assertReceivable(DispatchManifest $container, int $receivingBranchId): void

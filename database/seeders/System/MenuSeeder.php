@@ -125,7 +125,7 @@ class MenuSeeder extends Seeder
             ['section' => MenuSection::Merchant->value, 'label' => 'Rates', 'route' => '/merchant/rates', 'icon' => 'rates', 'permission' => 'merchant.rates', 'sort_order' => 120],
             ['section' => MenuSection::Merchant->value, 'label' => 'POD', 'route' => '/merchant/pod', 'icon' => 'pod', 'permission' => 'merchant.pod', 'sort_order' => 130],
             ['section' => MenuSection::Merchant->value, 'label' => 'Settlements', 'route' => '/merchant/settlements', 'icon' => 'settlements', 'permission' => 'merchant.settlements', 'sort_order' => 140],
-            ['section' => MenuSection::Merchant->value, 'label' => 'Invoices', 'route' => '/merchant/invoices', 'icon' => 'invoices', 'permission' => 'merchant.invoices', 'sort_order' => 150],
+            ['section' => MenuSection::Merchant->value, 'label' => 'Billing', 'route' => '/merchant/invoices', 'icon' => 'invoices', 'permission' => 'merchant.invoices', 'sort_order' => 150],
             ['section' => MenuSection::Merchant->value, 'label' => 'API Keys', 'route' => '/merchant/api-keys', 'icon' => 'api-keys', 'permission' => 'merchant.api_keys', 'sort_order' => 160],
             ['section' => MenuSection::Merchant->value, 'label' => 'API Logs', 'route' => '/merchant/api-logs', 'icon' => 'api-logs', 'permission' => 'merchant.api_logs', 'sort_order' => 170],
             ['section' => MenuSection::Merchant->value, 'label' => 'Webhooks', 'route' => '/merchant/webhooks', 'icon' => 'webhooks', 'permission' => 'merchant.webhooks', 'sort_order' => 180],

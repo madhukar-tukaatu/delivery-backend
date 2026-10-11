@@ -43,10 +43,40 @@ class SettlementController extends Controller
 
         $this->applySettlementFilters($query, $request);
 
-        $paginator = $query->paginate((int) $request->get('per_page', 20));
+        // Summary cards use the same branch scope + merchant/marketplace filters,
+        // but not the status/date filters (so the cards stay meaningful).
+        $summaryBase = MerchantSettlement::query();
+        if ($request->user()->role === 'merchant') {
+            $summaryBase->where('merchant_id', $request->user()->merchant_id);
+        }
+        FinanceBranchScope::scopeSettlements($summaryBase, $request->user());
+        $summaryRequest = $request->duplicate($request->except(['status', 'from', 'to', 'search']));
+        $this->applySettlementFilters($summaryBase, $summaryRequest);
+        $monthStart = now()->startOfMonth();
+        $agg = (clone $summaryBase)->selectRaw("
+            SUM(CASE WHEN status IN ('pending','processing','approved') THEN 1 ELSE 0 END) pending_count,
+            COALESCE(SUM(CASE WHEN status IN ('pending','processing','approved') THEN final_payable_amount ELSE 0 END),0) pending_amount,
+            SUM(CASE WHEN status IN ('settled','paid') AND settled_at >= ? THEN 1 ELSE 0 END) paid_month_count,
+            COALESCE(SUM(CASE WHEN status IN ('settled','paid') AND settled_at >= ? THEN final_payable_amount ELSE 0 END),0) paid_month_amount,
+            SUM(CASE WHEN status IN ('settled','paid') THEN 1 ELSE 0 END) paid_count,
+            COALESCE(SUM(CASE WHEN status IN ('settled','paid') THEN final_payable_amount ELSE 0 END),0) paid_amount
+        ", [$monthStart, $monthStart])->first();
+
+        $paginator = $query->paginate(min((int) $request->get('per_page', 20), 100));
         $paginator->getCollection()->transform(fn (MerchantSettlement $row) => $this->presentSettlement($row));
 
-        return ApiResponse::success($paginator);
+        $payload = $paginator->toArray();
+        $payload['summary'] = [
+            'pending_count' => (int) ($agg->pending_count ?? 0),
+            'pending_amount' => round((float) ($agg->pending_amount ?? 0), 2),
+            'paid_this_month_count' => (int) ($agg->paid_month_count ?? 0),
+            'paid_this_month_amount' => round((float) ($agg->paid_month_amount ?? 0), 2),
+            'paid_count' => (int) ($agg->paid_count ?? 0),
+            'paid_amount' => round((float) ($agg->paid_amount ?? 0), 2),
+            'since' => $monthStart->toDateString(),
+        ];
+
+        return ApiResponse::success($payload);
     }
 
     /**
@@ -509,7 +539,35 @@ class SettlementController extends Controller
         }
 
         if ($request->filled('status')) {
-            $query->where('status', $request->input('status'));
+            $query->whereIn('status', array_filter(explode(',', (string) $request->input('status'))));
+        }
+
+        if ($request->filled('from')) {
+            $query->whereDate('created_at', '>=', $request->input('from'));
+        }
+        if ($request->filled('to')) {
+            $query->whereDate('created_at', '<=', $request->input('to'));
+        }
+
+        // Settlement number, merchant name / STORE-id, or a tracking number on the batch.
+        $search = trim((string) $request->input('search', ''));
+        if ($search !== '') {
+            $like = '%'.$search.'%';
+            $query->where(function ($w) use ($like) {
+                $w->where('settlement_number', 'like', $like)
+                    ->orWhereHas('merchant', function ($mq) use ($like) {
+                        $mq->where('name', 'like', $like)
+                            ->orWhere('external_store_id', 'like', $like)
+                            ->orWhere('code', 'like', $like);
+                    })
+                    ->orWhereExists(function ($e) use ($like) {
+                        $e->selectRaw('1')
+                            ->from('merchant_settlement_items as smi')
+                            ->join('shipments as sms', 'sms.id', '=', 'smi.shipment_id')
+                            ->whereColumn('smi.merchant_settlement_id', 'merchant_settlements.id')
+                            ->where('sms.tracking_number', 'like', $like);
+                    });
+            });
         }
     }
 

@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Modules\Access\Http\Controllers\MenuBadgeController;
 use Modules\Access\Http\Controllers\MenuController;
 
 /*
@@ -16,6 +17,10 @@ Route::prefix('v1')
     ->group(function () {
         Route::get('me/menus', [MenuController::class, 'my'])
             ->name('me.menus');
+
+        // Sidebar badge counts (work waiting per menu). Each badge checks its own page permission.
+        Route::get('me/menu-badges', [MenuBadgeController::class, 'index'])
+            ->name('me.menu-badges');
     });
 
 /*

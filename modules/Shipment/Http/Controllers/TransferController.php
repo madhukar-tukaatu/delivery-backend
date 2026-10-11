@@ -162,7 +162,8 @@ final class TransferController extends Controller
             // SORTED_FOR_DELIVERY (or still PICKED_UP / RECEIVED_AT_ORIGIN_BRANCH)
             // while their origin != destination. We surface all of those here so
             // the branch manager can dispatch them, and the dispatch action
-            // repairs the status.
+            // repairs the status. PICKED_UP parcels still waiting for the branch
+            // to receive them on their pickup are excluded (rider still has them).
             $this->applyOutboundScope($query, $branchId);
         }
 
@@ -1505,6 +1506,11 @@ final class TransferController extends Controller
                     ->orWhere('destination_branch_id', '!=', $branchId);
             });
         }
+
+        // A picked-up parcel is still with the rider until the branch receives it
+        // on its pickup. Listing it here let a TR carry it before check-in
+        // (PR-000025: parcels went "in transit" while the pickup waited).
+        \Modules\Pickup\Support\PickupCustody::excludeAwaitingBranchReceive($query);
     }
 
 
@@ -2004,6 +2010,9 @@ final class TransferController extends Controller
         // Parcels can be added / removed only while the TR is open.
         $data['can_edit'] = $data['can_dispatch'];
         $data['seal_check_required'] = $data['can_receive'] && trim((string) ($container->seal_number ?? '')) !== '';
+        // Admin repair of a wrongly checked-in TR (clear seal flag / receive missing parcels).
+        $data['can_repair'] = $this->canRepair($request)
+            && in_array($container->status, ['received', 'partially_received'], true);
 
         return $data;
     }
@@ -2209,6 +2218,54 @@ final class TransferController extends Controller
      * POST transfers/containers/{container}/items/{item}/receive
      * { action: found|lost, note? } : resolve a parcel flagged missing.
      */
+    /**
+     * POST transfers/containers/{container}/repair {clear_seal, found_all, dry_run}
+     * Admin-only repair of a wrongly checked-in TR. dry_run (default true) returns the
+     * preview; otherwise applies and writes an audit_logs row. Permission: transfers.repair.
+     */
+    public function containerRepair(Request $request, \Modules\Dispatch\Models\DispatchManifest $container)
+    {
+        abort_unless($this->canRepair($request), 403, 'Only an admin can repair a TR receive.');
+        $data = $request->validate([
+            'clear_seal' => ['sometimes', 'boolean'],
+            'found_all' => ['sometimes', 'boolean'],
+            'dry_run' => ['sometimes', 'boolean'],
+        ]);
+        $clear = (bool) ($data['clear_seal'] ?? false);
+        $found = (bool) ($data['found_all'] ?? false);
+        if (! $clear && ! $found) {
+            return ApiResponse::error('Pick at least one repair: clear the seal flag and/or receive the missing parcels.', 422);
+        }
+        $dry = (bool) ($data['dry_run'] ?? true);
+
+        $res = $this->containers->repairReceive($container, $clear, $found, $dry, (int) $request->user()->id, 'admin');
+        if ($res['applied']) {
+            $res['container'] = $this->containerDetail($request, $container->fresh());
+        }
+        $msg = $res['applied']
+            ? $container->display_number.' repaired'.($res['errors'] ? ' with '.count($res['errors']).' problem(s).' : '.')
+            : ($dry ? 'Preview: nothing has been changed yet.' : 'Nothing to change.');
+
+        return ApiResponse::success($res, $msg);
+    }
+
+    private function canRepair(Request $request): bool
+    {
+        $user = $request->user();
+        if (! $user) {
+            return false;
+        }
+        if ((method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) || $user->hasRole('main_admin')) {
+            return true;
+        }
+
+        try {
+            return $user->can('transfers.repair');
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
     public function containerResolveItem(Request $request, \Modules\Dispatch\Models\DispatchManifest $container, \Modules\Dispatch\Models\DispatchManifestItem $item)
     {
         $data = $request->validate([

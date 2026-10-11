@@ -14,7 +14,8 @@ final class CreateMarketplaceApiKey extends Command
     protected $signature = 'marketplace:key:create
         {name : Marketplace name}
         {--code= : Unique marketplace code}
-        {--environment=test : test or live}';
+        {--environment=test : test or live}
+        {--scopes= : Comma-separated API scopes, e.g. pricing,billing (empty = every API)}';
 
     protected $description =
         'Create a marketplace account and API credentials';
@@ -59,6 +60,18 @@ final class CreateMarketplaceApiKey extends Command
 
         if ($code === '') {
             $code = Str::slug($name);
+        }
+
+        $allowedScopes = ['pricing', 'billing', '*'];
+        $scopes = array_values(array_unique(array_filter(array_map(
+            fn ($v) => strtolower(trim((string) $v)),
+            explode(',', (string) $this->option('scopes'))
+        ))));
+        $unknown = array_diff($scopes, $allowedScopes);
+        if ($unknown !== []) {
+            $this->error('Unknown scope(s): '.implode(', ', $unknown).'. Allowed: '.implode(', ', $allowedScopes));
+
+            return self::FAILURE;
         }
 
         $publicPrefix = $environment === 'live'
@@ -109,6 +122,7 @@ final class CreateMarketplaceApiKey extends Command
                     $name,
                     $code,
                     $environment,
+                    $scopes,
                     $publicKey,
                     $keyHash,
                     $keyPrefix,
@@ -270,6 +284,17 @@ final class CreateMarketplaceApiKey extends Command
                     }
 
                     if (
+                        $scopes !== [] &&
+                        Schema::hasColumn(
+                            'marketplace_api_keys',
+                            'scopes'
+                        )
+                    ) {
+                        $apiKeyData['scopes'] =
+                            json_encode($scopes, JSON_THROW_ON_ERROR);
+                    }
+
+                    if (
                         Schema::hasColumn(
                             'marketplace_api_keys',
                             'revoked_at'
@@ -354,6 +379,10 @@ final class CreateMarketplaceApiKey extends Command
                 [
                     'Environment',
                     $environment,
+                ],
+                [
+                    'Scopes',
+                    $scopes === [] ? '(all)' : implode(',', $scopes),
                 ],
                 [
                     'Key prefix',

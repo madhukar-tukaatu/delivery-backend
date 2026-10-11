@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
 use Modules\Delivery\Models\DeliveryAssignment;
+use Modules\Delivery\Services\DeliveryRunService;
 use Modules\Delivery\Services\DeliveryWorkflowService;
 
 class StaffDeliveryController extends Controller
@@ -35,7 +36,14 @@ class StaffDeliveryController extends Controller
 
         $perPage = min(max((int) $request->input('per_page', 20), 1), 100);
 
-        return ApiResponse::success($query->latest('id')->paginate($perPage));
+        // Work still to do first (out for delivery, accepted, assigned), then history.
+        $page = $query
+            ->orderByRaw("CASE status WHEN 'out_for_delivery' THEN 0 WHEN 'accepted' THEN 1 WHEN 'assigned' THEN 2 ELSE 3 END")
+            ->latest('id')
+            ->paginate($perPage);
+        app(DeliveryRunService::class)->attachRunInfo($page->getCollection());
+
+        return ApiResponse::success($page);
     }
 
     public function accept(Request $request, DeliveryAssignment $delivery)

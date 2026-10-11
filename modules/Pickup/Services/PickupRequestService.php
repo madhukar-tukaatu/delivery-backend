@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Modules\Pickup\Models\PickupRequest;
 use Modules\Pickup\Models\PickupRequestShipment;
+use Modules\Pickup\Support\PickupCustody;
 use Modules\Pickup\Support\PickupShipmentStatus;
 use Modules\Pickup\Support\PickupStatus;
 use Modules\Shipment\Models\Shipment;
@@ -718,11 +719,14 @@ final class PickupRequestService
         Shipment $shipment,
         User $staff
     ): PickupRequestShipment {
+        $synced = false;
+
         $result = DB::transaction(
             function () use (
                 $pickup,
                 $shipment,
-                $staff
+                $staff,
+                &$synced
             ): PickupRequestShipment {
                 $pickup = PickupRequest::query()
                     ->lockForUpdate()
@@ -749,13 +753,70 @@ final class PickupRequestService
                     ]);
                 }
 
+                $shipment = Shipment::query()
+                    ->lockForUpdate()
+                    ->findOrFail($shipment->id);
+
+                /*
+                |--------------------------------------------------------------------------
+                | Decide from where the parcel REALLY is (not only its status)
+                |--------------------------------------------------------------------------
+                |
+                |  - picked up (with rider)        -> normal receive below
+                |  - "in transit" but no TR moved it -> status was wrong: put it back
+                |                                     to picked_up, then receive
+                |  - already accepted / left on a TR / moved on -> close this pickup
+                |                                     line as verified, parcel untouched
+                */
+                $custody = PickupCustody::describe(
+                    $shipment,
+                    (string) $item->status
+                );
+
                 if (
+                    $item->status === PickupShipmentStatus::RECEIVED
+                ) {
+                    throw ValidationException::withMessages([
+                        'shipment' => [
+                            'Shipment is already received on this pickup.',
+                        ],
+                    ]);
+                }
+
+                if ($custody['needs_sync']) {
+                    $this->syncResolvedItem(
+                        item: $item,
+                        shipment: $shipment,
+                        custody: $custody,
+                        staffId: (int) $staff->id
+                    );
+
+                    $synced = true;
+
+                    return $item->fresh([
+                        'pickupRequest',
+                        'shipment',
+                    ]);
+                }
+
+                if (
+                    $custody['state'] === 'wrong_in_transit'
+                ) {
+                    $this->resetWrongInTransit(
+                        shipment: $shipment,
+                        pickup: $pickup,
+                        actorId: (int) $staff->id
+                    );
+                } elseif (
                     $shipment->status !==
                     CourierStatus::PICKED_UP
                 ) {
                     throw ValidationException::withMessages([
                         'shipment' => [
-                            'Shipment must be picked up before origin branch receiving.',
+                            sprintf(
+                                'Shipment cannot be received: %s.',
+                                $custody['label']
+                            ),
                         ],
                     ]);
                 }
@@ -859,10 +920,12 @@ final class PickupRequestService
             }
         );
 
-        $this->callbacks->shipmentReceivedAtOrigin(
-            pickup: $result->pickupRequest,
-            shipment: $result->shipment
-        );
+        if (! $synced) {
+            $this->callbacks->shipmentReceivedAtOrigin(
+                pickup: $result->pickupRequest,
+                shipment: $result->shipment
+            );
+        }
 
         /*
         |--------------------------------------------------------------------------
@@ -938,13 +1001,18 @@ final class PickupRequestService
                 | received/sorted) can be rejected during verification.
                 |--------------------------------------------------------------------------
                 */
-                if (
-                    $shipment->status !==
-                    CourierStatus::PICKED_UP
-                ) {
+                $custody = PickupCustody::describe(
+                    $shipment,
+                    (string) $item->status
+                );
+
+                if (! $custody['can_reject']) {
                     throw ValidationException::withMessages([
                         'shipment' => [
-                            'Only a picked-up shipment can be rejected at the branch.',
+                            sprintf(
+                                'Only a picked-up shipment can be rejected at the branch (%s).',
+                                $custody['label']
+                            ),
                         ],
                     ]);
                 }
@@ -1003,23 +1071,45 @@ final class PickupRequestService
     private function finalizePickupIfResolved(
         ?PickupRequest $pickup
     ): ?PickupRequest {
+        /*
+        | The branch can verify parcels as soon as the rider has collected them,
+        | even if the rider never pressed "start transit" in the app.
+        */
         if (
             ! $pickup
-            || $pickup->status !== PickupStatus::ON_WAY_TO_BRANCH
+            || ! in_array(
+                $pickup->status,
+                [
+                    PickupStatus::COLLECTED,
+                    PickupStatus::ON_WAY_TO_BRANCH,
+                ],
+                true
+            )
         ) {
             return null;
         }
 
         $pickupRequest = PickupRequest::query()
-            ->with('shipments')
+            ->with([
+                'shipments' => fn ($q) => $q->wherePivotNull('removed_at'),
+            ])
             ->find($pickup->id);
 
-        if (! $pickupRequest) {
+        if (! $pickupRequest || $pickupRequest->shipments->isEmpty()) {
             return null;
         }
 
         $unresolved = $pickupRequest->shipments
             ->filter(function (Shipment $s): bool {
+                // The pickup line itself was resolved (received / rejected).
+                if (
+                    PickupShipmentStatus::isResolved(
+                        (string) ($s->pivot?->status ?? '')
+                    )
+                ) {
+                    return false;
+                }
+
                 return ! in_array(
                     $s->status,
                     [
@@ -1156,6 +1246,329 @@ final class PickupRequestService
         }
 
         $item->save();
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | Pickup custody: real per-parcel state + repair
+    |--------------------------------------------------------------------------
+    |
+    | Parcels can leave the pickup flow without the branch ever pressing Receive
+    | (before the fix, Transfers outbound listed picked-up parcels and a TR could
+    | carry them). Then the pickup waits forever: shipments are not picked_up, so
+    | Receive fails, and the pickup never completes. reconcile() lines the pickup
+    | up with reality. Used by the admin "Fix pickup status" button and by
+    | `php artisan pickups:reconcile`.
+    |--------------------------------------------------------------------------
+    */
+
+    /**
+     * Put a `pickup_state` (PickupCustody::describe) on every shipment of the
+     * pickup so screens show where each parcel really is.
+     */
+    public function attachCustody(
+        PickupRequest $pickup
+    ): PickupRequest {
+        if (! $pickup->relationLoaded('shipments')) {
+            $pickup->load('shipments');
+        }
+
+        $pickup->shipments->each(
+            function (Shipment $s): void {
+                $s->setAttribute(
+                    'pickup_state',
+                    PickupCustody::describe(
+                        $s,
+                        (string) ($s->pivot?->status ?? '')
+                    )
+                );
+            }
+        );
+
+        return $pickup;
+    }
+
+    /**
+     * Preview (apply=false) or apply the custody repair for one pickup.
+     *
+     * Per unresolved pickup line:
+     *  - left_on_tr / moved_on / accepted : mark the line verified (parcel untouched)
+     *  - rejected/cancelled parcel        : mark the line rejected
+     *  - wrong_in_transit (no TR)         : status back to picked_up so the branch
+     *                                       can Receive it (or receive now when
+     *                                       $receiveCorrected is true)
+     *  - with_rider but loaded on an OPEN
+     *    (not dispatched) TR              : take it off that TR
+     * Then the pickup completes when every line is resolved.
+     *
+     * @return array<string,mixed>
+     */
+    public function reconcile(
+        PickupRequest $pickup,
+        ?int $actorId,
+        bool $apply = false,
+        bool $receiveCorrected = false,
+        string $source = 'admin'
+    ): array {
+        $run = function () use ($pickup, $actorId, $apply, $receiveCorrected): array {
+            $pickup = PickupRequest::query()
+                ->when($apply, fn ($q) => $q->lockForUpdate())
+                ->findOrFail($pickup->id);
+
+            $items = PickupRequestShipment::query()
+                ->where('pickup_request_id', $pickup->id)
+                ->whereNull('removed_at')
+                ->with('shipment')
+                ->orderBy('id')
+                ->get();
+
+            $rows = [];
+            $changes = 0;
+            $toReceive = [];
+
+            foreach ($items as $item) {
+                $shipment = $item->shipment;
+                if (! $shipment) {
+                    continue;
+                }
+                $custody = PickupCustody::describe($shipment, (string) $item->status);
+                $action = null;
+                $actionLabel = null;
+
+                $openTr = null;
+                if ($custody['state'] === 'with_rider' || $custody['state'] === 'wrong_in_transit') {
+                    $openTr = DB::table('dispatch_manifest_items as dmi')
+                        ->join('dispatch_manifests as dm', 'dm.id', '=', 'dmi.dispatch_manifest_id')
+                        ->where('dmi.shipment_id', $shipment->id)
+                        ->where('dm.status', 'open')
+                        ->where('dmi.status', 'added')
+                        ->first(['dmi.id as item_id', 'dm.id as manifest_id']);
+                }
+
+                if (! PickupShipmentStatus::isResolved((string) $item->status) && $custody['needs_sync']) {
+                    $action = $custody['state'] === 'rejected' ? 'mark_rejected' : 'mark_verified';
+                    $actionLabel = $action === 'mark_rejected'
+                        ? 'Close pickup line as rejected (parcel is '.str_replace('_', ' ', (string) $shipment->status).')'
+                        : 'Mark verified on pickup (parcel already '.($custody['tr'] ? 'left on '.$custody['tr']['number'] : str_replace('_', ' ', (string) $shipment->status)).'; parcel not changed)';
+                } elseif ($custody['state'] === 'wrong_in_transit') {
+                    $action = 'reset_status';
+                    $actionLabel = $receiveCorrected
+                        ? 'Status in transit -> picked up (no TR carried it), then receive at branch'
+                        : 'Status in transit -> picked up (no TR carried it); then press Receive';
+                } elseif ($openTr) {
+                    $action = 'remove_from_open_tr';
+                    $actionLabel = 'Take off open TR (not received at branch yet)';
+                }
+
+                $rows[] = [
+                    'shipment_id' => (int) $shipment->id,
+                    'tracking_number' => $shipment->tracking_number,
+                    'shipment_status' => (string) $shipment->status,
+                    'item_status' => (string) $item->status,
+                    'state' => $custody['state'],
+                    'label' => $custody['label'],
+                    'tr' => $custody['tr'],
+                    'action' => $action,
+                    'action_label' => $actionLabel,
+                ];
+
+                if (! $action) {
+                    continue;
+                }
+                $changes++;
+                if (! $apply) {
+                    continue;
+                }
+
+                if ($action === 'mark_verified' || $action === 'mark_rejected') {
+                    $this->syncResolvedItem($item, $shipment, $custody, (int) ($actorId ?? 0));
+                } elseif ($action === 'reset_status') {
+                    $this->resetWrongInTransit($shipment, $pickup, $actorId);
+                    if ($openTr) {
+                        $this->dropFromOpenTr((int) $openTr->item_id, (int) $openTr->manifest_id, $pickup);
+                    }
+                    if ($receiveCorrected) {
+                        $toReceive[] = (int) $shipment->id;
+                    }
+                } elseif ($action === 'remove_from_open_tr') {
+                    $this->dropFromOpenTr((int) $openTr->item_id, (int) $openTr->manifest_id, $pickup);
+                }
+            }
+
+            return [$pickup, $rows, $changes, $toReceive];
+        };
+
+        $before = PickupRequest::query()->findOrFail($pickup->id);
+        [$p, $rows, $changes, $toReceive] = $apply ? DB::transaction($run) : $run();
+
+        $received = [];
+        $errors = [];
+        if ($apply) {
+            foreach ($toReceive as $shipmentId) {
+                try {
+                    $actor = $actorId ? User::query()->find($actorId) : null;
+                    if (! $actor) {
+                        throw new \RuntimeException('Receive needs a user.');
+                    }
+                    $this->receiveShipment($p, Shipment::query()->findOrFail($shipmentId), $actor);
+                    $received[] = $shipmentId;
+                } catch (\Throwable $e) {
+                    $errors[] = ['shipment_id' => $shipmentId, 'error' => $e instanceof ValidationException ? collect($e->errors())->flatten()->first() : $e->getMessage()];
+                }
+            }
+            $this->finalizePickupIfResolved(PickupRequest::query()->find($p->id));
+        }
+
+        $after = PickupRequest::query()->findOrFail($pickup->id);
+
+        $report = [
+            'pickup_id' => (int) $after->id,
+            'request_number' => $after->request_number,
+            'applied' => $apply,
+            'status_before' => (string) $before->status,
+            'status_after' => (string) $after->status,
+            'changes' => $changes,
+            'received' => $received,
+            'errors' => $errors,
+            'items' => $rows,
+        ];
+
+        if ($apply && $changes > 0) {
+            $this->auditReconcile($after, $actorId, $report, $source);
+        }
+
+        return $report;
+    }
+
+    /**
+     * Close a pickup line whose parcel is already past the branch (or dead)
+     * without changing the parcel itself.
+     */
+    private function syncResolvedItem(
+        PickupRequestShipment $item,
+        Shipment $shipment,
+        array $custody,
+        int $staffId
+    ): void {
+        $where = $custody['tr']
+            ? sprintf('already left on %s', $custody['tr']['number'])
+            : sprintf('already %s', str_replace('_', ' ', (string) $shipment->status));
+
+        if ($custody['state'] === 'rejected') {
+            $this->markPivotRejected(
+                $item,
+                $staffId,
+                'Closed on pickup: parcel is '.str_replace('_', ' ', (string) $shipment->status).'.',
+                'other'
+            );
+
+            return;
+        }
+
+        $this->markPivotReceived($item, $staffId);
+
+        $note = sprintf('Pickup verification closed: parcel was %s before the branch verified it.', $where);
+        $item->remarks = trim(((string) $item->remarks).' '.$note);
+        $item->save();
+
+        $this->createShipmentTrackingEvent(
+            shipment: $shipment,
+            oldStatus: (string) $shipment->status,
+            newStatus: (string) $shipment->status,
+            description: $note,
+            createdBy: $staffId ?: null
+        );
+    }
+
+    /**
+     * The parcel says "in transit" but no dispatched TR carried it: put it
+     * back to picked_up (it is still part of the pickup, at / on the way to
+     * the origin branch) so the branch can receive it normally.
+     */
+    private function resetWrongInTransit(
+        Shipment $shipment,
+        PickupRequest $pickup,
+        ?int $actorId
+    ): void {
+        if ($this->shipmentHasColumn('transfer_status')) {
+            $shipment->transfer_status = null;
+        }
+        if ($this->shipmentHasColumn('dispatched_at')) {
+            $shipment->dispatched_at = null;
+        }
+
+        $this->changeShipmentStatus(
+            shipment: $shipment,
+            status: CourierStatus::PICKED_UP,
+            userId: $actorId,
+            note: sprintf(
+                'Status corrected: was marked in transit without any TR. Still on pickup %s, waiting for origin branch receive.',
+                $pickup->request_number ?? ('#'.$pickup->id)
+            )
+        );
+    }
+
+    private function dropFromOpenTr(
+        int $itemId,
+        int $manifestId,
+        PickupRequest $pickup
+    ): void {
+        DB::table('dispatch_manifest_items')
+            ->where('id', $itemId)
+            ->where('status', 'added')
+            ->update(array_intersect_key([
+                'status' => 'cancelled',
+                'discrepancy_note' => sprintf(
+                    'Removed: parcel not yet received at branch (pickup %s).',
+                    $pickup->request_number ?? ('#'.$pickup->id)
+                ),
+                'updated_at' => now(),
+            ], array_flip(DB::getSchemaBuilder()->getColumnListing('dispatch_manifest_items'))));
+
+        try {
+            app(\Modules\Dispatch\Services\ManifestHopService::class)->refreshCounts($manifestId);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('pickup.reconcile.refresh_counts_failed', ['manifest_id' => $manifestId, 'error' => $e->getMessage()]);
+        }
+    }
+
+    private function auditReconcile(
+        PickupRequest $pickup,
+        ?int $actorId,
+        array $report,
+        string $source
+    ): void {
+        \Illuminate\Support\Facades\Log::info('pickup.reconcile', ['pickup' => $pickup->request_number, 'actor_id' => $actorId, 'source' => $source, 'changes' => $report['changes']]);
+
+        try {
+            $schema = DB::getSchemaBuilder();
+            if (! $schema->hasTable('audit_logs')) {
+                return;
+            }
+            DB::table('audit_logs')->insert(array_intersect_key([
+                'user_id' => $actorId,
+                'action' => 'pickups.reconcile',
+                'auditable_type' => PickupRequest::class,
+                'auditable_id' => $pickup->id,
+                'old_values' => json_encode(['status' => $report['status_before']]),
+                'new_values' => json_encode([
+                    'status' => $report['status_after'],
+                    'source' => $source,
+                    'items' => collect($report['items'])->whereNotNull('action')->map(fn ($r) => [
+                        'tracking_number' => $r['tracking_number'],
+                        'action' => $r['action'],
+                        'was' => $r['shipment_status'],
+                    ])->values(),
+                    'received' => $report['received'],
+                    'errors' => $report['errors'],
+                ]),
+                'ip_address' => app()->runningInConsole() ? 'console' : request()?->ip(),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ], array_flip($schema->getColumnListing('audit_logs'))));
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('pickup.reconcile.audit_failed', ['pickup' => $pickup->id, 'error' => $e->getMessage()]);
+        }
     }
 
     private function markPivotRejected(

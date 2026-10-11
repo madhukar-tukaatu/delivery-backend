@@ -292,6 +292,14 @@ class MerchantDeliveryBillingService
 
                     }
 
+                    // Freeze the marketplace that owes this bill, so a later store
+                    // move (e.g. Tukaatu -> FCA) does not move the bill.
+                    if (Schema::hasColumn('invoices', 'marketplace_id')) {
+
+                        $payload['marketplace_id'] = Marketplace::resolveForShipment($shipment, $shipment->merchant)?->id;
+
+                    }
+
 
 
                     $companyInvoice = Invoice::create($payload);
@@ -482,7 +490,7 @@ class MerchantDeliveryBillingService
 
      */
 
-    public function companyBillingEmail(?Shipment $shipment): ?string
+    public function companyBillingEmail(?Shipment $shipment, ?int $marketplaceId = null): ?string
 
     {
 
@@ -494,7 +502,11 @@ class MerchantDeliveryBillingService
 
 
 
-        $marketplace = Marketplace::resolveForShipment($shipment, $shipment?->merchant);
+        $marketplace = $marketplaceId
+
+            ? Marketplace::query()->find($marketplaceId)
+
+            : Marketplace::resolveForShipment($shipment, $shipment?->merchant);
 
         $email = trim((string) ($marketplace?->email ?? ''));
 
@@ -542,7 +554,7 @@ class MerchantDeliveryBillingService
 
         if ($payer === 'company') {
 
-            return $this->companyBillingEmail($shipment);
+            return $this->companyBillingEmail($shipment, $invoice->marketplace_id ? (int) $invoice->marketplace_id : null);
 
         }
 
@@ -580,7 +592,7 @@ class MerchantDeliveryBillingService
 
     {
 
-        return strtolower(trim((string) $invoice->status)) === 'unpaid';
+        return in_array(strtolower(trim((string) $invoice->status)), ['unpaid', 'partially_paid'], true);
 
     }
 
@@ -672,7 +684,7 @@ class MerchantDeliveryBillingService
 
         if ($payer === 'company') {
 
-            $email = $this->companyBillingEmail($shipment);
+            $email = $this->companyBillingEmail($shipment, $invoice->marketplace_id ? (int) $invoice->marketplace_id : null);
 
             if (! $email) {
 
@@ -700,7 +712,7 @@ class MerchantDeliveryBillingService
 
 
 
-            $marketplace = Marketplace::resolveForShipment($shipment, $shipment->merchant);
+            $marketplace = $this->invoiceMarketplace($invoice, $shipment);
 
             $who = $marketplace?->name ?: 'marketplace';
 
@@ -808,7 +820,13 @@ class MerchantDeliveryBillingService
 
         $payer = strtolower((string) ($invoice->payer_type ?? 'merchant'));
 
-        $who = $payer === 'company' ? 'marketplace (tukaatu.com)' : 'branch';
+        $mpName = $payer === 'company' ? ($this->invoiceMarketplace($invoice, $shipment)?->name ?: null) : null;
+
+        $who = $payer === 'company'
+
+            ? 'Tukaatu Express (free delivery offered by '.($mpName ?: 'the marketplace').')'
+
+            : 'branch';
 
 
 
@@ -830,6 +848,20 @@ class MerchantDeliveryBillingService
 
 
 
+    /** Marketplace that owes a company invoice: frozen invoices.marketplace_id first. */
+    public function invoiceMarketplace(Invoice $invoice, ?Shipment $shipment = null): ?Marketplace
+    {
+        if ($invoice->marketplace_id) {
+            $row = Marketplace::query()->find($invoice->marketplace_id);
+            if ($row) {
+                return $row;
+            }
+        }
+        $shipment ??= $invoice->shipment;
+
+        return $shipment ? Marketplace::resolveForShipment($shipment, $shipment->merchant) : null;
+    }
+
     /**
 
      * Build digest email body for multiple invoice models.
@@ -840,7 +872,7 @@ class MerchantDeliveryBillingService
 
      */
 
-    public function buildDigestEmailBody(iterable $invoices, string $audience = 'merchant'): string
+    public function buildDigestEmailBody(iterable $invoices, string $audience = 'merchant', ?string $marketplaceName = null): string
 
     {
 
@@ -850,7 +882,7 @@ class MerchantDeliveryBillingService
 
         $lines = $audience === 'company'
 
-            ? ["Tukaatu marketplace,\n\nHere is the marketplace free-delivery summary:\n"]
+            ? [($marketplaceName ?: 'Marketplace')." billing team,\n\nHere is the summary of delivery charges for free delivery offered by ".($marketplaceName ?: 'your marketplace').":\n"]
 
             : ["Dear Merchant,\n\nHere is your delivery charges summary:\n"];
 
@@ -935,7 +967,7 @@ class MerchantDeliveryBillingService
 
             ->where('type', 'delivery_charges')
 
-            ->where('status', 'unpaid')
+            ->whereIn('status', ['unpaid', 'partially_paid'])
 
             ->orderBy('invoice_date', 'desc');
 
@@ -992,7 +1024,7 @@ class MerchantDeliveryBillingService
 
             ->where('type', 'delivery_charges')
 
-            ->where('status', 'unpaid')
+            ->whereIn('status', ['unpaid', 'partially_paid'])
 
             ->orderBy('invoice_date', 'desc');
 
@@ -1001,6 +1033,11 @@ class MerchantDeliveryBillingService
         if (Schema::hasColumn('invoices', 'payer_type')) {
 
             $query->where('payer_type', 'company');
+
+            // Invoices already on a branch marketplace bill are billed there.
+            if (Schema::hasColumn('invoices', 'marketplace_bill_id')) {
+                $query->whereNull('marketplace_bill_id');
+            }
 
         } else {
 

@@ -6,6 +6,9 @@ use Modules\Billing\Http\Controllers\BranchShareController;
 use Modules\Billing\Http\Controllers\InterBranchStatementController;
 use Modules\Billing\Http\Controllers\HamroPayMerchantController;
 use Modules\Billing\Http\Controllers\InvoiceController;
+use Modules\Billing\Http\Controllers\MarketplaceBillController;
+use Modules\Billing\Http\Controllers\MarketplaceBillingApiController;
+use Modules\Billing\Http\Controllers\MerchantBillingController;
 use Modules\Billing\Http\Controllers\PaymentGatewayAccountController;
 
 Route::prefix('v1/admin')
@@ -38,6 +41,73 @@ Route::prefix('v1/admin')
                 ->name('invoices.send-digest');
             Route::get('invoices/summary', [InvoiceController::class, 'summary'])
                 ->name('invoices.summary');
+            // Store bill payments: notices waiting for branch verification, reverse, verify / reject.
+            Route::get('invoices/payment-notices', [InvoiceController::class, 'notices'])
+                ->name('invoices.notices.index');
+            Route::post('invoices/{invoice}/payments/{payment}/reverse', [InvoiceController::class, 'reversePayment'])
+                ->whereNumber('invoice')
+                ->whereNumber('payment')
+                ->name('invoices.reverse-payment');
+            Route::post('invoices/{invoice}/notices/{notice}/verify', [InvoiceController::class, 'verifyNotice'])
+                ->whereNumber('invoice')
+                ->whereNumber('notice')
+                ->name('invoices.notice-verify.mark-paid');
+            Route::post('invoices/{invoice}/notices/{notice}/reject', [InvoiceController::class, 'rejectNotice'])
+                ->whereNumber('invoice')
+                ->whereNumber('notice')
+                ->name('invoices.notice-reject.mark-paid');
+            Route::get('invoices/{invoice}', [InvoiceController::class, 'show'])
+                ->whereNumber('invoice')
+                ->name('invoices.show');
+            Route::post('invoices/{invoice}/confirm-hamropay', [InvoiceController::class, 'confirmHamroPay'])
+                ->name('invoices.confirm-hamropay');
+
+            // Marketplace free-delivery bills: each branch sends (pushes) its own
+            // bills to each marketplace. The marketplace sends payment notices; the
+            // billing branch verifies them (only that records the payment).
+            Route::get('marketplace-bills', [MarketplaceBillController::class, 'index'])
+                ->name('marketplace-bills.index')
+                ->adminMenu('Marketplace bills', '/admin/marketplace-bills', 'invoices', 44, 'Finance');
+            Route::get('marketplace-bills/ready', [MarketplaceBillController::class, 'ready'])
+                ->name('marketplace-bills.ready.list');
+            Route::post('marketplace-bills', [MarketplaceBillController::class, 'store'])
+                ->name('marketplace-bills.store');
+            Route::get('marketplace-bills/{bill}', [MarketplaceBillController::class, 'show'])
+                ->whereNumber('bill')
+                ->name('marketplace-bills.show');
+            Route::post('marketplace-bills/{bill}/send', [MarketplaceBillController::class, 'send'])
+                ->whereNumber('bill')
+                ->name('marketplace-bills.send');
+            Route::post('marketplace-bills/{bill}/resend', [MarketplaceBillController::class, 'send'])
+                ->whereNumber('bill')
+                ->name('marketplace-bills.resend.send');
+            Route::post('marketplace-bills/{bill}/mark-paid', [MarketplaceBillController::class, 'markPaid'])
+                ->whereNumber('bill')
+                ->name('marketplace-bills.mark-paid');
+            Route::post('marketplace-bills/{bill}/payments/{payment}/reverse', [MarketplaceBillController::class, 'reversePayment'])
+                ->whereNumber('bill')
+                ->whereNumber('payment')
+                ->name('marketplace-bills.reverse-payment');
+            Route::post('marketplace-bills/{bill}/report-not-received', [MarketplaceBillController::class, 'reportNotReceived'])
+                ->whereNumber('bill')
+                ->name('marketplace-bills.report-not-received');
+            Route::post('marketplace-bills/{bill}/cancel', [MarketplaceBillController::class, 'cancel'])
+                ->whereNumber('bill')
+                ->name('marketplace-bills.cancel-bill');
+            Route::post('marketplace-bills/{bill}/confirm-hamropay', [MarketplaceBillController::class, 'confirmHamroPay'])
+                ->whereNumber('bill')
+                ->name('marketplace-bills.confirm-hamropay');
+            Route::post('marketplace-bills/{bill}/push', [MarketplaceBillController::class, 'push'])
+                ->whereNumber('bill')
+                ->name('marketplace-bills.push.send');
+            Route::post('marketplace-bills/{bill}/notices/{notice}/verify', [MarketplaceBillController::class, 'verifyNotice'])
+                ->whereNumber('bill')
+                ->whereNumber('notice')
+                ->name('marketplace-bills.notice-verify.mark-paid');
+            Route::post('marketplace-bills/{bill}/notices/{notice}/reject', [MarketplaceBillController::class, 'rejectNotice'])
+                ->whereNumber('bill')
+                ->whereNumber('notice')
+                ->name('marketplace-bills.notice-reject.mark-paid');
 
             // Merchant HamroPay KYB
             Route::get('merchants/{merchant}/hamropay', [HamroPayMerchantController::class, 'status'])
@@ -125,6 +195,8 @@ Route::prefix('v1/merchant')
                 ->name('invoices.index');
             Route::post('invoices/{invoice}/pay-hamropay', [InvoiceController::class, 'payHamroPay'])
                 ->name('invoices.pay-hamropay');
+            Route::post('invoices/{invoice}/confirm-hamropay', [InvoiceController::class, 'confirmHamroPay'])
+                ->name('invoices.confirm-hamropay');
             Route::post('invoices/{invoice}/mark-paid', [InvoiceController::class, 'markPaid'])
                 ->name('invoices.mark-paid');
             // Manual email trigger for merchant
@@ -133,4 +205,46 @@ Route::prefix('v1/merchant')
             Route::get('invoices/summary', [InvoiceController::class, 'summary'])
                 ->name('invoices.summary');
         });
+
+        // Merchant portal "Billing": what the store owes each branch, payment
+        // notices (verified by the branch) and HamroPay (auto-confirmed).
+        Route::prefix('billing')
+            ->name('billing.')
+            ->middleware(['permission:merchant.invoices'])
+            ->group(function () {
+                Route::get('summary', [MerchantBillingController::class, 'summary'])->name('summary');
+                Route::get('invoices', [MerchantBillingController::class, 'invoices'])->name('invoices');
+                Route::get('invoices/lookup', [MerchantBillingController::class, 'lookup'])->name('invoices.lookup');
+                Route::get('invoices/{invoice}', [MerchantBillingController::class, 'show'])->whereNumber('invoice')->name('invoices.show');
+                Route::post('invoices/{invoice}/payment-notice', [MerchantBillingController::class, 'notice'])->whereNumber('invoice')->name('invoices.notice');
+                Route::get('notices', [MerchantBillingController::class, 'notices'])->name('notices');
+                Route::get('pay-all/preview', [MerchantBillingController::class, 'payAllPreview'])->name('pay-all.preview');
+                Route::post('pay-all', [MerchantBillingController::class, 'payAll'])->name('pay-all');
+                Route::post('hamropay', [MerchantBillingController::class, 'hamroPay'])->name('hamropay');
+                Route::post('hamropay/confirm', [MerchantBillingController::class, 'confirmHamroPay'])->name('hamropay.confirm');
+            });
+    });
+
+/*
+|--------------------------------------------------------------------------
+| Marketplace billing API (Tukaatu.com, FCA, any marketplace)
+|--------------------------------------------------------------------------
+| Signed with the marketplace API key (see MARKETPLACE_BILLING_API.md).
+| Key scopes must include "billing" or "*" (keys without scopes may call all APIs).
+*/
+Route::prefix('v1/marketplace/billing')
+    ->name('marketplace.billing.')
+    ->middleware(['marketplace.api-key:billing', 'throttle:120,1'])
+    ->group(function (): void {
+        Route::get('summary', [MarketplaceBillingApiController::class, 'summary'])->name('summary');
+        Route::get('bills', [MarketplaceBillingApiController::class, 'index'])->name('bills.index');
+        Route::get('bills/{billNumber}', [MarketplaceBillingApiController::class, 'show'])->name('bills.show');
+        Route::get('bills/{billNumber}/payable', [MarketplaceBillingApiController::class, 'payable'])->name('bills.payable');
+        // Payment notice: pending until the billing branch verifies it (never marks paid by itself).
+        Route::post('bills/{billNumber}/payment-notice', [MarketplaceBillingApiController::class, 'paymentNotice'])->name('bills.payment-notice');
+        Route::get('bills/{billNumber}/payment-notices', [MarketplaceBillingApiController::class, 'notices'])->name('bills.payment-notices');
+        // Legacy alias of payment-notice (202, creates a notice; no longer records a payment).
+        Route::post('bills/{billNumber}/pay', [MarketplaceBillingApiController::class, 'pay'])->name('bills.pay');
+        Route::post('bills/{billNumber}/hamropay', [MarketplaceBillingApiController::class, 'hamroPay'])->name('bills.hamropay');
+        Route::post('bills/{billNumber}/hamropay/confirm', [MarketplaceBillingApiController::class, 'confirmHamroPay'])->name('bills.hamropay.confirm');
     });

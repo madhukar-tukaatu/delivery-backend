@@ -775,4 +775,93 @@ final class TransferContainerTest extends TestCase
             $this->assertSame(CourierStatus::SORTED_FOR_TRANSFER, $s->fresh()->status);
         }
     }
+
+    /* ---------------- admin repair of a wrong check-in ---------------- */
+
+    /** TR received with 1 of 2 parcels missing and a (wrong) tampered seal flag. */
+    private function wronglyReceivedTr(): array
+    {
+        [$lm] = $this->mixedBatch(2, 0);
+        $tr = $this->dispatchFromKtm($lm, ['seal_number' => 'S-REP']);
+        $this->svc->receive($tr, [$lm[0]->id], null, $this->actor, self::HOP, ['intact' => false, 'remark' => 'filler']);
+        $tr = $tr->fresh();
+        $this->assertSame('partially_received', $tr->status);
+        $this->assertSame('tampered', $tr->seal_status);
+
+        return [$tr, $lm];
+    }
+
+    private function repairUrl(DispatchManifest $tr): string
+    {
+        return '/api/v1/admin/transfers/containers/'.$tr->id.'/repair';
+    }
+
+    public function test_repair_dry_run_previews_and_changes_nothing(): void
+    {
+        $this->actingAs(User::query()->findOrFail($this->actor), 'sanctum');
+        [$tr, $lm] = $this->wronglyReceivedTr();
+        $audits = DB::table('audit_logs')->where('action', 'transfers.repair_receive')->count();
+
+        $res = $this->postJson($this->repairUrl($tr), ['clear_seal' => true, 'found_all' => true, 'dry_run' => true]);
+        $res->assertOk()->assertJsonPath('data.dry_run', true)->assertJsonPath('data.applied', false);
+        $labels = collect($res->json('data.changes'))->where('action', true)->pluck('label')->implode(' ');
+        $this->assertStringContainsString('Clear seal result', $labels);
+        $this->assertStringContainsString($lm[1]->tracking_number, $labels);
+
+        $tr = $tr->fresh();
+        $this->assertSame('partially_received', $tr->status);
+        $this->assertSame('tampered', $tr->seal_status);
+        $this->assertSame(CourierStatus::IN_TRANSIT, $lm[1]->fresh()->status);
+        $this->assertSame($audits, DB::table('audit_logs')->where('action', 'transfers.repair_receive')->count());
+    }
+
+    public function test_repair_apply_clears_seal_and_receives_and_sorts_missing(): void
+    {
+        $this->actingAs(User::query()->findOrFail($this->actor), 'sanctum');
+        [$tr, $lm] = $this->wronglyReceivedTr();
+
+        $res = $this->postJson($this->repairUrl($tr), ['clear_seal' => true, 'found_all' => true, 'dry_run' => false]);
+        $res->assertOk()->assertJsonPath('data.applied', true)->assertJsonPath('data.errors', []);
+        $this->assertSame('received', $res->json('data.container.status'));
+
+        $tr = $tr->fresh();
+        $this->assertSame('received', $tr->status);
+        $this->assertNull($tr->seal_status);
+        $this->assertNull($tr->seal_remark);
+        $this->assertNull($tr->seal_checked_by);
+        $this->assertSame('received', DispatchManifestItem::query()->where('dispatch_manifest_id', $tr->id)->where('shipment_id', $lm[1]->id)->value('status'));
+        $this->assertSame(CourierStatus::SORTED_FOR_DELIVERY, $lm[1]->fresh()->status);
+        $this->assertTrue(DB::table('audit_logs')->where('action', 'transfers.repair_receive')->where('auditable_id', $tr->id)->where('user_id', $this->actor)->exists());
+
+        // Nothing left: a second apply is a no-op.
+        $this->postJson($this->repairUrl($tr), ['found_all' => true, 'dry_run' => false])->assertOk()->assertJsonPath('data.applied', false);
+    }
+
+    public function test_repair_denied_for_branch_staff(): void
+    {
+        $staff = User::query()->whereIn('role', ['branch_manager', 'branch_staff'])->orderBy('id')->first();
+        if (! $staff) {
+            $this->markTestSkipped('No branch staff user in fixtures');
+        }
+        [$tr] = $this->wronglyReceivedTr();
+        $this->actingAs($staff, 'sanctum');
+        $this->postJson($this->repairUrl($tr), ['clear_seal' => true, 'dry_run' => true])->assertStatus(403);
+        $this->assertSame('tampered', $tr->fresh()->seal_status);
+    }
+
+    public function test_repair_artisan_command_uses_same_logic(): void
+    {
+        [$tr, $lm] = $this->wronglyReceivedTr();
+        // Artisan::call (no Mockery in this project).
+        $code = \Illuminate\Support\Facades\Artisan::call('transfers:repair-receive', ['number' => strtolower((string) $tr->transfer_number), '--clear-seal' => true, '--found-all' => true]);
+        $this->assertSame(0, $code);
+        $this->assertStringContainsString('Preview only', \Illuminate\Support\Facades\Artisan::output());
+        $this->assertSame('tampered', $tr->fresh()->seal_status, 'preview only without --apply');
+
+        $code = \Illuminate\Support\Facades\Artisan::call('transfers:repair-receive', ['number' => (string) $tr->id, '--id' => true, '--clear-seal' => true, '--found-all' => true, '--apply' => true]);
+        $this->assertSame(0, $code, \Illuminate\Support\Facades\Artisan::output());
+        $this->assertNull($tr->fresh()->seal_status);
+        $this->assertSame(CourierStatus::SORTED_FOR_DELIVERY, $lm[1]->fresh()->status);
+        $this->assertSame(1, \Illuminate\Support\Facades\Artisan::call('transfers:repair-receive', ['number' => 'TR-NOPE-X', '--found-all' => true]));
+    }
 }

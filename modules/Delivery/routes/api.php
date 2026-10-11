@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use Modules\Delivery\Http\Controllers\DeliveryController;
+use Modules\Delivery\Http\Controllers\DeliveryRunController;
 use Modules\Delivery\Http\Controllers\StaffDeliveryController;
 
 /*
@@ -26,6 +27,77 @@ Route::prefix('v1/admin')
     ->name('admin.')
     ->middleware(['auth:sanctum', 'branch.scope'])
     ->group(function () {
+
+        /*
+        | DR delivery runs (last-mile containers), shown inside the Deliveries
+        | page (/admin/deliveries), so no separate menu item. Route names end in an action
+        | that maps to an existing permission:
+        |   runs.index / stats / ready.index / riders.index / show -> deliveries.view
+        |   runs.*.assign (create, add/remove, rider, sequence, dispatch, close, cancel) -> deliveries.assign
+        */
+        Route::get('deliveries/runs', [DeliveryRunController::class, 'index'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.index');
+
+        Route::get('deliveries/runs/stats', [DeliveryRunController::class, 'stats'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.stats');
+
+        Route::get('deliveries/runs/ready', [DeliveryRunController::class, 'ready'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.ready.index');
+
+        Route::get('deliveries/runs/riders', [DeliveryRunController::class, 'riders'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.riders.index');
+
+        Route::get('deliveries/runs/lookup', [DeliveryRunController::class, 'lookup'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.lookup.show');
+
+        Route::get('deliveries/runs/{run}', [DeliveryRunController::class, 'show'])
+            ->whereNumber('run')
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.show');
+
+        Route::post('deliveries/runs', [DeliveryRunController::class, 'store'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.store.assign');
+
+        Route::post('deliveries/runs/{run}/items', [DeliveryRunController::class, 'addItems'])
+            ->whereNumber('run')
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.items.add.assign');
+
+        Route::post('deliveries/runs/{run}/items/remove', [DeliveryRunController::class, 'removeItems'])
+            ->whereNumber('run')
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.items.remove.assign');
+
+        Route::post('deliveries/runs/{run}/rider', [DeliveryRunController::class, 'assignRider'])
+            ->whereNumber('run')
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.rider.assign');
+
+        Route::post('deliveries/runs/{run}/sequence', [DeliveryRunController::class, 'sequence'])
+            ->whereNumber('run')
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.sequence.assign');
+
+        Route::post('deliveries/runs/{run}/dispatch', [DeliveryRunController::class, 'dispatch'])
+            ->whereNumber('run')
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.dispatch.assign');
+
+        Route::post('deliveries/runs/{run}/close', [DeliveryRunController::class, 'close'])
+            ->whereNumber('run')
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.close.assign');
+
+        Route::post('deliveries/runs/{run}/cancel', [DeliveryRunController::class, 'cancel'])
+            ->whereNumber('run')
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.cancel.assign');
 
         Route::get('deliveries', [DeliveryController::class, 'index'])
             ->middleware(['route.permission'])
@@ -62,6 +134,21 @@ Route::prefix('v1/staff')
     ->name('staff.')
     ->middleware(['auth:sanctum', 'branch.scope'])
     ->group(function () {
+
+        // DR runs assigned to the rider (deliveries.view / deliveries.status).
+        Route::get('deliveries/runs', [DeliveryRunController::class, 'staffIndex'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.index');
+
+        Route::get('deliveries/runs/{run}', [DeliveryRunController::class, 'staffShow'])
+            ->whereNumber('run')
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.show');
+
+        Route::post('deliveries/runs/{run}/start', [DeliveryRunController::class, 'staffStart'])
+            ->whereNumber('run')
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.start.status');
 
         Route::get('deliveries', [StaffDeliveryController::class, 'index'])
             ->middleware(['route.permission'])

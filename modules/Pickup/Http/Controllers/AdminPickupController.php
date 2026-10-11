@@ -270,9 +270,69 @@ final class AdminPickupController extends Controller
             'shipments',
         ]);
 
+        $this->pickupRequestService->attachCustody($pickup);
+
         return ApiResponse::success(
             $pickup,
             'Pickup request retrieved successfully.'
+        );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | RECONCILE (Fix pickup status)
+    |--------------------------------------------------------------------------
+    |
+    | POST /api/v1/admin/pickups/{pickup}/reconcile
+    | { apply: bool, receive_corrected: bool }
+    |
+    | apply=false (default) only previews. Lines the pickup up with where its
+    | parcels really are: closes lines whose parcel already left on a TR,
+    | puts wrongly "in transit" parcels back to picked up, then completes the
+    | pickup when every line is resolved. Audited.
+    |--------------------------------------------------------------------------
+    */
+
+    public function reconcile(
+        Request $request,
+        PickupRequest $pickup
+    ): JsonResponse {
+        $this->authorizePickup(
+            $request,
+            $pickup
+        );
+
+        $data = $request->validate([
+            'apply' => ['nullable', 'boolean'],
+            'receive_corrected' => ['nullable', 'boolean'],
+        ]);
+
+        $report = $this->pickupRequestService->reconcile(
+            pickup: $pickup,
+            actorId: (int) $request->user()->id,
+            apply: (bool) ($data['apply'] ?? false),
+            receiveCorrected: (bool) ($data['receive_corrected'] ?? false),
+        );
+
+        $fresh = PickupRequest::query()->findOrFail($pickup->id);
+        $fresh->load([
+            'merchant',
+            'pickupLocation',
+            'assignedStaff',
+            'assignedBy',
+            'pickedUpBy',
+            'pickupBranch',
+            'pickupSubBranch',
+            'shipments',
+        ]);
+        $this->pickupRequestService->attachCustody($fresh);
+        $report['pickup'] = $fresh;
+
+        return ApiResponse::success(
+            $report,
+            $report['applied']
+                ? ($report['changes'] > 0 ? 'Pickup status fixed.' : 'Nothing to fix.')
+                : 'Preview only. Nothing changed yet.'
         );
     }
 
@@ -690,6 +750,9 @@ final class AdminPickupController extends Controller
             'shipments',
         ]);
 
+        $pickup->refresh()->load('shipments');
+        $this->pickupRequestService->attachCustody($pickup);
+
         return ApiResponse::success(
             [
                 'pickup' => $pickup,
@@ -764,6 +827,9 @@ final class AdminPickupController extends Controller
             'pickedUpBy',
             'shipments',
         ]);
+
+        $pickup->refresh()->load('shipments');
+        $this->pickupRequestService->attachCustody($pickup);
 
         return ApiResponse::success(
             [

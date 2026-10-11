@@ -189,6 +189,19 @@ Route::prefix('v1/admin')
             ])
             ->name('pickups.shipments.reject');
 
+        // Fix pickup status: preview / apply (see AdminPickupController::reconcile).
+        Route::post(
+            'pickups/{pickup}/reconcile',
+            [
+                AdminPickupController::class,
+                'reconcile',
+            ]
+        )
+            ->middleware([
+                'route.permission:pickups.receive',
+            ])
+            ->name('pickups.reconcile');
+
         Route::post(
             'pickups/{pickup}/resend-callback',
             [

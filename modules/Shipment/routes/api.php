@@ -115,6 +115,10 @@ Route::prefix('v1/admin')
             Route::post('transfers/containers/{container}/items/{item}/resolve', [TransferController::class, 'containerResolveItem'])
                 ->whereNumber(['container', 'item'])
                 ->name('transfers.containers.items.resolve.receive');
+            // Admin repair of a wrongly checked-in TR (maps to transfers.repair).
+            Route::post('transfers/containers/{container}/repair', [TransferController::class, 'containerRepair'])
+                ->whereNumber('container')
+                ->name('transfers.containers.repair');
             Route::post('transfers/containers/{container}/dispatch', [TransferController::class, 'containerDispatch'])
                 ->whereNumber('container')
                 ->name('transfers.containers.dispatch');

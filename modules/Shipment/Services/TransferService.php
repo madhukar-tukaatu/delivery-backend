@@ -101,6 +101,11 @@ final class TransferService
             return false;
         }
 
+        // Still with the pickup rider: the branch has not received it yet.
+        if (\Modules\Pickup\Support\PickupCustody::isAwaitingBranchReceive($shipment)) {
+            return false;
+        }
+
         // Must not already be sitting at the final destination.
         if ($shipment->current_branch_id !== null
             && (int) $shipment->current_branch_id === (int) $shipment->destination_branch_id) {

@@ -16,6 +16,9 @@ class Invoice extends Model
         'invoice_date' => 'date',
         'sent_at' => 'datetime',
         'manual_checked_at' => 'datetime',
+        'paid_at' => 'datetime',
+        'reopened_at' => 'datetime',
+        'hamropay_sessions' => 'array',
     ];
 
     public function items(): HasMany
@@ -31,5 +34,28 @@ class Invoice extends Model
     public function merchant(): BelongsTo
     {
         return $this->belongsTo(Merchant::class);
+    }
+
+    /** Frozen at creation for company (marketplace free-delivery) invoices. */
+    public function marketplace(): BelongsTo
+    {
+        return $this->belongsTo(\Modules\Setting\Models\Marketplace::class);
+    }
+
+    /** The branch bill this company invoice was sent on, if any. */
+    public function marketplaceBill(): BelongsTo
+    {
+        return $this->belongsTo(MarketplaceBill::class, 'marketplace_bill_id');
+    }
+
+    /** Store bill payment ledger (partial payments, reversals). */
+    public function payments(): HasMany
+    {
+        return $this->hasMany(MerchantInvoicePayment::class);
+    }
+
+    public function branch(): BelongsTo
+    {
+        return $this->belongsTo(\Modules\Branch\Models\Branch::class);
     }
 }

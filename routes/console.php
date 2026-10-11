@@ -47,6 +47,14 @@ Artisan::command('billing:reconcile-delivery-charges {--dry-run : Report only} {
             continue;
         }
 
+        // A marketplace bill was already issued with this amount; changing the
+        // line would make the bill total wrong. Cancel the bill first.
+        if (! empty($invoice->marketplace_bill_id)) {
+            $this->warn("Invoice {$invoice->invoice_number}: on marketplace bill #{$invoice->marketplace_bill_id}, skip");
+            $skipped++;
+            continue;
+        }
+
         $priced = $resolver->resolveFromShipment($shipment);
         $fullFare = round((float) $priced['delivery_charge'], 2);
         $payerType = strtolower((string) ($invoice->payer_type ?? 'merchant'));
@@ -76,7 +84,7 @@ Artisan::command('billing:reconcile-delivery-charges {--dry-run : Report only} {
             '%s shipment=%s payer=%s source=%s shipment_charge %.2f -> %.2f | bill %.2f -> %.2f',
             $invoice->invoice_number,
             $shipment->tracking_number,
-            $payer,
+            $payerType,
             $priced['source'] ?? '?',
             $oldShipmentCharge,
             $fullFare,

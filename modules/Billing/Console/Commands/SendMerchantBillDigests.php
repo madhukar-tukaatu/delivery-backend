@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Mail;
 use Modules\Billing\Jobs\SendMerchantBillDigest;
 use Modules\Billing\Services\MerchantDeliveryBillingService;
 use Modules\Merchant\Models\Merchant;
+use Modules\Setting\Models\Marketplace;
 use Modules\Notification\Models\EmailLog;
 use Throwable;
 
@@ -48,7 +49,9 @@ class SendMerchantBillDigests extends Command
     }
 
     /**
-     * One summary of company (marketplace coupon) invoices. Not sent to merchants.
+     * Marketplace free-delivery invoices not yet on a branch marketplace bill,
+     * one summary per marketplace, sent to that marketplace's billing email
+     * (BILLING_MARKETPLACE_EMAIL only as fallback). Not sent to merchants.
      */
     protected function sendCompanyDigest(string $period): void
     {
@@ -60,45 +63,52 @@ class SendMerchantBillDigests extends Command
 
         $invoices = $billing->getUnpaidCompanyInvoices($fromDate, $toDate);
         if ($invoices->isEmpty()) {
-            $this->info('No company delivery-coupon invoices for this period.');
+            $this->info('No unbilled marketplace free-delivery invoices for this period.');
 
             return;
         }
 
-        $email = config('billing.marketplace_email');
-        if (! $email) {
-            Log::info('delivery_bill.company_digest_email_skipped', [
-                'count' => $invoices->count(),
-                'reason' => 'BILLING_MARKETPLACE_EMAIL is empty',
-            ]);
-            $this->warn('BILLING_MARKETPLACE_EMAIL is empty; company invoices were not emailed.');
+        $fallback = trim((string) config('billing.marketplace_email'));
+        $groups = $invoices->groupBy(fn ($inv) => (int) ($billing->invoiceMarketplace($inv)?->id ?? 0));
 
-            return;
-        }
+        foreach ($groups as $marketplaceId => $group) {
+            $marketplace = $marketplaceId ? Marketplace::query()->find($marketplaceId) : null;
+            $name = $marketplace?->name ?: 'Marketplace';
+            $email = trim((string) ($marketplace?->email ?? '')) ?: $fallback;
 
-        $subject = $period === 'weekly'
-            ? 'Weekly marketplace delivery coupon summary'
-            : 'Daily marketplace delivery coupon summary';
-        $body = $billing->buildDigestEmailBody($invoices, 'company');
-
-        try {
-            Mail::raw($body, function ($message) use ($email, $subject) {
-                $message->to($email)->subject($subject);
-            });
-            if (class_exists(EmailLog::class)) {
-                EmailLog::create([
-                    'to_email' => $email,
-                    'subject' => $subject,
-                    'body' => $body,
-                    'status' => 'sent',
-                    'sent_at' => now(),
+            if ($email === '') {
+                Log::info('delivery_bill.company_digest_email_skipped', [
+                    'marketplace_id' => $marketplaceId ?: null,
+                    'count' => $group->count(),
+                    'reason' => 'Marketplace billing email and BILLING_MARKETPLACE_EMAIL are empty',
                 ]);
+                $this->warn("{$name}: no billing email; {$group->count()} invoice(s) not emailed. Set it on Admin -> Marketplaces.");
+
+                continue;
             }
-            $billing->stampInvoicesSent($invoices);
-                        $this->info('Sent company delivery-coupon summary to '.$email.' ('.$invoices->count().' invoices).');
-        } catch (Throwable $e) {
-            Log::warning('delivery_bill.company_digest_failed', ['error' => $e->getMessage()]);
-            $this->warn('Company digest email failed: '.$e->getMessage());
+
+            $subject = ($period === 'weekly' ? 'Weekly' : 'Daily').' free-delivery charges summary for '.$name;
+            $body = $billing->buildDigestEmailBody($group, 'company', $name);
+
+            try {
+                Mail::raw($body, function ($message) use ($email, $subject) {
+                    $message->to($email)->subject($subject);
+                });
+                if (class_exists(EmailLog::class)) {
+                    EmailLog::create([
+                        'to_email' => $email,
+                        'subject' => $subject,
+                        'body' => $body,
+                        'status' => 'sent',
+                        'sent_at' => now(),
+                    ]);
+                }
+                $billing->stampInvoicesSent($group);
+                $this->info("Sent {$name} free-delivery summary to {$email} ({$group->count()} invoices).");
+            } catch (Throwable $e) {
+                Log::warning('delivery_bill.company_digest_failed', ['marketplace_id' => $marketplaceId, 'error' => $e->getMessage()]);
+                $this->warn("{$name} digest email failed: ".$e->getMessage());
+            }
         }
     }
 }

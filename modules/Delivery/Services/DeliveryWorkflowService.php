@@ -34,6 +34,9 @@ use Modules\Webhook\Services\WebhookService;
  *   out_for_delivery     -> arrived()                   (arrived_at recorded)
  *   out_for_delivery     -> delivered()                 (arrival/POD proof gating; shipment delivered)
  *   (any active)         -> failed()                    (status: failed; shipment delivery_failed)
+ *
+ * DR delivery runs (DeliveryRunService) drive assign/accept/outForDelivery for
+ * a whole run at hand-over; arrived/delivered/failed roll up into the run.
  */
 class DeliveryWorkflowService
 {
@@ -75,12 +78,22 @@ class DeliveryWorkflowService
     /**
      * Assign a rider to a pending delivery.
      */
-    public function assign(DeliveryAssignment $delivery, User $rider, User $actor): DeliveryAssignment
+    public function assign(DeliveryAssignment $delivery, User $rider, User $actor, bool $viaRun = false): DeliveryAssignment
     {
-        return DB::transaction(function () use ($delivery, $rider, $actor) {
+        return DB::transaction(function () use ($delivery, $rider, $actor, $viaRun) {
             $delivery = DeliveryAssignment::query()
                 ->lockForUpdate()
                 ->findOrFail($delivery->id);
+
+            // A parcel on a DR delivery run is handed to the rider by the run.
+            if (! $viaRun) {
+                $run = app(DeliveryRunService::class)->activeRunFor((int) $delivery->shipment_id);
+                if ($run) {
+                    throw ValidationException::withMessages([
+                        'status' => ["This parcel is on delivery run {$run->run_number}. Assign the rider on the run instead."],
+                    ]);
+                }
+            }
 
             if (! in_array($delivery->status, ['pending', 'assigned'], true)) {
                 throw ValidationException::withMessages([
@@ -226,7 +239,7 @@ class DeliveryWorkflowService
      */
     public function arrived(DeliveryAssignment $delivery, User $user): DeliveryAssignment
     {
-        return DB::transaction(function () use ($delivery, $user) {
+        $result = DB::transaction(function () use ($delivery, $user) {
             $delivery = DeliveryAssignment::query()->lockForUpdate()->findOrFail($delivery->id);
 
             $this->ensureRider($delivery, $user);
@@ -261,6 +274,10 @@ class DeliveryWorkflowService
 
             return $delivery->fresh(['shipment', 'rider']);
         });
+
+        $this->syncDeliveryRun((int) $delivery->id);
+
+        return $result;
     }
 
     /**
@@ -317,7 +334,7 @@ class DeliveryWorkflowService
      */
     public function delivered(DeliveryAssignment $delivery, User $user, array $data = []): Shipment
     {
-        return DB::transaction(function () use ($delivery, $user, $data) {
+        $result = DB::transaction(function () use ($delivery, $user, $data) {
             $delivery = DeliveryAssignment::query()->lockForUpdate()->findOrFail($delivery->id);
 
             $this->ensureRider($delivery, $user);
@@ -548,14 +565,20 @@ class DeliveryWorkflowService
 
             return $shipment->fresh();
         });
+
+        $this->syncDeliveryRun((int) $delivery->id);
+
+        return $result;
     }
 
-    public function failed(DeliveryAssignment $delivery, User $user, string $reason): Shipment
+    public function failed(DeliveryAssignment $delivery, User $user, string $reason, bool $viaRun = false): Shipment
     {
-        return DB::transaction(function () use ($delivery, $user, $reason) {
+        $result = DB::transaction(function () use ($delivery, $user, $reason, $viaRun) {
             $delivery = DeliveryAssignment::query()->lockForUpdate()->findOrFail($delivery->id);
 
-            $this->ensureRider($delivery, $user, allowManager: true);
+            if (! $viaRun) {
+                $this->ensureRider($delivery, $user, allowManager: true);
+            }
 
             $shipment = $delivery->shipment;
 
@@ -581,6 +604,23 @@ class DeliveryWorkflowService
 
             return $shipment->fresh();
         });
+
+        $this->syncDeliveryRun((int) $delivery->id);
+
+        return $result;
+    }
+
+    /**
+     * Roll a delivery's new state up into its DR run (counts, COD, completion).
+     * Never breaks the delivery flow itself.
+     */
+    private function syncDeliveryRun(int $deliveryId): void
+    {
+        try {
+            app(DeliveryRunService::class)->syncFromDelivery($deliveryId);
+        } catch (\Throwable $e) {
+            report($e);
+        }
     }
 
     /**

@@ -301,7 +301,9 @@ final class PickupController extends Controller
         );
 
         return ApiResponse::success(
-            $service->get($pickup)
+            $service->attachCustody(
+                $service->get($pickup)
+            )
         );
     }
 

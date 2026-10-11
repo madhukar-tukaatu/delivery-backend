@@ -13,7 +13,12 @@ use Throwable;
 
 final class AuthenticateMarketplaceApiKey
 {
-    public function handle(Request $request, Closure $next): Response
+    /**
+     * $scope: which API family the key must be allowed to call. Keys with no
+     * scopes (NULL / []) or '*' may call everything. Routes use
+     * 'marketplace.api-key' (pricing, the default) or 'marketplace.api-key:billing'.
+     */
+    public function handle(Request $request, Closure $next, string $scope = 'pricing'): Response
     {
         $publicKey = trim((string) $request->header(
             'X-Tukaatu-Marketplace-Key'
@@ -128,10 +133,10 @@ final class AuthenticateMarketplaceApiKey
         if (
             !empty($scopes) &&
             !in_array('*', $scopes, true) &&
-            !in_array('pricing', $scopes, true)
+            !in_array($scope, $scopes, true)
         ) {
             return $this->error(
-                'This marketplace key cannot access pricing APIs.',
+                'This marketplace key cannot access ' . $scope . ' APIs.',
                 403
             );
         }
@@ -195,10 +200,19 @@ final class AuthenticateMarketplaceApiKey
         );
 
         if (!Cache::add($replayKey, true, $replayTtl)) {
-            return $this->error(
-                'This marketplace request has already been processed.',
-                409
-            );
+            /*
+             * Billing "pay" is idempotent per X-Tukaatu-Request-Id: a retried
+             * request (same id, freshly signed) gets the original result from
+             * the controller instead of a bare 409.
+             */
+            if ($request->route()?->getName() !== 'marketplace.billing.bills.pay') {
+                return $this->error(
+                    'This marketplace request has already been processed.',
+                    409
+                );
+            }
+
+            $request->attributes->set('marketplace_request_replayed', true);
         }
 
         /*

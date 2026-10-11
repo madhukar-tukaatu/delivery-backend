@@ -9,6 +9,7 @@ use App\Support\ApiResponse;
 use App\Support\CourierStatus;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Modules\Shipment\Models\Shipment;
 use Modules\Shipment\Services\TransferService;
 
@@ -120,6 +121,7 @@ final class TransferController extends Controller
             $perPage = min(max((int) $request->input('per_page', 20), 1), 100);
             $results = $query->latest('id')->paginate($perPage);
             $this->attachTransferInfo($results->getCollection(), $branchId);
+        $this->attachLatestTr($results->getCollection());
 
             return ApiResponse::success($results);
         }
@@ -171,7 +173,20 @@ final class TransferController extends Controller
                 $query->where(function ($q) use ($search) {
                     $q->where('tracking_number', 'like', "%{$search}%")
                         ->orWhere('receiver_name', 'like', "%{$search}%")
-                        ->orWhere('receiver_phone', 'like', "%{$search}%");
+                        ->orWhere('receiver_phone', 'like', "%{$search}%")
+                        // Search by TR number (e.g. TR-KATHM-000012).
+                        ->orWhereExists(function ($s) use ($search) {
+                            $s->selectRaw('1')
+                                ->from('dispatch_manifest_items as tri')
+                                ->join('dispatch_manifests as trm', 'trm.id', '=', 'tri.dispatch_manifest_id')
+                                ->whereColumn('tri.shipment_id', 'shipments.id')
+                                ->where(function ($w) use ($search) {
+                                    $w->where('trm.manifest_number', 'like', "%{$search}%");
+                                    if (Schema::hasColumn('dispatch_manifests', 'transfer_number')) {
+                                        $w->orWhere('trm.transfer_number', 'like', "%{$search}%");
+                                    }
+                                });
+                        });
                 });
             }
         }
@@ -188,7 +203,48 @@ final class TransferController extends Controller
             return $this->getOutboundGroupedByRoute($query, $branchId, $perPage);
         }
 
-        return ApiResponse::success($query->latest('id')->paginate($perPage));
+        $page = $query->latest('id')->paginate($perPage);
+        $this->attachLatestTr($page->getCollection());
+
+        return ApiResponse::success($page);
+    }
+
+    /**
+     * Attach the latest TR (transfer container) each shipment rode on:
+     * tr_number, tr_from_name, tr_to_name, tr_status. One query per page.
+     */
+    private function attachLatestTr($shipments): void
+    {
+        $ids = collect($shipments)->pluck('id')->filter()->all();
+        if ($ids === [] || ! Schema::hasTable('dispatch_manifest_items')) {
+            return;
+        }
+        $numberCol = Schema::hasColumn('dispatch_manifests', 'transfer_number')
+            ? DB::raw('COALESCE(dm.transfer_number, dm.manifest_number) as tr_number')
+            : 'dm.manifest_number as tr_number';
+
+        $rows = DB::table('dispatch_manifest_items as dmi')
+            ->join('dispatch_manifests as dm', 'dm.id', '=', 'dmi.dispatch_manifest_id')
+            ->leftJoin('branches as fb', 'fb.id', '=', 'dm.from_branch_id')
+            ->leftJoin('branches as tb', 'tb.id', '=', 'dm.to_branch_id')
+            ->whereIn('dmi.shipment_id', $ids)
+            ->where('dmi.status', '!=', 'cancelled')
+            ->orderByDesc('dmi.id')
+            ->get(['dmi.shipment_id', $numberCol, 'dm.id as tr_id', 'dm.status as tr_status', 'fb.name as tr_from_name', 'tb.name as tr_to_name'])
+            ->unique('shipment_id')
+            ->keyBy('shipment_id');
+
+        foreach ($shipments as $shipment) {
+            $tr = $rows->get($shipment->id);
+            if (! $tr) {
+                continue;
+            }
+            $shipment->setAttribute('tr_number', $tr->tr_number);
+            $shipment->setAttribute('tr_id', (int) $tr->tr_id);
+            $shipment->setAttribute('tr_status', $tr->tr_status);
+            $shipment->setAttribute('tr_from_name', $tr->tr_from_name);
+            $shipment->setAttribute('tr_to_name', $tr->tr_to_name);
+        }
     }
 
     /**
@@ -312,10 +368,17 @@ final class TransferController extends Controller
             $hopId = (int) $progress['next_hop_branch_id'];
             $service = (string) ($progress['service_type'] ?? $shipment->service_type ?? 'standard');
             // ONE TR per next hop: services ride together (listed per parcel).
-            $key = (string) $hopId;
+            // HQ (all branches) also splits by the sending branch so bags from
+            // different branches never merge.
+            $fromId = $branchId !== 0
+                ? $branchId
+                : (int) ($shipment->current_branch_id ?: $shipment->origin_branch_id);
+            $key = $branchId !== 0 ? (string) $hopId : $fromId . ':' . $hopId;
 
             if (!isset($groups[$key])) {
                 $groups[$key] = [
+                    'group_key' => $key,
+                    'from_branch_id' => $fromId,
                     'next_hop_branch_id' => $hopId,
                     'next_hop_name' => $progress['next_hop_name'] ?? ("Branch #{$hopId}"),
                     'next_hop_coverage_id' => $progress['next_hop_coverage_id'] ?? null,
@@ -376,18 +439,22 @@ final class TransferController extends Controller
             }
         }
 
-        // Open (loading) TR per next hop for this branch, if any.
+        // Open (loading) TR per next hop for this branch (HQ: per sending branch + next hop).
         $openTr = collect();
-        if ($branchId !== 0 && $groups !== []) {
+        $fromNames = collect();
+        if ($groups !== []) {
+            $fromIds = array_values(array_unique(array_map(fn ($g) => (int) $g['from_branch_id'], $groups)));
+            $pairKey = fn ($from, $to) => $branchId !== 0 ? (string) $to : $from . ':' . $to;
             $openTr = \Modules\Dispatch\Models\DispatchManifest::query()
-                ->where('from_branch_id', $branchId)
+                ->whereIn('from_branch_id', $fromIds)
                 ->whereIn('to_branch_id', array_map(fn ($g) => $g['next_hop_branch_id'], $groups))
                 ->where('status', 'open')
                 ->withCount(['items as loaded_count' => fn ($q) => $q->where('status', 'added')])
                 ->latest('id')
                 ->get()
-                ->unique('to_branch_id')
-                ->keyBy('to_branch_id');
+                ->unique(fn ($m) => $m->from_branch_id . ':' . $m->to_branch_id)
+                ->keyBy(fn ($m) => $pairKey((int) $m->from_branch_id, (int) $m->to_branch_id));
+            $fromNames = DB::table('branches')->whereIn('id', $fromIds)->pluck('name', 'id');
         }
         $loadedOn = []; // shipment id => TR number of the open TR it is loaded on
         if ($openTr->isNotEmpty()) {
@@ -404,8 +471,11 @@ final class TransferController extends Controller
         $paginated = [];
         foreach ($groups as $group) {
             $services = $group['services'];
-            $open = $openTr->get($group['next_hop_branch_id']);
+            $open = $openTr->get($group['group_key']);
             $paginated[] = [
+                'group_key' => $group['group_key'],
+                'from_branch_id' => $group['from_branch_id'],
+                'from_branch_name' => $fromNames[$group['from_branch_id']] ?? null,
                 'next_hop_branch_id' => $group['next_hop_branch_id'],
                 'next_hop_name' => $group['next_hop_name'],
                 'next_hop_coverage_id' => $group['next_hop_coverage_id'],
@@ -432,8 +502,12 @@ final class TransferController extends Controller
             ];
         }
 
-        usort($paginated, static function ($a, $b) {
-            return ($b['count'] <=> $a['count'])
+        usort($paginated, static function ($a, $b) use ($branchId) {
+            // HQ: keep each sending branch's bags together.
+            $byFrom = $branchId === 0 ? strcmp((string) $a['from_branch_name'], (string) $b['from_branch_name']) : 0;
+
+            return $byFrom
+                ?: ($b['count'] <=> $a['count'])
                 ?: strcmp((string) $a['next_hop_name'], (string) $b['next_hop_name']);
         });
 
@@ -564,12 +638,27 @@ final class TransferController extends Controller
         }
         $completed = $completed->count();
 
+        // Today's TR activity (TRs + parcels) for the HQ / branch summary strip.
+        $today = now()->toDateString();
+        $trs = fn () => DB::table('dispatch_manifests');
+        $receivedToday = $trs()->whereDate('received_at', $today)
+            ->when($branchId !== 0, fn ($q) => $q->where('to_branch_id', $branchId));
+        $dispatchedToday = $trs()->whereDate('dispatched_at', $today)
+            ->when($branchId !== 0, fn ($q) => $q->where('from_branch_id', $branchId));
+        $openTrs = $trs()->where('status', 'open')
+            ->when($branchId !== 0, fn ($q) => $q->where('from_branch_id', $branchId));
+
         return ApiResponse::success([
             'outbound' => $outbound,
             'sent' => $sent,
             'in_transit' => $inTransit,
             'received' => $received,
             'completed' => $completed,
+            'received_today' => (clone $receivedToday)->count(),
+            'received_today_parcels' => (int) (clone $receivedToday)->sum('received_count'),
+            'dispatched_today' => (clone $dispatchedToday)->count(),
+            'dispatched_today_parcels' => (int) (clone $dispatchedToday)->sum('expected_count'),
+            'open_trs' => $openTrs->count(),
             'branch_id' => $branchId ?: null,
         ]);
     }
@@ -645,6 +734,7 @@ final class TransferController extends Controller
 
         $results = $query->latest('id')->paginate($perPage);
         $this->attachTransferInfo($results->getCollection(), $branchId);
+        $this->attachLatestTr($results->getCollection());
 
         return ApiResponse::success($results);
     }
@@ -695,6 +785,7 @@ final class TransferController extends Controller
         $perPage = min(max((int) $request->input('per_page', 20), 1), 100);
 
         $results = $query->latest('delivered_at')->paginate($perPage);
+        $this->attachLatestTr($results->getCollection());
 
         // Add transfer metadata
         $results->getCollection()->transform(function ($shipment) {
@@ -778,6 +869,7 @@ final class TransferController extends Controller
 
         $results = $query->latest('updated_at')->paginate($perPage);
         $this->attachTransferInfo($results->getCollection(), $branchId);
+        $this->attachLatestTr($results->getCollection());
 
         $results->getCollection()->transform(function ($shipment) {
             $shipment->transfer_route = [
@@ -1925,17 +2017,10 @@ final class TransferController extends Controller
         $data = $request->validate(['number' => ['required', 'string', 'max:64']]);
         $number = strtoupper(trim($data['number']));
 
-        $q = \Modules\Dispatch\Models\DispatchManifest::query();
-        $hasTr = \Illuminate\Support\Facades\Schema::hasColumn('dispatch_manifests', 'transfer_number');
-        $q->where(function ($w) use ($number, $hasTr) {
-            $w->where('manifest_number', $number);
-            if ($hasTr) {
-                $w->orWhere('transfer_number', $number);
-            }
-        });
-        $container = $q->latest('id')->first();
+        // Typed or scanned: TR-000004, 4, 000004, tr-4, TR-KATHM-4, MF-...
+        $container = $this->containers->findByNumber($number, $this->resolveReceivingBranchId($request->user(), $request));
         if (! $container) {
-            return ApiResponse::error("No TR found with number {$number}.", 404);
+            return ApiResponse::error("No TR found for \"{$number}\". Type the number on the bag label, e.g. TR-000004 or just 4.", 404);
         }
         if (! $this->branchMatches($request, (int) $container->to_branch_id)) {
             $to = \Modules\Branch\Models\Branch::query()->whereKey($container->to_branch_id)->value('name') ?? 'another branch';
@@ -2069,15 +2154,21 @@ final class TransferController extends Controller
             'seal_value' => ['nullable', 'string', 'max:50'],
             'seal_intact' => ['nullable', 'boolean'],
             'seal_remark' => ['nullable', 'string', 'max:500'],
+            // Explicit answer: intact / broken (or missing) / mismatch. Never blocks the receive.
+            'seal_status' => ['nullable', 'string', 'in:ok,intact,tampered,broken,missing,mismatch'],
+        ], [
+            'seal_status.in' => 'Seal answer must be intact, broken / missing, or mismatch.',
         ]);
         $branchId = $this->resolveReceivingBranchId($request->user(), $request);
 
         $seal = [];
-        if ($request->has('seal_intact') || filled($data['seal_value'] ?? null)) {
+        if ($request->has('seal_intact') || filled($data['seal_value'] ?? null) || filled($data['seal_status'] ?? null)) {
+            $hint = $data['seal_status'] ?? null;
             $seal = [
                 'value' => $data['seal_value'] ?? null,
                 'intact' => array_key_exists('seal_intact', $data) && $data['seal_intact'] !== null ? (bool) $data['seal_intact'] : null,
                 'remark' => $data['seal_remark'] ?? null,
+                'status' => $hint === 'intact' ? 'ok' : $hint,
             ];
         }
 

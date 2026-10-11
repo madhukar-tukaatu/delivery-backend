@@ -108,7 +108,8 @@ final class TransferContainerTest extends TestCase
             'transport_cost_split_mode' => 'equal',
         ]);
 
-        $this->assertMatchesRegularExpression('/^TR-\d{6}$/', (string) $tr->transfer_number);
+        // TR-000001 (legacy) or branch-tagged TR-KATHM-000001.
+        $this->assertMatchesRegularExpression('/^TR-(?:[A-Z0-9]+-)?\d{6}$/', (string) $tr->transfer_number);
         $this->assertSame('dispatched', $tr->status);
         $this->assertSame(self::KTM, (int) $tr->from_branch_id);
         $this->assertSame(self::HOP, (int) $tr->to_branch_id);
@@ -170,10 +171,8 @@ final class TransferContainerTest extends TestCase
         $this->assertSame(self::FINAL, (int) $tr2->to_branch_id);
         $this->assertSame(2, (int) $tr2->expected_count);
 
-        // Sequential numbering.
-        $n1 = (int) substr((string) $tr->transfer_number, 3);
-        $n2 = (int) substr((string) $tr2->transfer_number, 3);
-        $this->assertSame($n1 + 1, $n2);
+        // Distinct numbers (each sending branch keeps its own sequence: TR-{BRANCH}-000001).
+        $this->assertNotSame((string) $tr->transfer_number, (string) $tr2->transfer_number);
 
         // Two hops recorded for each onward parcel, each with its TR's cost share.
         foreach ($on as $s) {
@@ -310,7 +309,7 @@ final class TransferContainerTest extends TestCase
         $this->assertCount(1, $resp->json('data.containers'));
         $this->assertSame(5, $resp->json('data.dispatched_count'));
         $trNo = $resp->json('data.transfer_number');
-        $this->assertMatchesRegularExpression('/^TR-\d{6}$/', (string) $trNo);
+        $this->assertMatchesRegularExpression('/^TR-(?:[A-Z0-9]+-)?\d{6}$/', (string) $trNo);
 
         // Inbound list at the hop shows the TR.
         $list = $this->getJson('/api/v1/admin/transfers/containers?direction=inbound&branch_id='.self::HOP);
@@ -356,7 +355,7 @@ final class TransferContainerTest extends TestCase
             'manifest_number' => $a, 'transfer_number' => $a, 'status' => 'open', 'created_at' => now(), 'updated_at' => now(),
         ]);
         $b = $this->svc->nextTransferNumber();
-        $this->assertSame((int) substr($a, 3) + 1, (int) substr($b, 3));
+        $this->assertSame((int) substr($a, -6) + 1, (int) substr($b, -6));
     }
     /* ---------------- open TR: add / remove before dispatch ---------------- */
 
@@ -577,5 +576,203 @@ final class TransferContainerTest extends TestCase
         $recv->assertOk();
         $this->assertSame('ok', $recv->json('data.container.seal_status'));
         $this->assertSame('ok', $recv->json('data.seal.status'));
+    }
+
+    /* ---------------- receive without a scanner ---------------- */
+
+    private function receiveUrl(DispatchManifest $tr): string
+    {
+        return '/api/v1/admin/transfers/containers/'.$tr->id.'/receive';
+    }
+
+    public function test_lookup_accepts_typed_tr_number_variants(): void
+    {
+        $this->actingAs(User::query()->findOrFail($this->actor), 'sanctum');
+        [$lm] = $this->mixedBatch(1, 0);
+        $tr = $this->dispatchFromKtm($lm);
+        $number = (string) $tr->transfer_number;
+        $this->assertMatchesRegularExpression('/^TR-(?:[A-Z0-9]+-)?\d{6}$/', $number);
+        preg_match('/^TR-(?:([A-Z0-9]+)-)?(\d{6})$/', $number, $m);
+        $n = (string) (int) $m[2];
+
+        $variants = [strtolower($number), '  '.$number.'  ', $n, $m[2], 'tr-'.$n, 'TR'.$n, '#'.$n];
+        if (($m[1] ?? '') !== '') {
+            $variants[] = 'tr-'.strtolower($m[1]).'-'.$n;
+        }
+        foreach ($variants as $typed) {
+            $res = $this->getJson('/api/v1/admin/transfers/containers/lookup?'.http_build_query(['number' => $typed, 'branch_id' => self::HOP]));
+            $res->assertOk();
+            $this->assertSame($tr->id, $res->json('data.id'), "typed '{$typed}' must open {$number}");
+            $this->assertTrue($res->json('data.can_receive'));
+        }
+        $this->assertSame($tr->id, $this->svc->findByNumber(strtolower($number), self::HOP)?->id);
+
+        $miss = $this->getJson('/api/v1/admin/transfers/containers/lookup?number=TR-NOPE-1x&branch_id='.self::HOP);
+        $miss->assertStatus(404);
+        $this->assertStringContainsString('No TR found', (string) $miss->json('message'));
+    }
+
+    public function test_receive_with_seal_broken_and_remark_succeeds_and_records_tampered(): void
+    {
+        $this->actingAs(User::query()->findOrFail($this->actor), 'sanctum');
+        [$lm] = $this->mixedBatch(2, 0);
+        $tr = $this->dispatchFromKtm($lm, ['seal_number' => 'SEAL-B1']);
+        $before = DB::table('staff_notifications')->where('branch_id', self::KTM)->count();
+
+        // Seal broken or missing: no number to type, only a remark.
+        $res = $this->postJson($this->receiveUrl($tr), [
+            'branch_id' => self::HOP,
+            'scanned' => array_map(fn ($s) => $s->tracking_number, $lm),
+            'seal_status' => 'broken',
+            'seal_remark' => 'seal cut, bag taped',
+        ]);
+        $res->assertOk();
+        $this->assertSame('tampered', $res->json('data.container.seal_status'));
+        $this->assertSame('received', $res->json('data.container.status'));
+        $this->assertSame('seal cut, bag taped', $res->json('data.container.seal_remark'));
+        $this->assertSame(CourierStatus::SORTED_FOR_DELIVERY, $lm[0]->fresh()->status);
+        $this->assertGreaterThan($before, DB::table('staff_notifications')->where('branch_id', self::KTM)->count());
+
+        // Old clients: seal_intact=false with a remark is the same answer.
+        [$lm2] = $this->mixedBatch(1, 0);
+        $tr2 = $this->dispatchFromKtm($lm2, ['seal_number' => 'SEAL-B2']);
+        $this->postJson($this->receiveUrl($tr2), [
+            'branch_id' => self::HOP, 'scanned' => [$lm2[0]->id], 'seal_intact' => false, 'seal_remark' => 'no seal on bag',
+        ])->assertOk()->assertJsonPath('data.container.seal_status', 'tampered');
+    }
+
+    public function test_receive_with_seal_mismatch_succeeds(): void
+    {
+        $this->actingAs(User::query()->findOrFail($this->actor), 'sanctum');
+        [$lm] = $this->mixedBatch(1, 0);
+        $tr = $this->dispatchFromKtm($lm, ['seal_number' => 'SEAL-M1']);
+
+        $res = $this->postJson($this->receiveUrl($tr), [
+            'branch_id' => self::HOP,
+            'scanned' => [$lm[0]->tracking_number],
+            'seal_status' => 'mismatch',
+            'seal_value' => 'SEAL-XX',
+            'seal_remark' => 'other seal on bag',
+        ]);
+        $res->assertOk();
+        $this->assertSame('mismatch', $res->json('data.container.seal_status'));
+        $this->assertSame('SEAL-XX', $res->json('data.container.seal_checked_value'));
+        $this->assertSame('received', $res->json('data.container.status'));
+        $this->assertStringContainsString('mismatch', (string) $res->json('message'));
+    }
+
+    public function test_receive_seal_not_ok_without_remark_is_422_with_clear_message(): void
+    {
+        $this->actingAs(User::query()->findOrFail($this->actor), 'sanctum');
+        [$lm] = $this->mixedBatch(1, 0);
+        $tr = $this->dispatchFromKtm($lm, ['seal_number' => 'SEAL-R1']);
+
+        foreach (['broken' => 'Seal broken or missing', 'mismatch' => 'Seal number mismatch'] as $answer => $text) {
+            $res = $this->postJson($this->receiveUrl($tr), [
+                'branch_id' => self::HOP, 'scanned' => [$lm[0]->id], 'seal_status' => $answer,
+            ]);
+            $res->assertStatus(422)->assertJsonValidationErrors(['seal_remark']);
+            $this->assertStringContainsString($text, (string) $res->json('errors.seal_remark.0'));
+            $this->assertStringContainsString('remark', (string) $res->json('errors.seal_remark.0'));
+        }
+        $this->assertSame(CourierStatus::IN_TRANSIT, $lm[0]->fresh()->status, 'nothing received on 422');
+        $this->assertSame('dispatched', $tr->fresh()->status);
+
+        // Intact with the number left blank is fine (typing it is optional).
+        $this->postJson($this->receiveUrl($tr), [
+            'branch_id' => self::HOP, 'scanned' => [$lm[0]->id], 'seal_status' => 'intact',
+        ])->assertOk()->assertJsonPath('data.container.seal_status', 'ok');
+    }
+
+    public function test_tr_without_seal_skips_seal_check(): void
+    {
+        $this->actingAs(User::query()->findOrFail($this->actor), 'sanctum');
+        [$lm] = $this->mixedBatch(1, 0);
+        $tr = $this->dispatchFromKtm($lm);
+
+        $this->getJson('/api/v1/admin/transfers/containers/'.$tr->id.'?branch_id='.self::HOP)
+            ->assertOk()->assertJsonPath('data.seal_check_required', false);
+        $res = $this->postJson($this->receiveUrl($tr), ['branch_id' => self::HOP, 'scanned' => [$lm[0]->tracking_number]]);
+        $res->assertOk();
+        $this->assertNull($res->json('data.container.seal_status'));
+        $this->assertSame('received', $res->json('data.container.status'));
+    }
+
+    public function test_receive_without_seal_answer_on_sealed_tr_flags_nothing_and_sorts(): void
+    {
+        $this->actingAs(User::query()->findOrFail($this->actor), 'sanctum');
+        [$lm, $on] = $this->mixedBatch(1, 1);
+        $tr = $this->dispatchFromKtm(array_merge($lm, $on), ['seal_number' => '1234']);
+
+        // Just "Confirm receive": no seal fields at all.
+        $res = $this->postJson($this->receiveUrl($tr), [
+            'branch_id' => self::HOP, 'scanned' => [$lm[0]->tracking_number, $on[0]->tracking_number],
+        ]);
+        $res->assertOk();
+        $c = $tr->fresh();
+        $this->assertNull($c->seal_status);
+        $this->assertNull($c->seal_checked_value);
+        $this->assertNull($c->seal_remark);
+        $this->assertSame('received', $c->status);
+        $this->assertSame(CourierStatus::SORTED_FOR_DELIVERY, $lm[0]->fresh()->status);
+        $this->assertSame(CourierStatus::SORTED_FOR_TRANSFER, $on[0]->fresh()->status);
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('missingCounts')]
+    public function test_receive_with_missing_parcels_is_partial_notifies_sender_with_tracking_numbers(int $missingCount): void
+    {
+        $this->actingAs(User::query()->findOrFail($this->actor), 'sanctum');
+        [$lm, $on] = $this->mixedBatch(3, 2);
+        $all = array_merge($lm, $on);
+        $tr = $this->dispatchFromKtm($all);
+        $missing = array_slice($all, 0, $missingCount);
+        $present = array_slice($all, $missingCount);
+
+        $res = $this->postJson($this->receiveUrl($tr), [
+            'branch_id' => self::HOP, 'scanned' => array_map(fn ($s) => $s->tracking_number, $present),
+        ]);
+        $res->assertOk();
+        $this->assertSame('partially_received', $res->json('data.container.status'));
+        $this->assertSame($missingCount, (int) $res->json('data.container.missing_count'));
+        $this->assertCount($missingCount, $res->json('data.missing'));
+
+        foreach ($missing as $s) {
+            $this->assertSame('missing', DispatchManifestItem::query()->where('dispatch_manifest_id', $tr->id)->where('shipment_id', $s->id)->value('status'));
+        }
+        foreach ($present as $s) {
+            $want = (int) $s->destination_branch_id === self::HOP ? CourierStatus::SORTED_FOR_DELIVERY : CourierStatus::SORTED_FOR_TRANSFER;
+            $this->assertSame($want, $s->fresh()->status, 'present parcels are received and sorted');
+        }
+
+        $note = DB::table('staff_notifications')->where('branch_id', self::KTM)
+            ->where('title', 'like', '%'.$tr->transfer_number.'%missing%')->orderByDesc('id')->first();
+        $this->assertNotNull($note, 'origin branch notified');
+        foreach ($missing as $s) {
+            $this->assertStringContainsString($s->tracking_number, (string) $note->message);
+        }
+    }
+
+    public static function missingCounts(): array
+    {
+        return ['one missing' => [1], 'three missing' => [3]];
+    }
+
+    public function test_receive_all_present_one_click_is_received_and_sorted(): void
+    {
+        $this->actingAs(User::query()->findOrFail($this->actor), 'sanctum');
+        [$lm, $on] = $this->mixedBatch(2, 2);
+        $all = array_merge($lm, $on);
+        $tr = $this->dispatchFromKtm($all);
+
+        $res = $this->postJson($this->receiveUrl($tr), ['branch_id' => self::HOP, 'scanned' => array_map(fn ($s) => $s->id, $all)]);
+        $res->assertOk();
+        $this->assertSame('received', $res->json('data.container.status'));
+        $this->assertSame(0, (int) $res->json('data.container.missing_count'));
+        foreach ($lm as $s) {
+            $this->assertSame(CourierStatus::SORTED_FOR_DELIVERY, $s->fresh()->status);
+        }
+        foreach ($on as $s) {
+            $this->assertSame(CourierStatus::SORTED_FOR_TRANSFER, $s->fresh()->status);
+        }
     }
 }

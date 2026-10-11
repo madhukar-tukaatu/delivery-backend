@@ -41,7 +41,7 @@ use Modules\Tracking\Services\TrackingService;
  *                 final list, so nothing needs re-splitting here.
  *  - autoAppend(): a parcel sorted for transfer joins the open TR for its
  *                 next hop when that TR has auto-append switched on.
- *  - seal check:  receive() records seal ok / mismatch / tampered.
+ *  - seal check:  receive() records seal ok / mismatch / tampered (never blocks; remark required when not ok).
  */
 final class TransferContainerService
 {
@@ -69,15 +69,20 @@ final class TransferContainerService
     /* ------------------------------------------------------------------ */
 
     /**
-     * Next sequential TR number (TR-000001, TR-000002, ...). Same pattern as
-     * PR numbers: highest existing numeric suffix + 1, skipping any taken
-     * value. The unique index is the final guarantee (see createContainer()).
+     * Next TR number for the SENDING branch: TR-{BRANCH}-{seq}, e.g.
+     * TR-KATHM-000001, TR-BHARA-000001. Each branch keeps its own running
+     * sequence so many branches can create TRs without colliding and the
+     * number shows who created it. Branch tag = branch code without the
+     * "NP-BR-" style prefix (falls back to B{id}). Legacy global TR-000001
+     * numbers are left as they are. The unique index is the final guarantee.
      */
-    public function nextTransferNumber(): string
+    public function nextTransferNumber(?int $fromBranchId = null): string
     {
+        $prefix = 'TR-'.$this->branchTag($fromBranchId).'-';
+
         // Zero-padded, so the longest then lexically highest value is the max.
         $last = DB::table('dispatch_manifests')
-            ->where('transfer_number', 'like', 'TR-%')
+            ->where('transfer_number', 'like', $prefix.'%')
             ->orderByRaw('LENGTH(transfer_number) DESC')
             ->orderByDesc('transfer_number')
             ->lockForUpdate()
@@ -86,12 +91,27 @@ final class TransferContainerService
 
         $number = $highest + 1;
         do {
-            $candidate = 'TR-'.str_pad((string) $number, 6, '0', STR_PAD_LEFT);
+            $candidate = $prefix.str_pad((string) $number, 6, '0', STR_PAD_LEFT);
             $exists = DB::table('dispatch_manifests')->where('transfer_number', $candidate)->exists();
             $number++;
         } while ($exists);
 
         return $candidate;
+    }
+
+    /** Short, stable tag for a branch used in TR numbers (KATHM, BHARA, ...). */
+    public function branchTag(?int $branchId): string
+    {
+        if (! $branchId) {
+            return 'HQ';
+        }
+        $code = (string) (DB::table('branches')->where('id', $branchId)->value('code') ?? '');
+        // NP-BR-KATHM -> KATHM ; keep the last dash-separated part.
+        $parts = array_values(array_filter(explode('-', strtoupper($code))));
+        $tag = $parts ? (string) end($parts) : '';
+        $tag = preg_replace('/[^A-Z0-9]/', '', $tag) ?: '';
+
+        return $tag !== '' ? substr($tag, 0, 8) : 'B'.$branchId;
     }
 
     /* ------------------------------------------------------------------ */
@@ -481,7 +501,7 @@ final class TransferContainerService
      * Check a TR in at its next hop.
      *
      * @param  list<int|string>  $scanned  shipment ids or tracking numbers that physically arrived
-     * @param  array{value?:?string,intact?:?bool,remark?:?string}  $seal  seal check at arrival (empty = not checked)
+     * @param  array{value?:?string,intact?:?bool,remark?:?string,status?:?string}  $seal  seal check at arrival (empty = not checked)
      * @return array{container: DispatchManifest, received: list<array>, missing: list<array>, extras: list<array>, rejected: list<array>, seal: ?array}
      */
     public function receive(DispatchManifest $container, array $scanned, ?string $remarks, ?int $actorId, int $receivingBranchId, array $seal = []): array
@@ -593,11 +613,11 @@ final class TransferContainerService
                 (int) $c->from_branch_id,
                 null,
                 "{$c->display_number}: seal ".($sealRes['status'] === self::SEAL_TAMPERED ? 'broken / tampered' : 'number mismatch').' on arrival',
-                sprintf('%s checked %s in. Seal sent: %s, seal found: %s%s. Remark: %s',
+                sprintf('%s checked %s in. Sealed at dispatch: %s. Entered at receive: %s.%s Remark: %s',
                     $this->branchName((int) $c->to_branch_id), $c->display_number,
                     $sealRes['expected'] !== '' ? $sealRes['expected'] : '(none recorded)',
-                    $sealRes['value'] !== '' ? $sealRes['value'] : '(none)',
-                    $sealRes['status'] === self::SEAL_TAMPERED ? ', seal not intact' : '',
+                    $sealRes['value'] !== '' ? $sealRes['value'] : '(not typed)',
+                    $sealRes['status'] === self::SEAL_TAMPERED ? ' Seal broken or missing.' : ' Number mismatch.',
                     $sealRes['remark']),
             );
         }
@@ -618,30 +638,40 @@ final class TransferContainerService
     }
 
     /**
-     * Record the seal check of a TR at arrival.
-     *  - seal not intact                   -> tampered
-     *  - number entered differs from sent  -> mismatch
-     *  - otherwise                         -> ok
-     * Mismatch / tampered need a remark. Returns null when no check was sent.
+     * Record the seal check of a TR at arrival. Never blocks the receive:
+     *  - seal broken / missing (intact = false, or status tampered)  -> tampered
+     *  - status "mismatch", or a typed number that differs from sent  -> mismatch
+     *  - otherwise (number optional when intact)                      -> ok
+     * Mismatch / tampered only need a short remark; the TR is then received
+     * normally and the sending branch is notified. Returns null when no check
+     * was sent (e.g. no seal was recorded at dispatch).
      *
+     * @param  array{value?:?string,intact?:?bool,remark?:?string,status?:?string}  $seal
      * @return array{status:string, expected:string, value:string, remark:string}|null
      */
     private function applySealCheck(DispatchManifest $container, array $seal, ?int $actorId): ?array
     {
         $hasValue = array_key_exists('value', $seal) && $seal['value'] !== null && trim((string) $seal['value']) !== '';
         $hasIntact = array_key_exists('intact', $seal) && $seal['intact'] !== null;
-        if (! $hasValue && ! $hasIntact) {
+        $hint = strtolower(trim((string) ($seal['status'] ?? '')));
+        if (! $hasValue && ! $hasIntact && $hint === '') {
             return null;
         }
 
         $expected = trim((string) ($container->seal_number ?? ''));
         $value = trim((string) ($seal['value'] ?? ''));
         $intact = $hasIntact ? (bool) $seal['intact'] : true;
+        if (in_array($hint, ['tampered', 'broken', 'missing'], true)) {
+            $intact = false;
+        }
         $remark = trim((string) ($seal['remark'] ?? ''));
 
         if (! $intact) {
             $status = self::SEAL_TAMPERED;
-        } elseif ($expected !== '' && strcasecmp($value, $expected) !== 0) {
+        } elseif ($hint === self::SEAL_MISMATCH) {
+            $status = self::SEAL_MISMATCH;
+        } elseif ($expected !== '' && $value !== '' && strcasecmp($value, $expected) !== 0) {
+            // Typing the number is optional; only a number that differs is a mismatch.
             $status = self::SEAL_MISMATCH;
         } else {
             $status = self::SEAL_OK;
@@ -650,8 +680,9 @@ final class TransferContainerService
         if ($status !== self::SEAL_OK && $remark === '') {
             throw ValidationException::withMessages(['seal_remark' => [
                 $status === self::SEAL_TAMPERED
-                    ? 'Describe the seal damage (remark is required when the seal is not intact).'
-                    : sprintf('Seal %s does not match the seal sent (%s). Add a remark.', $value !== '' ? $value : '(blank)', $expected),
+                    ? 'Seal broken or missing: add a short remark (what happened to the seal / bag), then confirm again.'
+                    : sprintf('Seal number mismatch (sealed at dispatch: %s, entered at receive: %s): add a short remark, then confirm again.',
+                        $expected !== '' ? $expected : 'none', $value !== '' ? $value : 'not typed'),
             ]]);
         }
 
@@ -667,6 +698,59 @@ final class TransferContainerService
         }
 
         return ['status' => $status, 'expected' => $expected, 'value' => $value, 'remark' => $remark];
+    }
+
+    /**
+     * Find a TR from what a person typed or a scanner read. Accepts the exact
+     * number (TR-000004, TR-KATHM-000004, legacy MF-...), any case, spaces,
+     * and short forms: "4", "000004", "tr-4", "TR4", "tr-kathm-4".
+     * Digits only also match branch-tagged numbers ending in -000004. Among
+     * several hits the TR headed to $branchId and still receivable wins.
+     */
+    public function findByNumber(string $raw, int $branchId = 0): ?DispatchManifest
+    {
+        $s = ltrim(strtoupper((string) preg_replace('/\s+/', '', trim($raw))), '#');
+        if ($s === '') {
+            return null;
+        }
+        $hasTr = Schema::hasColumn('dispatch_manifests', 'transfer_number');
+        $digits = null;
+        $candidates = [$s];
+        if (preg_match('/^(?:TR-?)?0*(\d{1,9})$/', $s, $m)) {
+            $digits = $m[1];
+            $candidates[] = 'TR-'.str_pad($digits, 6, '0', STR_PAD_LEFT);
+        } elseif (preg_match('/^TR-?([A-Z][A-Z0-9]{0,7})-?0*(\d{1,9})$/', $s, $m)) {
+            $candidates[] = 'TR-'.$m[1].'-'.str_pad($m[2], 6, '0', STR_PAD_LEFT);
+        } elseif (preg_match('/^MF-?(.+)$/', $s, $m)) {
+            $candidates[] = 'MF-'.$m[1];
+        }
+        $candidates = array_values(array_unique($candidates));
+
+        $rank = function ($q) use ($branchId) {
+            if ($branchId > 0) {
+                $q->orderByRaw('CASE WHEN to_branch_id = ? THEN 0 ELSE 1 END', [$branchId]);
+            }
+            $statuses = "'".implode("','", self::RECEIVABLE_STATUSES)."'";
+
+            return $q->orderByRaw("CASE WHEN status IN ({$statuses}) THEN 0 ELSE 1 END")->orderByDesc('id');
+        };
+
+        // "4" also matches branch-tagged numbers (TR-KATHM-000004); the TR
+        // headed to this branch that can still be received wins.
+        $suffix = $digits !== null ? '-'.str_pad($digits, 6, '0', STR_PAD_LEFT) : null;
+
+        return $rank(DispatchManifest::query()->where(function ($w) use ($candidates, $hasTr, $suffix) {
+            $w->whereIn('manifest_number', $candidates);
+            if ($hasTr) {
+                $w->orWhereIn('transfer_number', $candidates);
+            }
+            if ($suffix !== null) {
+                $w->orWhere('manifest_number', 'like', 'TR-%'.$suffix);
+                if ($hasTr) {
+                    $w->orWhere('transfer_number', 'like', 'TR-%'.$suffix);
+                }
+            }
+        }))->first();
     }
 
     /**
@@ -1111,7 +1195,7 @@ final class TransferContainerService
             $attempts++;
             try {
                 return DB::transaction(function () use ($from, $hop, $actorId) {
-                    $number = $this->nextTransferNumber();
+                    $number = $this->nextTransferNumber($from);
                     $payload = [
                         'manifest_number' => $number,
                         'transfer_number' => $number,

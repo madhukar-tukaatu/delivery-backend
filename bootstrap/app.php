@@ -46,6 +46,7 @@ return Application::configure(
             'permission'              => \App\Http\Middleware\PermissionMiddleware::class,
             'branch.scope'            => \App\Http\Middleware\BranchScopeMiddleware::class,
             'route.permission'        => \App\Http\Middleware\CheckRoutePermission::class,
+            'super.admin'             => \App\Http\Middleware\SuperAdminOnly::class,
             'merchant.api-key'        => \Modules\Merchant\Http\Middleware\AuthenticateMerchantApiKey::class,
             'marketplace.api-key'     => \App\Http\Middleware\AuthenticateMarketplaceApiKey::class,
             'store.integration.token' => \Modules\Merchant\Http\Middleware\AuthenticateStoreIntegrationToken::class,

@@ -26,6 +26,10 @@ class ShipmentLifecycleCreateRequest extends FormRequest
             ?? $this->input('weight')
             ?? $this->input('package_weight')
             ?? $this->input('parcel_weight');
+        if ($weight === null || $weight === '' || (float) $weight <= 0) {
+            // Keep shipment creation aligned with the pricing check's 1.5 kg default.
+            $weight = 1.5;
+        }
 
         $customer = (array) $this->input('customer', []);
         $payment = (array) $this->input('payment', []);

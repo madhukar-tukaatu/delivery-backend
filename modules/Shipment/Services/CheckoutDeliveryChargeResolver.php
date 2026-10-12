@@ -19,6 +19,8 @@ use Throwable;
  */
 final class CheckoutDeliveryChargeResolver
 {
+    private const DEFAULT_WEIGHT_KG = 1.5;
+
     public function __construct(
         private readonly PricingEngineService $pricingEngine,
     ) {
@@ -34,7 +36,11 @@ final class CheckoutDeliveryChargeResolver
      *     pod_charge: float
      * }
      */
-    public function resolveFromPayload(array $data, array $pickupCoordinates = []): array
+    public function resolveFromPayload(
+        array $data,
+        array $pickupCoordinates = [],
+        bool $preferExplicitQuote = false
+    ): array
     {
         $pickupLat = $this->floatOrNull(
             $pickupCoordinates['lat']
@@ -76,6 +82,20 @@ final class CheckoutDeliveryChargeResolver
             ? round((float) $data['delivery_charge'], 2)
             : null;
 
+        // Shipment creation may carry the exact quote already shown to the
+        // merchant. Preserve it instead of recalculating against a different
+        // weight than the one used when that quote was produced.
+        if ($preferExplicitQuote && $explicitCharge !== null && $explicitCharge > 0) {
+            return [
+                'delivery_charge' => $explicitCharge,
+                'source' => 'payload_quote',
+                'breakdown' => is_array($data['delivery_charge_breakdown'] ?? null)
+                    ? $data['delivery_charge_breakdown']
+                    : null,
+                'pod_charge' => round((float) ($data['pod_charge'] ?? 0), 2),
+            ];
+        }
+
         if ($pickupLat !== null && $pickupLng !== null && $deliveryLat !== null && $deliveryLng !== null) {
             try {
                 // Keep the same physical parcel description used by the
@@ -99,32 +119,11 @@ final class CheckoutDeliveryChargeResolver
                     ),
                 ]);
 
-                // Gateway shipments nest product lines under packet.products;
-                // the pricing check sends them as products[]. Use the same
-                // expansion/fallback path (included weight per unit) so a
-                // missing unit_weight is priced identically in both flows.
-                $packetProducts = data_get($data, 'packet.products');
-                if (
-                    empty($enginePayload['packets']) &&
-                    empty($enginePayload['products']) &&
-                    is_array($packetProducts) &&
-                    $packetProducts !== []
-                ) {
-                    $enginePayload['products'] = array_map(
-                        static function (array $product) use ($parcelType): array {
-                            return [
-                                ...$product,
-                                'parcel_type' => $product['parcel_type'] ?? $parcelType,
-                            ];
-                        },
-                        $packetProducts
-                    );
-                }
-
                 // The engine accepts packets[] and products[] (or legacy
-                // parcel fields). Shipment APIs commonly wrap one parcel in
-                // packet[], so adapt it without discarding its dimensions or
-                // declared value.
+                // parcel fields). A gateway packet is one packed parcel;
+                // nested packet.products are its contents, not separate
+                // parcels. Keep pricing based on packet.weight, matching the
+                // public pricing check's 1.5 kg single-parcel default.
                 $singlePacket = $data['packet'] ?? $data['package'] ?? null;
                 if (
                     empty($enginePayload['packets']) &&
@@ -251,7 +250,9 @@ final class CheckoutDeliveryChargeResolver
             }
         }
 
-        return 0.1;
+        // Match PublicWebsitePricingEstimateRequest: an omitted (or non-positive)
+        // weight is priced as one 1.5 kg parcel throughout checkout and creation.
+        return self::DEFAULT_WEIGHT_KG;
     }
 
     private function floatOrNull(mixed $value): ?float

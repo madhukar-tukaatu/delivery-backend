@@ -893,7 +893,11 @@ final class ShipmentService
             }
         }
 
-        $priced = $this->checkoutDeliveryChargeResolver->resolveFromPayload($data, $pickupCoordinates);
+        $priced = $this->checkoutDeliveryChargeResolver->resolveFromPayload(
+            $data,
+            $pickupCoordinates,
+            preferExplicitQuote: true
+        );
         $deliveryCharge = round((float) $priced['delivery_charge'], 2);
 
         $paidBy = strtolower((string) ($data['delivery_charge_paid_by'] ?? 'merchant'));

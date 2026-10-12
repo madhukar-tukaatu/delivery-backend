@@ -134,7 +134,7 @@ final class GatewayShipmentController extends Controller
             ],
 
             'packet.weight' => [
-                'required',
+                'nullable',
                 'numeric',
                 'min:0.01',
             ],
@@ -244,6 +244,25 @@ final class GatewayShipmentController extends Controller
 
         $data['self_drop'] =
             (bool) ($data['self_drop'] ?? false);
+
+        // Keep stored shipment weight aligned with the pricing engine's
+        // missing unit-weight fallback (1.5 kg per product unit).
+        if (! isset($data['packet']['weight']) || (float) $data['packet']['weight'] <= 0) {
+            $products = $data['packet']['products'] ?? [];
+            if (is_array($products) && $products !== []) {
+                $data['packet']['weight'] = round(array_sum(array_map(
+                    static function (array $product): float {
+                        $unitWeight = (float) ($product['unit_weight'] ?? $product['actual_weight_kg'] ?? 0);
+                        $unitWeight = $unitWeight > 0 ? $unitWeight : 1.5;
+
+                        return $unitWeight * max(1, (int) ($product['quantity'] ?? 1));
+                    },
+                    $products
+                )), 3);
+            } else {
+                $data['packet']['weight'] = 1.5 * max(1, (int) ($data['packet']['quantity'] ?? 1));
+            }
+        }
 
         $data['order_source'] =
             'store_manager';

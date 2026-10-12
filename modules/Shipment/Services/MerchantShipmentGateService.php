@@ -100,7 +100,7 @@ final class MerchantShipmentGateService
                 'parcel_type' => $data['parcel_type'] ?? 'product',
                 'description' => $data['product_description'] ?? $data['package_description'] ?? null,
                 'quantity' => (int) ($data['quantity'] ?? max(count($products), 1)),
-                'weight' => (float) ($data['weight'] ?? $data['parcel_weight'] ?? $data['package_weight'] ?? 1),
+                'weight' => (float) ($data['weight'] ?? $data['parcel_weight'] ?? $data['package_weight'] ?? 1.5),
                 'declared_value' => (float) ($data['declared_value'] ?? $data['package_value'] ?? 0),
                 'fragile' => (bool) ($data['fragile'] ?? false),
                 'products' => $products,

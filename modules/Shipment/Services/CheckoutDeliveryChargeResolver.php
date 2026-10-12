@@ -78,7 +78,11 @@ final class CheckoutDeliveryChargeResolver
 
         if ($pickupLat !== null && $pickupLng !== null && $deliveryLat !== null && $deliveryLng !== null) {
             try {
-                $engine = $this->pricingEngine->calculate([
+                // Keep the same physical parcel description used by the
+                // pricing-check endpoint. Reducing every request to one
+                // parcel_weight loses quantity, packet dimensions and per-item
+                // fragile flags, which made checkout/shipment fares diverge.
+                $enginePayload = array_merge($data, [
                     'pickup_latitude' => $pickupLat,
                     'pickup_longitude' => $pickupLng,
                     'delivery_latitude' => $deliveryLat,
@@ -93,7 +97,56 @@ final class CheckoutDeliveryChargeResolver
                             ?? data_get($data, 'payment.pod_amount')
                             ?? 0
                     ),
-                ], isset($data['merchant_id']) ? (int) $data['merchant_id'] : null);
+                ]);
+
+                // Gateway shipments nest product lines under packet.products;
+                // the pricing check sends them as products[]. Use the same
+                // expansion/fallback path (included weight per unit) so a
+                // missing unit_weight is priced identically in both flows.
+                $packetProducts = data_get($data, 'packet.products');
+                if (
+                    empty($enginePayload['packets']) &&
+                    empty($enginePayload['products']) &&
+                    is_array($packetProducts) &&
+                    $packetProducts !== []
+                ) {
+                    $enginePayload['products'] = array_map(
+                        static function (array $product) use ($parcelType): array {
+                            return [
+                                ...$product,
+                                'parcel_type' => $product['parcel_type'] ?? $parcelType,
+                            ];
+                        },
+                        $packetProducts
+                    );
+                }
+
+                // The engine accepts packets[] and products[] (or legacy
+                // parcel fields). Shipment APIs commonly wrap one parcel in
+                // packet[], so adapt it without discarding its dimensions or
+                // declared value.
+                $singlePacket = $data['packet'] ?? $data['package'] ?? null;
+                if (
+                    empty($enginePayload['packets']) &&
+                    empty($enginePayload['products']) &&
+                    is_array($singlePacket)
+                ) {
+                    $packet = $singlePacket;
+                    $enginePayload['packets'] = [[
+                        'packet_reference' => $packet['packet_reference'] ?? 'SHIPMENT-PKT-001',
+                        'actual_weight_kg' => (float) ($packet['weight'] ?? $weight),
+                        'length_cm' => $packet['length_cm'] ?? $packet['length'] ?? null,
+                        'width_cm' => $packet['width_cm'] ?? $packet['width'] ?? null,
+                        'height_cm' => $packet['height_cm'] ?? $packet['height'] ?? null,
+                        'parcel_type' => $packet['parcel_type'] ?? $parcelType,
+                        'declared_value' => $packet['declared_value'] ?? null,
+                    ]];
+                }
+
+                $engine = $this->pricingEngine->calculate(
+                    $enginePayload,
+                    isset($data['merchant_id']) ? (int) $data['merchant_id'] : null
+                );
 
                 $final = round((float) ($engine['final_price'] ?? 0), 2);
                 if ($final > 0) {

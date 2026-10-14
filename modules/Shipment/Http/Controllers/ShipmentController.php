@@ -468,7 +468,8 @@ final class ShipmentController extends Controller
 
     public function update(
         Request $request,
-        Shipment $shipment
+        Shipment $shipment,
+        ShipmentService $service
     ) {
         $this->authorizeShipment(
             $request,
@@ -477,39 +478,19 @@ final class ShipmentController extends Controller
 
         $data = $this->validatedShipment($request);
 
-        $shipment->update($data);
+        $hasNewDeliveryCoords = (
+            isset($data['delivery_lat']) && isset($data['delivery_lng'])
+            && (
+                (float) $data['delivery_lat'] !== (float) $shipment->delivery_lat
+                || (float) $data['delivery_lng'] !== (float) $shipment->delivery_lng
+            )
+        );
 
-        /*
-        |--------------------------------------------------------------------------
-        | Recalculate route when coordinates change
-        |--------------------------------------------------------------------------
-        */
-
-        if ($this->shouldReroute($data)) {
-            app(
-                \Modules\Routing\Services\ShipmentRoutingService::class
-            )->applyToShipment(
-                $shipment,
-                [
-                    'pickup_lat'   =>
-                    $data['pickup_lat'],
-
-                    'pickup_lng'   =>
-                    $data['pickup_lng'],
-
-                    'delivery_lat' =>
-                    $data['delivery_lat'],
-
-                    'delivery_lng' =>
-                    $data['delivery_lng'],
-
-                    'weight'       =>
-                    $data['weight'] ?? $shipment->weight ?? 1,
-
-                    'pod_amount'   =>
-                    $data['pod_amount'] ?? $shipment->pod_amount ?? 0,
-                ]
-            );
+        if ($hasNewDeliveryCoords && empty($data['manual_branch_override'])) {
+            $shipment = $service->updateDeliveryLocation($shipment, $data, $request->user()?->id);
+            $shipment->update($data);
+        } else {
+            $shipment->update($data);
         }
 
         return ApiResponse::success(
@@ -529,6 +510,81 @@ final class ShipmentController extends Controller
             'Shipment updated.'
         );
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | PREVIEW DELIVERY LOCATION RECALCULATION
+    |--------------------------------------------------------------------------
+    */
+
+    public function previewDeliveryLocation(
+        Request $request,
+        Shipment $shipment,
+        ShipmentService $service
+    ) {
+        $this->authorizeShipment($request, $shipment);
+
+        $data = $request->validate([
+            'delivery_lat'      => ['required', 'numeric', 'between:-90,90'],
+            'delivery_lng'      => ['required', 'numeric', 'between:-180,180'],
+            'delivery_address'  => ['nullable', 'string', 'max:500'],
+            'delivery_city'     => ['nullable', 'string', 'max:100'],
+            'delivery_area'     => ['nullable', 'string', 'max:100'],
+            'receiver_address'  => ['nullable', 'string', 'max:500'],
+            'receiver_city'     => ['nullable', 'string', 'max:100'],
+            'receiver_area'     => ['nullable', 'string', 'max:100'],
+        ]);
+
+        $preview = $service->previewDeliveryLocationRecalculation($shipment, $data);
+
+        return ApiResponse::success($preview, 'Delivery location recalculation previewed.');
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | UPDATE CUSTOMER DELIVERY LOCATION & RECALCULATE CHARGE
+    |--------------------------------------------------------------------------
+    */
+
+    public function updateDeliveryLocation(
+        Request $request,
+        Shipment $shipment,
+        ShipmentService $service
+    ) {
+        $this->authorizeShipment($request, $shipment);
+
+        $data = $request->validate([
+            'delivery_lat'      => ['required', 'numeric', 'between:-90,90'],
+            'delivery_lng'      => ['required', 'numeric', 'between:-180,180'],
+            'delivery_address'  => ['nullable', 'string', 'max:500'],
+            'delivery_city'     => ['nullable', 'string', 'max:100'],
+            'delivery_area'     => ['nullable', 'string', 'max:100'],
+            'receiver_address'  => ['nullable', 'string', 'max:500'],
+            'receiver_city'     => ['nullable', 'string', 'max:100'],
+            'receiver_area'     => ['nullable', 'string', 'max:100'],
+            'receiver_name'     => ['nullable', 'string', 'max:150'],
+            'receiver_phone'    => ['nullable', 'string', 'max:50'],
+            'receiver_email'    => ['nullable', 'email', 'max:150'],
+        ]);
+
+        $updated = $service->updateDeliveryLocation($shipment, $data, $request->user()?->id);
+
+        return ApiResponse::success(
+            $updated->fresh([
+                'merchant',
+                'items',
+                'trackingEvents',
+                'originBranch',
+                'originSubBranch',
+                'destinationBranch',
+                'destinationSubBranch',
+                'currentBranch',
+                'currentSubBranch',
+            ]),
+            'Customer delivery location updated and delivery charge recalculated.'
+        );
+    }
+
 
     /*
     |--------------------------------------------------------------------------
@@ -851,6 +907,21 @@ final class ShipmentController extends Controller
             ],
 
             'receiver_area'             => [
+                'nullable',
+                'string',
+            ],
+
+            'delivery_address'          => [
+                'nullable',
+                'string',
+            ],
+
+            'delivery_city'             => [
+                'nullable',
+                'string',
+            ],
+
+            'delivery_area'             => [
                 'nullable',
                 'string',
             ],

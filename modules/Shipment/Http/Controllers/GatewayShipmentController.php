@@ -402,4 +402,107 @@ final class GatewayShipmentController extends Controller
             ], 422);
         }
     }
+
+    /**
+     * POST /api/v1/gateway/shipments/{trackingNumber}/delivery-location/preview
+     */
+    public function previewDeliveryLocation(
+        Request $request,
+        string $trackingNumber
+    ): JsonResponse {
+        $merchantId = (int) $request
+            ->attributes
+            ->get('merchant_id');
+
+        abort_unless(
+            $merchantId > 0,
+            401,
+            'Invalid merchant authentication.'
+        );
+
+        $shipment = Shipment::query()
+            ->where('merchant_id', $merchantId)
+            ->where('tracking_number', $trackingNumber)
+            ->firstOrFail();
+
+        $data = $request->validate([
+            'delivery_lat'      => ['required', 'numeric', 'between:-90,90'],
+            'delivery_lng'      => ['required', 'numeric', 'between:-180,180'],
+            'delivery_address'  => ['nullable', 'string', 'max:500'],
+            'delivery_city'     => ['nullable', 'string', 'max:100'],
+            'delivery_area'     => ['nullable', 'string', 'max:100'],
+        ]);
+
+        try {
+            $preview = $this->shipmentService->previewDeliveryLocationRecalculation(
+                shipment: $shipment,
+                data: $data
+            );
+
+            return ApiResponse::success(
+                $preview,
+                'Delivery location recalculation previewed.'
+            );
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Delivery location preview failed.',
+                'errors'  => $e->errors(),
+            ], 422);
+        }
+    }
+
+    /**
+     * POST /api/v1/gateway/shipments/{trackingNumber}/delivery-location
+     */
+    public function updateDeliveryLocation(
+        Request $request,
+        string $trackingNumber
+    ): JsonResponse {
+        $merchantId = (int) $request
+            ->attributes
+            ->get('merchant_id');
+
+        abort_unless(
+            $merchantId > 0,
+            401,
+            'Invalid merchant authentication.'
+        );
+
+        $shipment = Shipment::query()
+            ->where('merchant_id', $merchantId)
+            ->where('tracking_number', $trackingNumber)
+            ->firstOrFail();
+
+        $data = $request->validate([
+            'delivery_lat'      => ['required', 'numeric', 'between:-90,90'],
+            'delivery_lng'      => ['required', 'numeric', 'between:-180,180'],
+            'delivery_address'  => ['nullable', 'string', 'max:500'],
+            'delivery_city'     => ['nullable', 'string', 'max:100'],
+            'delivery_area'     => ['nullable', 'string', 'max:100'],
+            'receiver_name'     => ['nullable', 'string', 'max:150'],
+            'receiver_phone'    => ['nullable', 'string', 'max:50'],
+            'receiver_email'    => ['nullable', 'email', 'max:150'],
+        ]);
+
+        try {
+            $updated = $this->shipmentService->updateDeliveryLocation(
+                shipment: $shipment,
+                data: $data,
+                userId: null
+            );
+
+            return ApiResponse::success(
+                $updated,
+                'Delivery location updated and delivery charge recalculated successfully.'
+            );
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Delivery location update failed.',
+                'errors'  => $e->errors(),
+            ], 422);
+        }
+    }
 }
+

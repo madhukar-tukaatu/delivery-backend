@@ -1034,4 +1034,237 @@ final class ShipmentService
             }
         );
     }
+
+    /*
+    |--------------------------------------------------------------------------
+    | PREVIEW DELIVERY LOCATION RECALCULATION
+    |--------------------------------------------------------------------------
+    */
+
+    public function previewDeliveryLocationRecalculation(
+        Shipment $shipment,
+        array $data
+    ): array {
+        $deliveryLat = (float) ($data['delivery_lat'] ?? $data['delivery_latitude'] ?? $shipment->delivery_lat);
+        $deliveryLng = (float) ($data['delivery_lng'] ?? $data['delivery_longitude'] ?? $shipment->delivery_lng);
+
+        if ($deliveryLat == 0.0 && $deliveryLng == 0.0) {
+            throw ValidationException::withMessages([
+                'delivery_lat' => ['Valid delivery coordinates are required for distance recalculation.'],
+            ]);
+        }
+
+        $deliveryCity = $data['delivery_city'] ?? $data['receiver_city'] ?? $shipment->delivery_city ?? $shipment->receiver_city;
+        $deliveryArea = $data['delivery_area'] ?? $data['receiver_area'] ?? $shipment->delivery_area ?? $shipment->receiver_area;
+        $deliveryAddress = $data['delivery_address'] ?? $data['receiver_address'] ?? $shipment->delivery_address ?? $shipment->receiver_address;
+
+        // 1. Resolve destination branch based on new coordinates and area
+        $destination = $this->branchAssignment->resolveDestination([
+            'latitude' => $deliveryLat,
+            'longitude' => $deliveryLng,
+            'city' => $deliveryCity,
+            'area' => $deliveryArea,
+        ]);
+
+        // 2. Resolve pickup coordinates
+        $pickupLat = (float) ($shipment->pickup_lat ?? $shipment->pickup_latitude ?? 0);
+        $pickupLng = (float) ($shipment->pickup_lng ?? $shipment->pickup_longitude ?? 0);
+
+        if ($pickupLat == 0.0 || $pickupLng == 0.0) {
+            if ($shipment->pickup_location_id) {
+                $loc = DB::table('merchant_pickup_locations')
+                    ->where('id', $shipment->pickup_location_id)
+                    ->first();
+                if ($loc) {
+                    $pickupLat = (float) ($loc->latitude ?? $loc->lat ?? 0);
+                    $pickupLng = (float) ($loc->longitude ?? $loc->lng ?? 0);
+                }
+            }
+        }
+
+        if ($pickupLat == 0.0 || $pickupLng == 0.0) {
+            $originBranch = $shipment->originSubBranch ?? $shipment->originBranch;
+            if ($originBranch) {
+                $pickupLat = (float) ($originBranch->latitude ?? $originBranch->office_latitude ?? 0);
+                $pickupLng = (float) ($originBranch->longitude ?? $originBranch->office_longitude ?? 0);
+            }
+        }
+
+        $weight = (float) (
+            $shipment->chargeable_weight > 0
+                ? $shipment->chargeable_weight
+                : ($shipment->actual_weight > 0 ? $shipment->actual_weight : ($shipment->weight ?? 1.5))
+        );
+
+        $chargePayload = [
+            'merchant_id'             => $shipment->merchant_id,
+            'pickup_lat'              => $pickupLat,
+            'pickup_lng'              => $pickupLng,
+            'delivery_lat'            => $deliveryLat,
+            'delivery_lng'            => $deliveryLng,
+            'weight'                  => max($weight, 0.1),
+            'service_type'            => $shipment->service_type ?? 'standard',
+            'parcel_type'             => $shipment->parcel_type ?? 'non_fragile',
+            'fragile'                 => (bool) $shipment->fragile,
+            'payment_type'            => $shipment->payment_type ?? 'prepaid',
+            'pod_amount'              => (float) ($shipment->pod_amount ?? 0),
+            'delivery_charge_paid_by' => $shipment->delivery_charge_paid_by ?? 'merchant',
+            'packet_products'         => $shipment->packet_products ?? [],
+        ];
+
+        $priced = $this->checkoutDeliveryChargeResolver->resolveFromPayload(
+            $chargePayload,
+            ['lat' => $pickupLat, 'lng' => $pickupLng],
+            preferExplicitQuote: false
+        );
+
+        $newDeliveryCharge = round((float) $priced['delivery_charge'], 2);
+        $oldDeliveryCharge = round((float) ($shipment->delivery_charge ?? $shipment->delivery_fee ?? 0), 2);
+        $chargeDifference = round($newDeliveryCharge - $oldDeliveryCharge, 2);
+
+        $paidBy = strtolower((string) ($shipment->delivery_charge_paid_by ?? 'merchant'));
+        $podAmount = (float) ($shipment->pod_amount ?? 0);
+
+        $oldCollectable = (float) ($shipment->total_collectable_amount ?? $shipment->total_collectable ?? ($podAmount + ($paidBy === 'customer' ? $oldDeliveryCharge : 0)));
+        $newCollectable = round($podAmount + ($paidBy === 'customer' ? $newDeliveryCharge : 0), 2);
+
+        // Calculate distance
+        $distanceKm = data_get($priced, 'breakdown.delivery_branch.distance_km');
+        if ($distanceKm === null && $pickupLat && $pickupLng) {
+            $distanceKm = $this->branchAssignment->distanceKm($pickupLat, $pickupLng, $deliveryLat, $deliveryLng);
+        }
+
+        return [
+            'old_delivery_charge'          => $oldDeliveryCharge,
+            'new_delivery_charge'          => $newDeliveryCharge,
+            'charge_difference'            => $chargeDifference,
+            'old_total_collectable_amount' => $oldCollectable,
+            'new_total_collectable_amount' => $newCollectable,
+            'delivery_charge_paid_by'      => $shipment->delivery_charge_paid_by,
+            'destination_branch'           => [
+                'branch_id'    => $destination['branch_id'] ?? null,
+                'sub_branch_id'=> $destination['sub_branch_id'] ?? null,
+                'name'         => $destination['name'] ?? null,
+                'branch_name'  => $destination['branch_name'] ?? null,
+                'distance_km'  => $destination['distance_km'] ?? null,
+            ],
+            'distance_km'                  => $distanceKm !== null ? round((float) $distanceKm, 2) : null,
+            'breakdown'                    => $priced['breakdown'] ?? null,
+            'pod_charge'                   => round((float) ($priced['pod_charge'] ?? $shipment->pod_charge ?? 0), 2),
+            'pricing_source'               => $priced['source'] ?? null,
+        ];
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | UPDATE CUSTOMER DELIVERY LOCATION & RECALCULATE
+    |--------------------------------------------------------------------------
+    */
+
+    public function updateDeliveryLocation(
+        Shipment $shipment,
+        array $data,
+        ?int $userId = null
+    ): Shipment {
+        return DB::transaction(function () use ($shipment, $data, $userId) {
+            $shipment = Shipment::query()
+                ->lockForUpdate()
+                ->findOrFail($shipment->id);
+
+            $status = strtolower((string) $shipment->status);
+            if (in_array($status, [CourierStatus::DELIVERED, CourierStatus::CANCELLED], true)) {
+                throw ValidationException::withMessages([
+                    'status' => ["Cannot update delivery location for a {$shipment->status} shipment."],
+                ]);
+            }
+
+            $preview = $this->previewDeliveryLocationRecalculation($shipment, $data);
+
+            $deliveryLat = (float) ($data['delivery_lat'] ?? $data['delivery_latitude'] ?? $shipment->delivery_lat);
+            $deliveryLng = (float) ($data['delivery_lng'] ?? $data['delivery_longitude'] ?? $shipment->delivery_lng);
+
+            $deliveryAddress = $data['delivery_address'] ?? $data['receiver_address'] ?? $shipment->delivery_address ?? $shipment->receiver_address;
+            $deliveryCity = $data['delivery_city'] ?? $data['receiver_city'] ?? $shipment->delivery_city ?? $shipment->receiver_city;
+            $deliveryArea = $data['delivery_area'] ?? $data['receiver_area'] ?? $shipment->delivery_area ?? $shipment->receiver_area;
+            $receiverName = $data['receiver_name'] ?? $data['customer_name'] ?? $shipment->receiver_name ?? $shipment->customer_name;
+            $receiverPhone = $data['receiver_phone'] ?? $data['customer_phone'] ?? $shipment->receiver_phone ?? $shipment->customer_phone;
+            $receiverEmail = $data['receiver_email'] ?? $data['customer_email'] ?? $shipment->receiver_email ?? $shipment->customer_email;
+
+            $destBranchId = $preview['destination_branch']['branch_id'] ?? $shipment->destination_branch_id;
+            $destSubBranchId = $preview['destination_branch']['sub_branch_id'] ?? $shipment->destination_sub_branch_id;
+
+            $updatePayload = [
+                'delivery_lat'              => $deliveryLat,
+                'delivery_lng'              => $deliveryLng,
+                'delivery_latitude'         => $deliveryLat,
+                'delivery_longitude'        => $deliveryLng,
+                'delivery_address'          => $deliveryAddress,
+                'receiver_address'          => $deliveryAddress,
+                'delivery_city'             => $deliveryCity,
+                'receiver_city'             => $deliveryCity,
+                'delivery_area'             => $deliveryArea,
+                'receiver_area'             => $deliveryArea,
+                'receiver_name'             => $receiverName,
+                'customer_name'             => $receiverName,
+                'receiver_phone'            => $receiverPhone,
+                'customer_phone'            => $receiverPhone,
+                'receiver_email'            => $receiverEmail,
+                'customer_email'            => $receiverEmail,
+                'destination_branch_id'     => $destBranchId,
+                'destination_sub_branch_id' => $destSubBranchId,
+                'delivery_charge'           => $preview['new_delivery_charge'],
+                'delivery_fee'              => $preview['new_delivery_charge'],
+                'delivery_charge_breakdown' => $preview['breakdown'],
+                'pod_charge'                => $preview['pod_charge'],
+                'total_collectable_amount'  => $preview['new_total_collectable_amount'],
+                'total_collectable'         => $preview['new_total_collectable_amount'],
+            ];
+
+            if ($preview['distance_km'] !== null) {
+                $updatePayload['route_distance_km'] = $preview['distance_km'];
+            }
+
+            // Filter columns to those existing in the table
+            $columns = $this->shipmentColumns();
+            $filtered = array_intersect_key($updatePayload, $columns);
+            $shipment->update($filtered);
+
+            // Synchronize secondary tables if they exist
+            if (DB::getSchemaBuilder()->hasTable('shipment_charges')) {
+                DB::table('shipment_charges')
+                    ->where('shipment_id', $shipment->id)
+                    ->update([
+                        'delivery_charge' => $preview['new_delivery_charge'],
+                        'breakdown'       => json_encode($preview['breakdown']),
+                        'updated_at'      => now(),
+                    ]);
+            }
+
+            if (DB::getSchemaBuilder()->hasTable('pod_transactions')) {
+                DB::table('pod_transactions')
+                    ->where('shipment_id', $shipment->id)
+                    ->update([
+                        'delivery_charge' => $preview['new_delivery_charge'],
+                        'total_collected' => $preview['new_total_collectable_amount'],
+                        'updated_at'      => now(),
+                    ]);
+            }
+
+            // Create tracking event recording location change & charge recalculation
+            $oldFee = number_format($preview['old_delivery_charge'], 2);
+            $newFee = number_format($preview['new_delivery_charge'], 2);
+            $addrText = $deliveryAddress ? "to '{$deliveryAddress}'" : 'coordinates';
+            $description = "Delivery location updated {$addrText}. Delivery charge recalculated from NPR {$oldFee} to NPR {$newFee}.";
+
+            $this->createTrackingEvent(
+                shipment: $shipment,
+                oldStatus: $shipment->status,
+                newStatus: $shipment->status,
+                description: $description
+            );
+
+            return $shipment->fresh();
+        });
+    }
 }
+

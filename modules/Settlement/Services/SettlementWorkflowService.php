@@ -72,7 +72,7 @@ class SettlementWorkflowService
         $marketplaceShare = 0.0;
         $customerShare = 0.0;
 
-        if ($freeBy === 'marketplace') {
+        if ($freeBy === 'marketplace' || $payer === 'admin') {
             $marketplaceShare = $fare;
         } elseif ($freeBy === 'store' || in_array($payer, ['merchant', 'store', 'seller', 'free', 'free_delivery'], true)) {
             $storeShare = $fare;

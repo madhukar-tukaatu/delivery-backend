@@ -4,6 +4,7 @@ declare (strict_types = 1);
 
 namespace Modules\Shipment\Models;
 
+use App\Support\CourierStatus;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -16,7 +17,6 @@ use Modules\Merchant\Models\MerchantPickupLocation;
 use Modules\Pickup\Models\PickupRequest;
 use Modules\Routing\Models\ShipmentRouteStep;
 use Modules\Tracking\Models\TrackingEvent;
-use App\Support\CourierStatus;
 
 class Shipment extends Model
 {
@@ -43,7 +43,7 @@ class Shipment extends Model
      */
     public function getIsTransferAttribute(): bool
     {
-        $originNode = $this->origin_sub_branch_id ?? $this->origin_branch_id;
+        $originNode      = $this->origin_sub_branch_id ?? $this->origin_branch_id;
         $destinationNode = $this->destination_sub_branch_id ?? $this->destination_branch_id;
 
         if ($originNode === null || $destinationNode === null) {
@@ -72,7 +72,7 @@ class Shipment extends Model
         // already arrived and is now a local last-mile job.
         if ($this->status === CourierStatus::SORTED_FOR_DELIVERY) {
             $atDestination = $this->current_branch_id !== null
-                && (int) $this->current_branch_id === (int) $this->destination_branch_id;
+            && (int) $this->current_branch_id === (int) $this->destination_branch_id;
 
             return $atDestination ? 'received' : 'ready_to_dispatch';
         }
@@ -80,32 +80,25 @@ class Shipment extends Model
         return match ($this->status) {
             CourierStatus::SORTED_FOR_TRANSFER,
             CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
-            CourierStatus::PICKED_UP
-                => 'ready_to_dispatch',
+            CourierStatus::PICKED_UP                          => 'ready_to_dispatch',
 
             CourierStatus::IN_TRANSIT,
             CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
-            CourierStatus::RECEIVED_AT_TRANSIT_HUB
-                => 'in_transit',
+            CourierStatus::RECEIVED_AT_TRANSIT_HUB            => 'in_transit',
 
             CourierStatus::RECEIVED_AT_DESTINATION_BRANCH,
-            CourierStatus::RECEIVED_AT_DESTINATION_SUB_BRANCH
-                => 'received',
+            CourierStatus::RECEIVED_AT_DESTINATION_SUB_BRANCH => 'received',
 
             CourierStatus::ASSIGNED_TO_RIDER,
-            CourierStatus::OUT_FOR_DELIVERY
-                => 'out_for_delivery',
+            CourierStatus::OUT_FOR_DELIVERY                   => 'out_for_delivery',
 
-            CourierStatus::DELIVERED
-                => 'delivered',
+            CourierStatus::DELIVERED                          => 'delivered',
 
-            CourierStatus::RETURN_INITIATED
-                => 'returning',
+            CourierStatus::RETURN_INITIATED                   => 'returning',
 
-            CourierStatus::CANCELLED
-                => 'cancelled',
+            CourierStatus::CANCELLED                          => 'cancelled',
 
-            default => null,
+            default                                           => null,
         };
     }
 
@@ -137,40 +130,38 @@ class Shipment extends Model
         }
 
         $nextHopId = $this->attributes['next_hop_branch_id'] ?? null;
-        $pathText = $this->attributes['path_text'] ?? null;
-        $routeId = $this->attributes['transfer_route_id'] ?? null;
-        $legIndex = $this->attributes['transfer_leg_index'] ?? null;
+        $pathText  = $this->attributes['path_text'] ?? null;
+        $routeId   = $this->attributes['transfer_route_id'] ?? null;
+        $legIndex  = $this->attributes['transfer_leg_index'] ?? null;
 
         // Prefer live progress injected by TransferController (group_by_next_hop)
         // so stale next_hop_branch_id (often final dest after pre-route sort) cannot win.
         $live = $this->attributes['_hop_progress'] ?? null;
-        if (is_array($live) && !empty($live['next_hop_branch_id'])) {
+        if (is_array($live) && ! empty($live['next_hop_branch_id'])) {
             $nextHopId = $live['next_hop_branch_id'];
-            $routeId = $live['transfer_route_id'] ?? $routeId;
-            $legIndex = $live['transfer_leg_index'] ?? $legIndex;
-            $pathText = $live['path_text'] ?? $pathText;
-            if (!empty($live['route_code'])) {
+            $routeId   = $live['transfer_route_id'] ?? $routeId;
+            $legIndex  = $live['transfer_leg_index'] ?? $legIndex;
+            $pathText  = $live['path_text'] ?? $pathText;
+            if (! empty($live['route_code'])) {
                 $this->attributes['route_code'] = $live['route_code'];
             }
-            if (!empty($live['route_name'])) {
+            if (! empty($live['route_name'])) {
                 $this->attributes['route_name'] = $live['route_name'];
             }
         } else {
             // Re-resolve only when persisted next hop looks like a skip to final
             // (common when route was matched/added after sort). Avoids N+1 on every row.
-            $destId = (int) ($this->attributes['destination_branch_id']
-                ?? $this->attributes['destination_sub_branch_id']
-                ?? 0);
-            $looksStale = $nextHopId !== null && $destId > 0 && (int) $nextHopId === $destId;
-            $hasRouteHint = !empty($this->attributes['transfer_route_id'])
-                || !empty($this->attributes['route_code']);
+            $destId       = (int) ($this->attributes['destination_branch_id'] ?? $this->attributes['destination_sub_branch_id'] ?? 0);
+            $looksStale   = $nextHopId !== null && $destId > 0 && (int) $nextHopId === $destId;
+            $hasRouteHint = ! empty($this->attributes['transfer_route_id'])
+            || ! empty($this->attributes['route_code']);
             if ($looksStale || ($hasRouteHint && $nextHopId === null)) {
                 try {
                     $progressSvc = app(\Modules\Shipment\Services\TransferRouteProgressService::class);
-                    $progress = $progressSvc->resolveForShipment($this);
-                    if (!empty($progress['has_route']) && !empty($progress['next_hop_branch_id'])) {
+                    $progress    = $progressSvc->resolveForShipment($this);
+                    if (! empty($progress['has_route']) && ! empty($progress['next_hop_branch_id'])) {
                         $pathBranches = array_map('intval', $progress['path_branch_ids'] ?? []);
-                        $skips = $progressSvc->nextHopSkipsPath(
+                        $skips        = $progressSvc->nextHopSkipsPath(
                             $nextHopId !== null ? (int) $nextHopId : null,
                             $pathBranches,
                             isset($this->attributes['current_branch_id'])
@@ -181,13 +172,13 @@ class Shipment extends Model
                         if ($skips || $nextHopId === null
                             || (int) $nextHopId !== (int) $progress['next_hop_branch_id']) {
                             $nextHopId = $progress['next_hop_branch_id'];
-                            $routeId = $progress['transfer_route_id'] ?? $routeId;
-                            $legIndex = $progress['transfer_leg_index'] ?? $legIndex;
-                            $pathText = $progress['path_text'] ?? $pathText;
-                            if (!empty($progress['route_code'])) {
+                            $routeId   = $progress['transfer_route_id'] ?? $routeId;
+                            $legIndex  = $progress['transfer_leg_index'] ?? $legIndex;
+                            $pathText  = $progress['path_text'] ?? $pathText;
+                            if (! empty($progress['route_code'])) {
                                 $this->attributes['route_code'] = $progress['route_code'];
                             }
-                            if (!empty($progress['route_name'])) {
+                            if (! empty($progress['route_name'])) {
                                 $this->attributes['route_name'] = $progress['route_name'];
                             }
                         }
@@ -208,7 +199,7 @@ class Shipment extends Model
                     ->first();
                 if ($item?->manifest) {
                     $nextHopId = $item->manifest->to_branch_id;
-                    $routeId = $routeId ?? $item->manifest->route_id;
+                    $routeId   = $routeId ?? $item->manifest->route_id;
                 }
             } catch (\Throwable $e) {
                 // Schema may lack manifests on some environments.
@@ -220,7 +211,7 @@ class Shipment extends Model
             $nextHopName = $this->relationLoaded('nextHopBranch')
                 ? $this->nextHopBranch?->name
                 : \Modules\Branch\Models\Branch::query()->whereKey($nextHopId)->value('name');
-            if (!$nextHopName) {
+            if (! $nextHopName) {
                 try {
                     $nextHopName = \Modules\Branch\Models\CoverageLocation::query()->whereKey($nextHopId)->value('name');
                 } catch (\Throwable $e) {
@@ -237,22 +228,20 @@ class Shipment extends Model
         }
 
         return [
-            'origin_name' => $this->originBranch?->name,
-            'destination_name' => $this->destinationBranch?->name,
-            'current_name' => $this->currentBranch?->name,
+            'origin_name'        => $this->originBranch?->name,
+            'destination_name'   => $this->destinationBranch?->name,
+            'current_name'       => $this->currentBranch?->name,
             'next_hop_branch_id' => $nextHopId !== null ? (int) $nextHopId : null,
-            'next_hop_name' => $nextHopName,
-            'transfer_route_id' => $routeId !== null ? (int) $routeId : null,
+            'next_hop_name'      => $nextHopName,
+            'transfer_route_id'  => $routeId !== null ? (int) $routeId : null,
             'transfer_leg_index' => $legIndex !== null ? (int) $legIndex : null,
-            'path_text' => $pathText,
-            'route_code' => $this->attributes['route_code'] ?? null,
-            'route_name' => $this->attributes['route_name'] ?? null,
-            'service_type' => $this->service_type ?? null,
-            'in_transit_label' => $inTransitLabel,
+            'path_text'          => $pathText,
+            'route_code'         => $this->attributes['route_code'] ?? null,
+            'route_name'         => $this->attributes['route_name'] ?? null,
+            'service_type'       => $this->service_type ?? null,
+            'in_transit_label'   => $inTransitLabel,
         ];
     }
-
-
 
     /**
      * Route hop progress for shipment detail (assigned transfer route).
@@ -472,5 +461,12 @@ class Shipment extends Model
             DeliveryAssignment::class,
             'shipment_id'
         );
+    }
+
+    // In Shipment.php, with the other branch relations:
+
+    public function nextHopBranch(): BelongsTo
+    {
+        return $this->belongsTo(Branch::class, 'next_hop_branch_id');
     }
 }

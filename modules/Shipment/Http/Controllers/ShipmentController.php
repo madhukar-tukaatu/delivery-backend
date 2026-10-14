@@ -1,6 +1,6 @@
 <?php
 
-declare(strict_types=1);
+declare (strict_types = 1);
 
 namespace Modules\Shipment\Http\Controllers;
 
@@ -51,10 +51,10 @@ final class ShipmentController extends Controller
              */
             if (! $branchId) {
                 return ApiResponse::success([
-                    'data' => [],
+                    'data'         => [],
                     'current_page' => 1,
-                    'per_page' => (int) $request->get('per_page', 20),
-                    'total' => 0,
+                    'per_page'     => (int) $request->get('per_page', 20),
+                    'total'        => 0,
                 ]);
             }
 
@@ -110,7 +110,7 @@ final class ShipmentController extends Controller
             $marketplaceId = (int) $request->input('marketplace_id');
             $query->where(function ($q) use ($marketplaceId): void {
                 $q->where('marketplace_id', $marketplaceId)
-                    ->orWhereHas('merchant', fn ($mq) => $mq->where('marketplace_id', $marketplaceId));
+                    ->orWhereHas('merchant', fn($mq) => $mq->where('marketplace_id', $marketplaceId));
             });
         }
 
@@ -207,32 +207,233 @@ final class ShipmentController extends Controller
     |--------------------------------------------------------------------------
     */
 
-    public function show(
-        Request $request,
-        Shipment $shipment
-    ) {
-        $this->authorizeShipment(
-            $request,
+    // public function show(
+    //     Request $request,
+    //     Shipment $shipment
+    // ) {
+    //     $this->authorizeShipment(
+    //         $request,
+    //         $shipment
+    //     );
+
+    //     return ApiResponse::success(
+    //         $shipment->load([
+    //             'merchant',
+    //             'items',
+    //             'trackingEvents',
+    //             'originBranch',
+    //             'originSubBranch',
+    //             'destinationBranch',
+    //             'destinationSubBranch',
+    //             'currentBranch',
+    //             'currentSubBranch',
+    //             'routeSteps.fromBranch',
+    //             'routeSteps.toBranch',
+    //         ])
+    //     );
+    // }
+    public function show(Request $request, Shipment $shipment)
+    {
+        $this->authorizeShipment($request, $shipment);
+
+        $shipment->load([
+            // Parties – expand merchant columns if your table has them
+            'merchant:id,name,owner_name,contact_person,phone,email,address,city,area,pickup_address,pickup_city,pickup_area',
+            'pickupLocation',
+            'items',
+
+            // Branches
+            'originBranch:id,name,area,code,latitude,longitude,office_latitude,office_longitude',
+            'originSubBranch:id,name,area,code,latitude,longitude,office_latitude,office_longitude',
+            'destinationBranch:id,name,area,code,latitude,longitude,office_latitude,office_longitude',
+            'destinationSubBranch:id,name,area,code,latitude,longitude,office_latitude,office_longitude',
+            'currentBranch:id,name,area,code,latitude,longitude,office_latitude,office_longitude',
+            'currentSubBranch:id,name,area,code,latitude,longitude,office_latitude,office_longitude',
+            'nextHopBranch:id,name,area,code,latitude,longitude,office_latitude,office_longitude',
+
+            // Route
+            'routeSteps'     => fn($q)     => $q->orderBy('sequence'),
+            'routeSteps.fromBranch:id,name,area,latitude,longitude,office_latitude,office_longitude',
+            'routeSteps.toBranch:id,name,area,latitude,longitude,office_latitude,office_longitude',
+
+            // Activity (oldest → newest for timeline)
+            'trackingEvents' => fn($q) => $q->orderBy('created_at'),
+        ]);
+
+        // is_transfer, hop_meta, etc. already on $appends – no extra append() needed
+
+        $payload = $shipment->toArray();
+
+        if (is_string($payload['packet_products'] ?? null)) {
+            $payload['packet_products'] = json_decode($payload['packet_products'], true) ?? [];
+        }
+        if (is_string($payload['delivery_charge_breakdown'] ?? null)) {
+            $payload['delivery_charge_breakdown'] = json_decode(
+                $payload['delivery_charge_breakdown'],
+                true
+            ) ?? null;
+        }
+
+        $payload['price_breakdown'] = $this->buildPriceBreakdown(
+            $payload['delivery_charge_breakdown'] ?? null,
             $shipment
         );
 
-        return ApiResponse::success(
-            $shipment->load([
-                'merchant',
-                'items',
-                'trackingEvents',
-                'originBranch',
-                'originSubBranch',
-                'destinationBranch',
-                'destinationSubBranch',
-                'currentBranch',
-                'currentSubBranch',
-                'routeSteps.fromBranch',
-                'routeSteps.toBranch',
-            ])
-        );
+        $payload['distance_data'] = $this->calculateShipmentDistances($shipment);
+
+        return ApiResponse::success($payload);
     }
 
+    private function calculateShipmentDistances(Shipment $shipment): array
+    {
+        $totalDistance = (float) ($shipment->route_distance_km ?? 0);
+
+        $originBranch = $shipment->originSubBranch ?? $shipment->originBranch;
+        $destBranch = $shipment->destinationSubBranch ?? $shipment->destinationBranch;
+        $currentBranch = $shipment->currentSubBranch ?? $shipment->currentBranch ?? $originBranch;
+
+        $originLat = $this->resolveBranchLat($originBranch) ?? (float) ($shipment->pickup_lat ?? 0);
+        $originLng = $this->resolveBranchLng($originBranch) ?? (float) ($shipment->pickup_lng ?? 0);
+
+        $destLat = $this->resolveBranchLat($destBranch) ?? (float) ($shipment->delivery_lat ?? 0);
+        $destLng = $this->resolveBranchLng($destBranch) ?? (float) ($shipment->delivery_lng ?? 0);
+
+        $currentLat = $this->resolveBranchLat($currentBranch) ?? $originLat;
+        $currentLng = $this->resolveBranchLng($currentBranch) ?? $originLng;
+
+        $routeSteps = $shipment->routeSteps ?? collect();
+        $routeStepsTotal = 0.0;
+        $routeStepsCovered = 0.0;
+        $hasRouteSteps = $routeSteps->isNotEmpty();
+
+        if ($hasRouteSteps) {
+            foreach ($routeSteps as $step) {
+                $stepDist = (float) ($step->distance_km ?? 0);
+                $routeStepsTotal += $stepDist;
+                if (in_array(strtolower((string) $step->status), ['completed', 'received']) || !empty($step->completed_at)) {
+                    $routeStepsCovered += $stepDist;
+                }
+            }
+        }
+
+        if ($totalDistance <= 0 && $routeStepsTotal > 0) {
+            $totalDistance = $routeStepsTotal;
+        }
+
+        if ($totalDistance <= 0 && $originLat && $destLat) {
+            $totalDistance = $this->haversineKm($originLat, $originLng, $destLat, $destLng);
+        }
+
+        $status = strtolower((string) $shipment->status);
+        $isDelivered = ($status === 'delivered');
+        $isAtDestinationOrBeyond = in_array($status, [
+            'received_at_destination',
+            'received_at_destination_branch',
+            'received_at_destination_sub_branch',
+            'assigned_to_rider',
+            'out_for_delivery',
+            'delivered',
+        ]) || (
+            !empty($shipment->current_branch_id) &&
+            !empty($shipment->destination_branch_id) &&
+            (int) $shipment->current_branch_id === (int) $shipment->destination_branch_id
+        );
+
+        if ($isDelivered) {
+            $coveredDistance = $totalDistance;
+            $distanceFromDest = 0.0;
+            $progressPercent = 100;
+        } elseif ($isAtDestinationOrBeyond) {
+            $distanceFromDest = 0.0;
+            $coveredDistance = $hasRouteSteps && $routeStepsCovered > 0
+                ? max($routeStepsCovered, $totalDistance * 0.9)
+                : $totalDistance * 0.9;
+            $progressPercent = $totalDistance > 0 ? (int) round(($coveredDistance / $totalDistance) * 100) : 90;
+        } elseif ($status === 'in_transit' || $status === 'received_at_transit_hub') {
+            if ($currentLat && $destLat) {
+                $distanceFromDest = $this->haversineKm($currentLat, $currentLng, $destLat, $destLng);
+            } else {
+                $distanceFromDest = max(0.0, $totalDistance - $routeStepsCovered);
+            }
+            $coveredDistance = $routeStepsCovered > 0
+                ? $routeStepsCovered
+                : max(0.0, $totalDistance - $distanceFromDest);
+            $progressPercent = $totalDistance > 0 ? (int) min(95, max(15, round(($coveredDistance / $totalDistance) * 100))) : 50;
+        } elseif (in_array($status, ['picked_up', 'received_at_origin', 'received_at_origin_branch', 'sorted_for_transfer'])) {
+            if ($originLat && $destLat) {
+                $distanceFromDest = $this->haversineKm($originLat, $originLng, $destLat, $destLng);
+            } else {
+                $distanceFromDest = $totalDistance;
+            }
+            $coveredDistance = min($totalDistance * 0.1, 5.0);
+            $progressPercent = 10;
+        } else {
+            if ($originLat && $destLat) {
+                $distanceFromDest = $this->haversineKm($originLat, $originLng, $destLat, $destLng);
+            } else {
+                $distanceFromDest = $totalDistance;
+            }
+            $coveredDistance = 0.0;
+            $progressPercent = 0;
+        }
+
+        return [
+            'total_distance_km'                   => round($totalDistance, 2),
+            'covered_distance_km'                 => round($coveredDistance, 2),
+            'distance_from_destination_branch_km' => round($distanceFromDest, 2),
+            'progress_percent'                    => (int) $progressPercent,
+            'is_at_destination'                   => $isAtDestinationOrBeyond,
+        ];
+    }
+
+    private function resolveBranchLat(?object $branch): ?float
+    {
+        if (!$branch) return null;
+        $lat = $branch->latitude ?? $branch->office_latitude ?? null;
+        return $lat !== null ? (float) $lat : null;
+    }
+
+    private function resolveBranchLng(?object $branch): ?float
+    {
+        if (!$branch) return null;
+        $lng = $branch->longitude ?? $branch->office_longitude ?? null;
+        return $lng !== null ? (float) $lng : null;
+    }
+
+    private function haversineKm(float $lat1, float $lng1, float $lat2, float $lng2): float
+    {
+        $earthRadius = 6371;
+        $dLat = deg2rad($lat2 - $lat1);
+        $dLng = deg2rad($lng2 - $lng1);
+        $a = sin($dLat / 2) ** 2 + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dLng / 2) ** 2;
+        $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
+        return round($earthRadius * $c, 2);
+    }
+
+    private function buildPriceBreakdown(?array $raw, Shipment $shipment): ?array
+    {
+        if (empty($raw)) {
+            return null;
+        }
+
+        $b = $raw['breakdown'] ?? $raw;
+
+        return [
+            'base_pickup_fee'       => (float) ($shipment->pickup_fee ?? 0),
+            'base_delivery_fee'     => (float) (
+                $b['route_base_rate']['total'] ?? $b['route_base_rate']['amount'] ?? 0
+            ),
+            'base_transfer_fee'     => 0,
+            'pickup_extra_charge'   => 0,
+            'delivery_extra_charge' => (float) ($b['extra_delivery_distance']['total'] ?? 0),
+            'weight_charge'         => (float) ($b['additional_weight']['total'] ?? 0),
+            'pod_fee'               => (float) ($shipment->pod_charge ?? 0),
+            'final_price'           => (float) (
+                $raw['final_price'] ?? $shipment->delivery_charge ?? 0
+            ),
+            'raw'                   => $raw,
+        ];
+    }
     /*
     |--------------------------------------------------------------------------
     | STORE
@@ -290,27 +491,23 @@ final class ShipmentController extends Controller
             )->applyToShipment(
                 $shipment,
                 [
-                    'pickup_lat' =>
-                        $data['pickup_lat'],
+                    'pickup_lat'   =>
+                    $data['pickup_lat'],
 
-                    'pickup_lng' =>
-                        $data['pickup_lng'],
+                    'pickup_lng'   =>
+                    $data['pickup_lng'],
 
                     'delivery_lat' =>
-                        $data['delivery_lat'],
+                    $data['delivery_lat'],
 
                     'delivery_lng' =>
-                        $data['delivery_lng'],
+                    $data['delivery_lng'],
 
-                    'weight' =>
-                        $data['weight']
-                        ?? $shipment->weight
-                        ?? 1,
+                    'weight'       =>
+                    $data['weight'] ?? $shipment->weight ?? 1,
 
-                    'pod_amount' =>
-                        $data['pod_amount']
-                        ?? $shipment->pod_amount
-                        ?? 0,
+                    'pod_amount'   =>
+                    $data['pod_amount'] ?? $shipment->pod_amount ?? 0,
                 ]
             );
         }
@@ -350,7 +547,7 @@ final class ShipmentController extends Controller
         );
 
         $data = $request->validate([
-            'status' => [
+            'status'  => [
                 'required',
                 'string',
             ],
@@ -544,32 +741,32 @@ final class ShipmentController extends Controller
         Request $request
     ): array {
         return $request->validate([
-            'merchant_id' => [
+            'merchant_id'               => [
                 'nullable',
                 'exists:merchants,id',
             ],
 
-            'merchant_order_id' => [
+            'merchant_order_id'         => [
                 'nullable',
                 'string',
             ],
 
-            'manual_branch_override' => [
+            'manual_branch_override'    => [
                 'nullable',
                 'boolean',
             ],
 
-            'origin_branch_id' => [
+            'origin_branch_id'          => [
                 'nullable',
                 'exists:branches,id',
             ],
 
-            'origin_sub_branch_id' => [
+            'origin_sub_branch_id'      => [
                 'nullable',
                 'exists:branches,id',
             ],
 
-            'destination_branch_id' => [
+            'destination_branch_id'     => [
                 'nullable',
                 'exists:branches,id',
             ],
@@ -579,149 +776,149 @@ final class ShipmentController extends Controller
                 'exists:branches,id',
             ],
 
-            'pickup_lat' => [
+            'pickup_lat'                => [
                 'nullable',
                 'numeric',
                 'between:-90,90',
             ],
 
-            'pickup_lng' => [
+            'pickup_lng'                => [
                 'nullable',
                 'numeric',
                 'between:-180,180',
             ],
 
-            'delivery_lat' => [
+            'delivery_lat'              => [
                 'nullable',
                 'numeric',
                 'between:-90,90',
             ],
 
-            'delivery_lng' => [
+            'delivery_lng'              => [
                 'nullable',
                 'numeric',
                 'between:-180,180',
             ],
 
-            'sender_name' => [
+            'sender_name'               => [
                 'nullable',
                 'string',
             ],
 
-            'sender_phone' => [
+            'sender_phone'              => [
                 'nullable',
                 'string',
             ],
 
-            'sender_address' => [
+            'sender_address'            => [
                 'nullable',
                 'string',
             ],
 
-            'sender_city' => [
+            'sender_city'               => [
                 'nullable',
                 'string',
             ],
 
-            'sender_area' => [
+            'sender_area'               => [
                 'nullable',
                 'string',
             ],
 
-            'receiver_name' => [
+            'receiver_name'             => [
                 'required',
                 'string',
             ],
 
-            'receiver_phone' => [
+            'receiver_phone'            => [
                 'required',
                 'string',
             ],
 
-            'receiver_email' => [
+            'receiver_email'            => [
                 'nullable',
                 'email',
             ],
 
-            'receiver_address' => [
+            'receiver_address'          => [
                 'required',
                 'string',
             ],
 
-            'receiver_city' => [
+            'receiver_city'             => [
                 'nullable',
                 'string',
             ],
 
-            'receiver_area' => [
+            'receiver_area'             => [
                 'nullable',
                 'string',
             ],
 
-            'parcel_type' => [
+            'parcel_type'               => [
                 'nullable',
                 'string',
             ],
 
-            'description' => [
+            'description'               => [
                 'nullable',
                 'string',
             ],
 
-            'quantity' => [
+            'quantity'                  => [
                 'nullable',
                 'integer',
                 'min:1',
             ],
 
-            'weight' => [
+            'weight'                    => [
                 'nullable',
                 'numeric',
                 'min:0.1',
             ],
 
-            'declared_value' => [
+            'declared_value'            => [
                 'nullable',
                 'numeric',
                 'min:0',
             ],
 
-            'fragile' => [
+            'fragile'                   => [
                 'nullable',
                 'boolean',
             ],
 
-            'payment_type' => [
+            'payment_type'              => [
                 'nullable',
                 'in:prepaid,pod,to_pay',
             ],
 
-            'pod_amount' => [
+            'pod_amount'                => [
                 'nullable',
                 'numeric',
                 'min:0',
             ],
 
-            'delivery_charge' => [
+            'delivery_charge'           => [
                 'nullable',
                 'numeric',
                 'min:0',
             ],
 
-            'pod_charge' => [
+            'pod_charge'                => [
                 'nullable',
                 'numeric',
                 'min:0',
             ],
 
-            'delivery_charge_paid_by' => [
+            'delivery_charge_paid_by'   => [
                 'nullable',
                 'in:merchant,customer',
             ],
 
-            'delivery_free_by' => ['nullable', 'in:none,store,marketplace'],
+            'delivery_free_by'          => ['nullable', 'in:none,store,marketplace'],
 
-            'remarks' => [
+            'remarks'                   => [
                 'nullable',
                 'string',
             ],
@@ -742,8 +939,8 @@ final class ShipmentController extends Controller
         }
 
         return ! empty($data['pickup_lat'])
-            && ! empty($data['pickup_lng'])
-            && ! empty($data['delivery_lat'])
-            && ! empty($data['delivery_lng']);
+        && ! empty($data['pickup_lng'])
+        && ! empty($data['delivery_lat'])
+        && ! empty($data['delivery_lng']);
     }
 }

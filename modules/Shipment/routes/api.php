@@ -356,4 +356,26 @@ Route::prefix('v1/gateway')
                 'cancel',
             ]
         )->name('shipments.cancel');
+
+        /*
+        |--------------------------------------------------------------------------
+        | UPDATE DELIVERY LOCATION & RECALCULATE CHARGE
+        |--------------------------------------------------------------------------
+        */
+
+        Route::post(
+            'shipments/{trackingNumber}/delivery-location/preview',
+            [
+                GatewayShipmentController::class,
+                'previewDeliveryLocation',
+            ]
+        )->name('shipments.delivery-location.preview');
+
+        Route::post(
+            'shipments/{trackingNumber}/delivery-location',
+            [
+                GatewayShipmentController::class,
+                'updateDeliveryLocation',
+            ]
+        )->name('shipments.delivery-location');
     });

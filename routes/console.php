@@ -319,11 +319,7 @@ Artisan::command('finance:reconcile-shipment-weights
 
                 $paidBy = strtolower((string) ($shipment->delivery_charge_paid_by ?? 'customer'));
                 $podAmount = (float) ($shipment->pod_amount ?? 0);
-                if ($paidBy === 'customer') {
-                    $shipment->total_collectable_amount = round($podAmount + $newFare, 2);
-                } else {
-                    $shipment->total_collectable_amount = round($podAmount, 2);
-                }
+                $shipment->total_collectable_amount = $podAmount > 0 ? round($podAmount, 2) : ($paidBy === 'customer' ? round($newFare, 2) : 0.00);
                 $shipment->save();
 
                 // 2. SECONDARY CHARGE & TRANSACTION TABLES
@@ -679,11 +675,7 @@ Artisan::command(
 
                 $paidBy = strtolower((string) ($shipment->delivery_charge_paid_by ?? 'customer'));
                 $podAmount = (float) ($shipment->pod_amount ?? 0);
-                if ($paidBy === 'customer') {
-                    $shipment->total_collectable_amount = round($podAmount + $targetFare, 2);
-                } else {
-                    $shipment->total_collectable_amount = round($podAmount, 2);
-                }
+                $shipment->total_collectable_amount = $podAmount > 0 ? round($podAmount, 2) : ($paidBy === 'customer' ? round($targetFare, 2) : 0.00);
                 $shipment->save();
 
                 // 2. SECONDARY CHARGE & TRANSACTION TABLES

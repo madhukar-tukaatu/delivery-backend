@@ -19,7 +19,11 @@ final class MerchantApiKeyGuard
         |--------------------------------------------------------------------------
         */
 
-        $apiKey = trim((string) $request->header('X-Tukaatu-Key'));
+        $apiKey = trim((string) (
+            $request->header('X-Tukaatu-Key')
+            ?: $request->header('X-API-KEY')
+            ?: $request->bearerToken()
+        ));
         $apiSecret = trim((string) $request->header('X-Tukaatu-Secret'));
 
         /*
@@ -30,19 +34,7 @@ final class MerchantApiKeyGuard
 
         if ($apiKey === '') {
             throw ValidationException::withMessages([
-                'api_key' => 'X-Tukaatu-Key header is required.',
-            ]);
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | API Secret required
-        |--------------------------------------------------------------------------
-        */
-
-        if ($apiSecret === '') {
-            throw ValidationException::withMessages([
-                'api_secret' => 'X-Tukaatu-Secret header is required.',
+                'api_key' => 'API Key is required (pass X-API-KEY or X-Tukaatu-Key header).',
             ]);
         }
 
@@ -61,7 +53,10 @@ final class MerchantApiKeyGuard
         );
 
         $merchantKey = MerchantApiKey::query()
-            ->where('api_key_hash', $apiKeyHash)
+            ->where(function ($q) use ($apiKey, $apiKeyHash) {
+                $q->where('api_key_hash', $apiKeyHash)
+                  ->orWhere('api_key', $apiKey);
+            })
             ->where('is_active', true)
             ->first();
 
@@ -73,26 +68,29 @@ final class MerchantApiKeyGuard
 
         /*
         |--------------------------------------------------------------------------
-        | Validate API secret
+        | Validate API secret (if provided or required by key)
         |--------------------------------------------------------------------------
-        |
-        | Your database stores SHA-256 hash of the secret.
-        |
         */
 
-        $secretHash = hash(
-            'sha256',
-            $apiSecret
-        );
+        if ($apiSecret !== '') {
+            $secretHash = hash(
+                'sha256',
+                $apiSecret
+            );
 
-        if (
-            !hash_equals(
-                (string) $merchantKey->api_secret_hash,
-                $secretHash
-            )
-        ) {
+            if (
+                !hash_equals(
+                    (string) $merchantKey->api_secret_hash,
+                    $secretHash
+                )
+            ) {
+                throw ValidationException::withMessages([
+                    'api_secret' => 'Invalid API credentials.',
+                ]);
+            }
+        } elseif (!empty($merchantKey->api_secret_hash) && !$request->hasHeader('X-API-KEY')) {
             throw ValidationException::withMessages([
-                'api_secret' => 'Invalid API credentials.',
+                'api_secret' => 'X-Tukaatu-Secret header is required.',
             ]);
         }
 

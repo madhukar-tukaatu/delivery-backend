@@ -1193,6 +1193,8 @@ final class ShipmentService
             'breakdown'                    => $priced['breakdown'] ?? null,
             'pod_charge'                   => round((float) ($priced['pod_charge'] ?? $shipment->pod_charge ?? 0), 2),
             'pricing_source'               => $priced['source'] ?? null,
+            'branch_changed'               => ($destination['branch_id'] ?? null) !== null && (int) ($destination['branch_id'] ?? 0) !== (int) $shipment->destination_branch_id,
+            'is_assigned_to_rider'         => in_array($shipment->status, [CourierStatus::ASSIGNED_TO_RIDER, CourierStatus::OUT_FOR_DELIVERY], true),
         ];
     }
 
@@ -1261,6 +1263,65 @@ final class ShipmentService
                 'total_collectable'         => $preview['new_total_collectable_amount'],
             ];
 
+            $isAssignedToRider = in_array($shipment->status, [
+                CourierStatus::ASSIGNED_TO_RIDER,
+                CourierStatus::OUT_FOR_DELIVERY,
+            ], true);
+
+            $oldBranchId = (int) $shipment->destination_branch_id;
+            $newBranchId = (int) $destBranchId;
+            $branchChanged = ($newBranchId > 0 && $newBranchId !== $oldBranchId);
+            $reassignRequested = filter_var($data['reassign_rider'] ?? false, FILTER_VALIDATE_BOOLEAN);
+
+            $oldStatus = $shipment->status;
+            $newStatus = $shipment->status;
+            $riderAction = 'none';
+
+            if ($isAssignedToRider) {
+                if ($branchChanged || $reassignRequested) {
+                    if ($branchChanged) {
+                        $riderAction = 'unassigned_for_transfer';
+                        $newStatus = CourierStatus::SORTED_FOR_TRANSFER;
+                    } else {
+                        $riderAction = 'unassigned_for_reassignment';
+                        $newStatus = CourierStatus::SORTED_FOR_DELIVERY;
+                    }
+
+                    $updatePayload['status'] = $newStatus;
+
+                    if (DB::getSchemaBuilder()->hasTable('delivery_assignments')) {
+                        DB::table('delivery_assignments')
+                            ->where('shipment_id', $shipment->id)
+                            ->whereIn('status', ['assigned', 'accepted', 'out_for_delivery'])
+                            ->update([
+                                'status'     => 'cancelled',
+                                'updated_at' => now(),
+                            ]);
+                    }
+
+                    if (DB::getSchemaBuilder()->hasTable('delivery_run_items')) {
+                        DB::table('delivery_run_items')
+                            ->where('shipment_id', $shipment->id)
+                            ->where('status', '!=', 'removed')
+                            ->update([
+                                'status'     => 'removed',
+                                'updated_at' => now(),
+                            ]);
+                    }
+                } else {
+                    $riderAction = 'kept_for_new_address';
+                    if (DB::getSchemaBuilder()->hasTable('delivery_assignments')) {
+                        DB::table('delivery_assignments')
+                            ->where('shipment_id', $shipment->id)
+                            ->whereIn('status', ['assigned', 'accepted', 'out_for_delivery'])
+                            ->update([
+                                'pod_collected_amount' => $preview['new_total_collectable_amount'],
+                                'updated_at'           => now(),
+                            ]);
+                    }
+                }
+            }
+
             if ($preview['distance_km'] !== null) {
                 $updatePayload['route_distance_km'] = $preview['distance_km'];
             }
@@ -1297,14 +1358,36 @@ final class ShipmentService
             $addrText = $deliveryAddress ? "to '{$deliveryAddress}'" : 'coordinates';
             $description = "Delivery location updated {$addrText}. Delivery charge recalculated from NPR {$oldFee} to NPR {$newFee}.";
 
+            if ($riderAction === 'unassigned_for_transfer') {
+                $description .= " Destination branch shifted to #{$newBranchId}. Removed from rider and queued for branch transfer.";
+            } elseif ($riderAction === 'unassigned_for_reassignment') {
+                $description .= " Removed from current rider and returned to delivery assignment queue.";
+            } elseif ($riderAction === 'kept_for_new_address') {
+                $description .= " Assigned rider retained with updated delivery coordinates and collectable amount.";
+            }
+
             $this->createTrackingEvent(
                 shipment: $shipment,
-                oldStatus: $shipment->status,
-                newStatus: $shipment->status,
+                oldStatus: $oldStatus,
+                newStatus: $newStatus,
                 description: $description
             );
 
-            return $shipment->fresh();
+            $fresh = $shipment->fresh();
+            $fresh->pricing_update = [
+                'old_delivery_charge'          => $preview['old_delivery_charge'],
+                'new_delivery_charge'          => $preview['new_delivery_charge'],
+                'charge_difference'            => $preview['charge_difference'],
+                'old_total_collectable_amount' => $preview['old_total_collectable_amount'],
+                'new_total_collectable_amount' => $preview['new_total_collectable_amount'],
+                'destination_branch'           => $preview['destination_branch'],
+                'branch_changed'               => $branchChanged,
+                'rider_action'                 => $riderAction,
+                'distance_km'                  => $preview['distance_km'],
+                'delivery_charge_breakdown'    => $preview['breakdown'],
+            ];
+
+            return $fresh;
         });
     }
 }

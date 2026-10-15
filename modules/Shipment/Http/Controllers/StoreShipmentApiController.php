@@ -40,13 +40,104 @@ class StoreShipmentApiController extends Controller
         return response()->json(['data' => $service->showPayload($shipment)]);
     }
 
+    public function previewDeliveryLocation(
+        Request $request,
+        string $trackingNumber,
+        \Modules\Shipment\Services\ShipmentService $service
+    ): JsonResponse {
+        $merchant = $this->merchantFromApiKey($request);
+
+        $shipment = Shipment::where('merchant_id', $merchant->id)
+            ->where(function ($q) use ($trackingNumber) {
+                $q->where('tracking_number', $trackingNumber)
+                  ->orWhere('merchant_order_id', $trackingNumber);
+            })
+            ->firstOrFail();
+
+        $data = $request->validate([
+            'delivery_lat'      => ['required', 'numeric', 'between:-90,90'],
+            'delivery_lng'      => ['required', 'numeric', 'between:-180,180'],
+            'delivery_address'  => ['nullable', 'string', 'max:500'],
+            'delivery_city'     => ['nullable', 'string', 'max:100'],
+            'delivery_area'     => ['nullable', 'string', 'max:100'],
+        ]);
+
+        $preview = $service->previewDeliveryLocationRecalculation($shipment, $data);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Delivery location recalculation previewed.',
+            'data'    => $preview,
+        ]);
+    }
+
+    public function updateDeliveryLocation(
+        Request $request,
+        string $trackingNumber,
+        \Modules\Shipment\Services\ShipmentService $service
+    ): JsonResponse {
+        $merchant = $this->merchantFromApiKey($request);
+
+        $shipment = Shipment::where('merchant_id', $merchant->id)
+            ->where(function ($q) use ($trackingNumber) {
+                $q->where('tracking_number', $trackingNumber)
+                  ->orWhere('merchant_order_id', $trackingNumber);
+            })
+            ->firstOrFail();
+
+        $data = $request->validate([
+            'delivery_lat'      => ['required', 'numeric', 'between:-90,90'],
+            'delivery_lng'      => ['required', 'numeric', 'between:-180,180'],
+            'delivery_address'  => ['nullable', 'string', 'max:500'],
+            'delivery_city'     => ['nullable', 'string', 'max:100'],
+            'delivery_area'     => ['nullable', 'string', 'max:100'],
+            'receiver_name'     => ['nullable', 'string', 'max:150'],
+            'receiver_phone'    => ['nullable', 'string', 'max:50'],
+            'receiver_email'    => ['nullable', 'email', 'max:150'],
+            'preview_only'      => ['nullable', 'boolean'],
+            'dry_run'           => ['nullable', 'boolean'],
+            'reassign_rider'    => ['nullable', 'boolean'],
+        ]);
+
+        if ($request->boolean('preview_only') || $request->boolean('dry_run')) {
+            $preview = $service->previewDeliveryLocationRecalculation($shipment, $data);
+
+            return response()->json([
+                'success' => true,
+                'message' => 'Delivery location recalculation previewed (dry run).',
+                'data'    => $preview,
+            ]);
+        }
+
+        $updated = $service->updateDeliveryLocation($shipment, $data);
+
+        $payload = $updated->toArray();
+        if (isset($updated->pricing_update)) {
+            $payload['pricing_update'] = $updated->pricing_update;
+        }
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Delivery location updated and delivery charge recalculated successfully.',
+            'data'    => $payload,
+        ]);
+    }
+
     private function merchantFromApiKey(Request $request): Merchant
     {
-        $key = $request->header('X-API-KEY');
-        abort_unless($key, 401, 'X-API-KEY header is required.');
+        $key = $request->header('X-API-KEY')
+            ?? $request->header('X-Tukaatu-Key')
+            ?? $request->bearerToken();
+
+        abort_unless($key, 401, 'API key header is required (X-API-KEY or X-Tukaatu-Key).');
+
+        $keyHash = hash('sha256', (string) $key);
 
         $apiKey = DB::table('merchant_api_keys')
-            ->where('key', $key)
+            ->where(function ($q) use ($key, $keyHash) {
+                $q->where('key', $key)
+                  ->orWhere('key_hash', $keyHash);
+            })
             ->where(function ($q) {
                 $q->where('is_active', true)->orWhereNull('is_active');
             })

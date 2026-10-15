@@ -22,6 +22,8 @@ Route::prefix('v1/store')
         Route::post('shipments/quote', [StoreShipmentApiController::class, 'quote'])->name('shipments.quote');
         Route::post('shipments', [StoreShipmentApiController::class, 'store'])->name('shipments.store');
         Route::get('shipments/{trackingNumber}', [StoreShipmentApiController::class, 'show'])->name('shipments.show');
+        Route::post('shipments/{trackingNumber}/delivery-location/preview', [StoreShipmentApiController::class, 'previewDeliveryLocation'])->name('shipments.delivery-location.preview');
+        Route::post('shipments/{trackingNumber}/delivery-location', [StoreShipmentApiController::class, 'updateDeliveryLocation'])->name('shipments.delivery-location');
     });
 
 Route::prefix('v1/merchant')

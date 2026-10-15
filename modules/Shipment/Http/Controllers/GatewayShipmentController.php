@@ -422,7 +422,10 @@ final class GatewayShipmentController extends Controller
 
         $shipment = Shipment::query()
             ->where('merchant_id', $merchantId)
-            ->where('tracking_number', $trackingNumber)
+            ->where(function ($q) use ($trackingNumber) {
+                $q->where('tracking_number', $trackingNumber)
+                  ->orWhere('merchant_order_id', $trackingNumber);
+            })
             ->firstOrFail();
 
         $data = $request->validate([
@@ -471,7 +474,10 @@ final class GatewayShipmentController extends Controller
 
         $shipment = Shipment::query()
             ->where('merchant_id', $merchantId)
-            ->where('tracking_number', $trackingNumber)
+            ->where(function ($q) use ($trackingNumber) {
+                $q->where('tracking_number', $trackingNumber)
+                  ->orWhere('merchant_order_id', $trackingNumber);
+            })
             ->firstOrFail();
 
         $data = $request->validate([
@@ -483,17 +489,37 @@ final class GatewayShipmentController extends Controller
             'receiver_name'     => ['nullable', 'string', 'max:150'],
             'receiver_phone'    => ['nullable', 'string', 'max:50'],
             'receiver_email'    => ['nullable', 'email', 'max:150'],
+            'preview_only'      => ['nullable', 'boolean'],
+            'dry_run'           => ['nullable', 'boolean'],
+            'reassign_rider'    => ['nullable', 'boolean'],
         ]);
 
         try {
+            if ($request->boolean('preview_only') || $request->boolean('dry_run')) {
+                $preview = $this->shipmentService->previewDeliveryLocationRecalculation(
+                    shipment: $shipment,
+                    data: $data
+                );
+
+                return ApiResponse::success(
+                    $preview,
+                    'Delivery location recalculation previewed (dry run).'
+                );
+            }
+
             $updated = $this->shipmentService->updateDeliveryLocation(
                 shipment: $shipment,
                 data: $data,
                 userId: null
             );
 
+            $payload = $updated->toArray();
+            if (isset($updated->pricing_update)) {
+                $payload['pricing_update'] = $updated->pricing_update;
+            }
+
             return ApiResponse::success(
-                $updated,
+                $payload,
                 'Delivery location updated and delivery charge recalculated successfully.'
             );
         } catch (ValidationException $e) {

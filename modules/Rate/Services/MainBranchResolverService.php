@@ -125,24 +125,53 @@ final class MainBranchResolverService
 
     private function activeZones(): Collection
     {
-        return DB::table('coverage_locations')
-            ->where('status', 'active')
-            ->whereNotNull('latitude')
-            ->whereNotNull('longitude')
-            ->whereIn('type', [
+        return DB::table('coverage_locations as cl')
+            ->where('cl.status', 'active')
+            ->whereNotNull('cl.latitude')
+            ->whereNotNull('cl.longitude')
+            ->whereIn('cl.type', [
                 'main_branch_zone',
                 'sub_branch_zone',
             ])
-            ->orderBy('id')
+            ->where(function ($query) {
+                // If a branch is associated with this coverage location, it must be active/operable.
+                // Franchise branches require status = 'active' OR ('approved' with 'account_configured').
+                // Other branches require status = 'active'.
+                $query->whereNotExists(function ($sub) {
+                    $sub->select(DB::raw(1))
+                        ->from('branches as b')
+                        ->where(function ($match) {
+                            $match->whereColumn('b.id', 'cl.branch_id')
+                                ->orWhereColumn('b.coverage_location_id', 'cl.id');
+                        })
+                        ->where(function ($inactive) {
+                            $inactive->where(function ($franchise) {
+                                $franchise->where('b.type', 'franchise_branch')
+                                    ->where(function ($notOk) {
+                                        $notOk->where('b.status', '!=', 'active')
+                                            ->where(function ($appr) {
+                                                $appr->where('b.status', '!=', 'approved')
+                                                    ->orWhere('b.account_invitation_status', '!=', 'account_configured')
+                                                    ->orWhereNull('b.account_invitation_status');
+                                            });
+                                    });
+                            })->orWhere(function ($other) {
+                                $other->where('b.type', '!=', 'franchise_branch')
+                                    ->where('b.status', '!=', 'active');
+                            });
+                        });
+                });
+            })
+            ->orderBy('cl.id')
             ->get([
-                'id',
-                'name',
-                'code',
-                'type',
-                'parent_id',
-                'latitude',
-                'longitude',
-                'coverage_radius_km',
+                'cl.id',
+                'cl.name',
+                'cl.code',
+                'cl.type',
+                'cl.parent_id',
+                'cl.latitude',
+                'cl.longitude',
+                'cl.coverage_radius_km',
             ]);
     }
 

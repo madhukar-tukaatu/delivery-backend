@@ -717,7 +717,8 @@ final class PickupRequestService
     public function receiveShipment(
         PickupRequest $pickup,
         Shipment $shipment,
-        User $staff
+        User $staff,
+        array $weightData = []
     ): PickupRequestShipment {
         $synced = false;
 
@@ -726,6 +727,7 @@ final class PickupRequestService
                 $pickup,
                 $shipment,
                 $staff,
+                $weightData,
                 &$synced
             ): PickupRequestShipment {
                 $pickup = PickupRequest::query()
@@ -843,6 +845,118 @@ final class PickupRequestService
                 ) {
                     $shipment->current_sub_branch_id =
                         $shipment->origin_sub_branch_id;
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | Weight & Dimensions Intake Check (Actual vs Volumetric)
+                |--------------------------------------------------------------------------
+                */
+                $actualWeight = isset($weightData['actual_weight']) && (float) $weightData['actual_weight'] > 0
+                    ? (float) $weightData['actual_weight']
+                    : (isset($weightData['weight']) && (float) $weightData['weight'] > 0 ? (float) $weightData['weight'] : null);
+
+                $lengthCm = isset($weightData['length_cm']) && (float) $weightData['length_cm'] > 0
+                    ? (float) $weightData['length_cm']
+                    : ($this->shipmentHasColumn('length_cm') && $shipment->length_cm ? (float) $shipment->length_cm : null);
+
+                $widthCm = isset($weightData['width_cm']) && (float) $weightData['width_cm'] > 0
+                    ? (float) $weightData['width_cm']
+                    : ($this->shipmentHasColumn('width_cm') && $shipment->width_cm ? (float) $shipment->width_cm : null);
+
+                $heightCm = isset($weightData['height_cm']) && (float) $weightData['height_cm'] > 0
+                    ? (float) $weightData['height_cm']
+                    : ($this->shipmentHasColumn('height_cm') && $shipment->height_cm ? (float) $shipment->height_cm : null);
+
+                $volumetricDivisor = 5000;
+                try {
+                    $volumetricDivisor = max(1, (float) (DB::table('rate_settings')->value('volumetric_divisor') ?? 5000));
+                } catch (\Throwable $e) {}
+
+                $volumetricWeight = null;
+                if ($lengthCm !== null && $widthCm !== null && $heightCm !== null) {
+                    $volumetricWeight = round(($lengthCm * $widthCm * $heightCm) / $volumetricDivisor, 2);
+                }
+
+                $effectiveActual = $actualWeight ?? (float) ($shipment->actual_weight ?: $shipment->weight ?: 1.5);
+                $chargeableWeight = max($effectiveActual, (float) ($volumetricWeight ?? 0));
+
+                if ($actualWeight !== null || $volumetricWeight !== null || !empty($weightData)) {
+                    $shipment->weight = $chargeableWeight;
+                    if ($this->shipmentHasColumn('actual_weight')) {
+                        $shipment->actual_weight = $effectiveActual;
+                    }
+                    if ($this->shipmentHasColumn('volumetric_weight')) {
+                        $shipment->volumetric_weight = $volumetricWeight ?? 0;
+                    }
+                    if ($this->shipmentHasColumn('chargeable_weight')) {
+                        $shipment->chargeable_weight = $chargeableWeight;
+                    }
+                    if ($this->shipmentHasColumn('length_cm') && $lengthCm !== null) {
+                        $shipment->length_cm = $lengthCm;
+                    }
+                    if ($this->shipmentHasColumn('width_cm') && $widthCm !== null) {
+                        $shipment->width_cm = $widthCm;
+                    }
+                    if ($this->shipmentHasColumn('height_cm') && $heightCm !== null) {
+                        $shipment->height_cm = $heightCm;
+                    }
+
+                    try {
+                        $resolver = app(\Modules\Shipment\Services\CheckoutDeliveryChargeResolver::class);
+                        $resolved = $resolver->resolveFromShipment($shipment);
+                        $newFare = round((float) ($resolved['delivery_charge'] ?? $shipment->delivery_charge), 2);
+                        $shipment->delivery_charge = $newFare;
+                        if (!empty($resolved['breakdown'])) {
+                            $shipment->delivery_charge_breakdown = $resolved['breakdown'];
+                        }
+
+                        $paidBy = strtolower((string) ($shipment->delivery_charge_paid_by ?? 'customer'));
+                        $podAmount = (float) ($shipment->pod_amount ?? 0);
+                        if ($paidBy === 'customer') {
+                            $shipment->total_collectable_amount = round($podAmount + $newFare, 2);
+                        } else {
+                            $shipment->total_collectable_amount = round($podAmount, 2);
+                        }
+
+                        // Sync downstream pricing breakdown if table exists
+                        if (\Illuminate\Support\Facades\Schema::hasTable('shipment_price_breakdowns')) {
+                            \Illuminate\Support\Facades\DB::table('shipment_price_breakdowns')
+                                ->where('shipment_id', $shipment->id)
+                                ->update([
+                                    'final_price' => $shipment->delivery_charge,
+                                    'snapshot_json' => json_encode($shipment->delivery_charge_breakdown),
+                                    'updated_at' => now(),
+                                ]);
+                        }
+
+                        // Sync invoices if already created
+                        $invoices = \Modules\Billing\Models\Invoice::query()->where('shipment_id', $shipment->id)->get();
+                        if ($invoices->isNotEmpty()) {
+                            $split = \Modules\Settlement\Services\SettlementWorkflowService::splitDeliveryCharge(
+                                (float) $shipment->delivery_charge,
+                                (string) ($shipment->delivery_free_by ?? 'none'),
+                                (string) ($shipment->delivery_charge_paid_by ?? 'customer')
+                            );
+                            foreach ($invoices as $inv) {
+                                $payerType = strtolower((string) ($inv->payer_type ?? 'merchant'));
+                                $share = $payerType === 'company' ? $split['marketplace_share'] : $split['store_share'];
+                                $podFee = (float) ($shipment->pod_charge ?? 0);
+                                if ($payerType === 'company') {
+                                    $podFee = 0.0;
+                                }
+                                $invTotal = round($share + $podFee, 2);
+                                $inv->subtotal = $invTotal;
+                                $inv->total_amount = $invTotal;
+                                if (\Illuminate\Support\Facades\Schema::hasColumn('invoices', 'outstanding_amount')) {
+                                    $inv->outstanding_amount = max(0.0, round($invTotal - (float) ($inv->paid_amount ?? 0), 2));
+                                }
+                                $inv->save();
+                            }
+                        }
+                    } catch (\Throwable $e) {
+                        \Illuminate\Support\Facades\Log::warning('PickupRequestService: could not recalculate fare on receive: ' . $e->getMessage());
+                    }
                 }
 
                 /*

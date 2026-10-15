@@ -91,14 +91,19 @@ class SettlementWorkflowService
     public static function normalizeFreeBy(mixed $value): string
     {
         $freeBy = strtolower(trim((string) ($value ?? 'none')));
+        if ($freeBy === 'admin') {
+            return 'marketplace';
+        }
+        if ($freeBy === 'merchant') {
+            return 'store';
+        }
 
         return in_array($freeBy, ['store', 'marketplace'], true) ? $freeBy : 'none';
     }
 
     /**
      * Read delivery_free_by from a create/assign payload.
-     * Absent means none. Invalid values are rejected.
-     * Merchants cannot set marketplace.
+     * Absent means none. Supports none, admin/marketplace, or merchant/store.
      */
     public static function resolveFreeBy(array $input, bool $allowMarketplace = true): string
     {
@@ -111,10 +116,14 @@ class SettlementWorkflowService
         }
 
         $freeBy = strtolower(trim((string) $raw));
+        if ($freeBy === 'admin') {
+            $freeBy = 'marketplace';
+        } elseif ($freeBy === 'merchant') {
+            $freeBy = 'store';
+        }
+
         if (! in_array($freeBy, ['none', 'store', 'marketplace'], true)) {
-            throw ValidationException::withMessages([
-                'delivery_free_by' => 'Free delivery must be none, store, or marketplace.',
-            ]);
+            return 'none';
         }
         if ($freeBy === 'marketplace' && ! $allowMarketplace) {
             throw ValidationException::withMessages([

@@ -436,10 +436,10 @@ final class ShipmentService
                         $charges['total_collectable_amount'],
 
                     'delivery_charge_paid_by' =>
-                        $data['delivery_charge_paid_by'],
+                        $charges['paid_by'] ?? ($data['delivery_charge_paid_by'] ?? 'customer'),
 
                     'delivery_free_by' =>
-                        \Modules\Settlement\Services\SettlementWorkflowService::resolveFreeBy($data, true),
+                        $charges['free_by'] ?? \Modules\Settlement\Services\SettlementWorkflowService::resolveFreeBy($data, true),
 
                     'self_drop' =>
                         $selfDrop,
@@ -900,10 +900,20 @@ final class ShipmentService
         );
         $deliveryCharge = round((float) $priced['delivery_charge'], 2);
 
-        $paidBy = strtolower((string) ($data['delivery_charge_paid_by'] ?? 'merchant'));
+        $freeBy = \Modules\Settlement\Services\SettlementWorkflowService::normalizeFreeBy(
+            $data['delivery_free_by'] ?? data_get($data, 'payment.delivery_free_by') ?? 'none'
+        );
+
+        $defaultPaidBy = in_array($freeBy, ['marketplace', 'admin'], true)
+            ? 'admin'
+            : (in_array($freeBy, ['store', 'merchant'], true) ? 'merchant' : 'customer');
+
+        $paidBy = strtolower((string) ($data['delivery_charge_paid_by'] ?? $defaultPaidBy));
+
+        $customerPaysDelivery = ($freeBy === 'none' && $paidBy === 'customer');
 
         $totalCollectable = $podAmount
-            + ($paidBy === 'customer' ? $deliveryCharge : 0.0);
+            + ($customerPaysDelivery ? $deliveryCharge : 0.0);
 
         return [
             'pod_amount' => $podAmount,
@@ -912,6 +922,8 @@ final class ShipmentService
             'breakdown' => $priced['breakdown'] ?? null,
             'pricing_source' => $priced['source'] ?? null,
             'pod_charge' => round((float) ($priced['pod_charge'] ?? $data['pod_charge'] ?? 0), 2),
+            'paid_by' => $paidBy,
+            'free_by' => $freeBy,
         ];
     }
 

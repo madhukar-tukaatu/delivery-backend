@@ -1613,7 +1613,9 @@ final class PricingEngineService
             ]);
 
             $node = $payload['sub_branch'] ?? $payload['branch'] ?? null;
-            if (! $node || $node->latitude === null || $node->longitude === null) {
+            $nodeLat = $node?->latitude ?? $node?->office_latitude ?? $node?->lat ?? null;
+            $nodeLng = $node?->longitude ?? $node?->office_longitude ?? $node?->lng ?? null;
+            if (! $node || $nodeLat === null || $nodeLng === null) {
                 return null;
             }
 
@@ -1623,8 +1625,8 @@ final class PricingEngineService
                 'distance_km' => (float) $assigner->distanceKm(
                     $latitude,
                     $longitude,
-                    (float) $node->latitude,
-                    (float) $node->longitude
+                    (float) $nodeLat,
+                    (float) $nodeLng
                 ),
             ];
         } catch (\Throwable $e) {

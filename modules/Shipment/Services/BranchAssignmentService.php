@@ -668,6 +668,15 @@ final class BranchAssignmentService
         }
 
         if (
+            isset($branch->office_latitude)
+            &&
+            $branch->office_latitude !== null
+        ) {
+            return (float)
+                $branch->office_latitude;
+        }
+
+        if (
             isset($branch->lat)
             &&
             $branch->lat !== null
@@ -689,6 +698,15 @@ final class BranchAssignmentService
         ) {
             return (float)
                 $branch->longitude;
+        }
+
+        if (
+            isset($branch->office_longitude)
+            &&
+            $branch->office_longitude !== null
+        ) {
+            return (float)
+                $branch->office_longitude;
         }
 
         if (

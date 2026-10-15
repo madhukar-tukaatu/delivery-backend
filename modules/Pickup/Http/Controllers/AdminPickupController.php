@@ -734,11 +734,20 @@ final class AdminPickupController extends Controller
             );
         }
 
+        $weightData = $request->validate([
+            'actual_weight' => ['sometimes', 'nullable', 'numeric', 'min:0.01'],
+            'weight' => ['sometimes', 'nullable', 'numeric', 'min:0.01'],
+            'length_cm' => ['sometimes', 'nullable', 'numeric', 'min:0'],
+            'width_cm' => ['sometimes', 'nullable', 'numeric', 'min:0'],
+            'height_cm' => ['sometimes', 'nullable', 'numeric', 'min:0'],
+        ]);
+
         $updatedItem =
             $this->pickupRequestService->receiveShipment(
                 $pickup,
                 $shipmentModel,
-                $request->user()
+                $request->user(),
+                $weightData
             );
 
         $pickup->load([

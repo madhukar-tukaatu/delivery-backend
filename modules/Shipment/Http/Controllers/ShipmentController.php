@@ -237,32 +237,111 @@ final class ShipmentController extends Controller
         $this->authorizeShipment($request, $shipment);
 
         $shipment->load([
-            // Parties – expand merchant columns if your table has them
-            'merchant:id,name,owner_name,contact_person,phone,email,address,city,area,pickup_address,pickup_city,pickup_area',
+            // Parties
+            'merchant',
             'pickupLocation',
             'items',
 
             // Branches
-            'originBranch:id,name,area,code,latitude,longitude,office_latitude,office_longitude',
-            'originSubBranch:id,name,area,code,latitude,longitude,office_latitude,office_longitude',
-            'destinationBranch:id,name,area,code,latitude,longitude,office_latitude,office_longitude',
-            'destinationSubBranch:id,name,area,code,latitude,longitude,office_latitude,office_longitude',
-            'currentBranch:id,name,area,code,latitude,longitude,office_latitude,office_longitude',
-            'currentSubBranch:id,name,area,code,latitude,longitude,office_latitude,office_longitude',
-            'nextHopBranch:id,name,area,code,latitude,longitude,office_latitude,office_longitude',
+            'originBranch',
+            'originSubBranch',
+            'destinationBranch',
+            'destinationSubBranch',
+            'currentBranch',
+            'currentSubBranch',
+            'nextHopBranch',
 
             // Route
             'routeSteps'     => fn($q)     => $q->orderBy('sequence'),
-            'routeSteps.fromBranch:id,name,area,latitude,longitude,office_latitude,office_longitude',
-            'routeSteps.toBranch:id,name,area,latitude,longitude,office_latitude,office_longitude',
+            'routeSteps.fromBranch',
+            'routeSteps.toBranch',
 
             // Activity (oldest → newest for timeline)
             'trackingEvents' => fn($q) => $q->orderBy('created_at'),
         ]);
 
+        // Fallback relation resolution if not automatically loaded
+        if (! $shipment->pickupLocation && $shipment->pickup_location_id) {
+            $loc = \Modules\Merchant\Models\MerchantPickupLocation::find($shipment->pickup_location_id);
+            if ($loc) {
+                $shipment->setRelation('pickupLocation', $loc);
+            }
+        }
+        if (! $shipment->pickupLocation && $shipment->merchant) {
+            $defaultLoc = $shipment->merchant->pickupLocations()->where('is_default', true)->first()
+                ?? $shipment->merchant->pickupLocations()->first();
+            if ($defaultLoc) {
+                $shipment->setRelation('pickupLocation', $defaultLoc);
+            }
+        }
+        if (! $shipment->originBranch && $shipment->origin_branch_id) {
+            $branch = \Modules\Branch\Models\Branch::find($shipment->origin_branch_id);
+            if ($branch) {
+                $shipment->setRelation('originBranch', $branch);
+            }
+        }
+        if (! $shipment->destinationBranch && $shipment->destination_branch_id) {
+            $branch = \Modules\Branch\Models\Branch::find($shipment->destination_branch_id);
+            if ($branch) {
+                $shipment->setRelation('destinationBranch', $branch);
+            }
+        }
+        if (! $shipment->currentBranch && $shipment->current_branch_id) {
+            $branch = \Modules\Branch\Models\Branch::find($shipment->current_branch_id);
+            if ($branch) {
+                $shipment->setRelation('currentBranch', $branch);
+            }
+        }
+
         // is_transfer, hop_meta, etc. already on $appends – no extra append() needed
 
         $payload = $shipment->toArray();
+
+        $originId = (int) ($shipment->origin_branch_id ?? 0);
+        $destId = (int) ($shipment->destination_branch_id ?? 0);
+        $isSameBranchShipment = ($originId > 0 && $originId === $destId);
+
+        // Ensure relations and friendly names are explicitly present in payload
+        $originName = $shipment->originBranch?->name
+            ?? DB::table('branches')->where('id', $shipment->origin_branch_id)->value('name')
+            ?? DB::table('coverage_locations')->where('id', $shipment->origin_branch_id)->value('name');
+
+        $destName = $shipment->destinationBranch?->name
+            ?? DB::table('branches')->where('id', $shipment->destination_branch_id)->value('name')
+            ?? DB::table('coverage_locations')->where('id', $shipment->destination_branch_id)->value('name');
+
+        if ($isSameBranchShipment) {
+            $destName = $originName ?? $destName;
+        }
+
+        $currentName = $shipment->currentBranch?->name
+            ?? DB::table('branches')->where('id', $shipment->current_branch_id)->value('name')
+            ?? DB::table('coverage_locations')->where('id', $shipment->current_branch_id)->value('name')
+            ?? ($isSameBranchShipment ? $originName : null);
+
+        if ($shipment->relationLoaded('originBranch') && $shipment->originBranch) {
+            $payload['origin_branch'] = $shipment->originBranch->toArray();
+        }
+        if ($shipment->relationLoaded('destinationBranch') && $shipment->destinationBranch) {
+            $payload['destination_branch'] = $isSameBranchShipment && $shipment->originBranch
+                ? $shipment->originBranch->toArray()
+                : $shipment->destinationBranch->toArray();
+        }
+        if ($shipment->relationLoaded('currentBranch') && $shipment->currentBranch) {
+            $payload['current_branch'] = $shipment->currentBranch->toArray();
+        }
+        if ($shipment->relationLoaded('merchant') && $shipment->merchant) {
+            $payload['merchant'] = $shipment->merchant->toArray();
+            $payload['merchant_name'] = $shipment->merchant->name ?? $shipment->merchant->business_name;
+        }
+        if ($shipment->relationLoaded('pickupLocation') && $shipment->pickupLocation) {
+            $payload['pickup_location'] = $shipment->pickupLocation->toArray();
+            $payload['pickup_location_name'] = $shipment->pickupLocation->name;
+        }
+
+        $payload['origin_branch_name'] = $originName;
+        $payload['destination_branch_name'] = $destName;
+        $payload['current_branch_name'] = $currentName;
 
         if (is_string($payload['packet_products'] ?? null)) {
             $payload['packet_products'] = json_decode($payload['packet_products'], true) ?? [];
@@ -272,6 +351,71 @@ final class ShipmentController extends Controller
                 $payload['delivery_charge_breakdown'],
                 true
             ) ?? null;
+        }
+
+        // Recalculate stale breakdown if origin and destination are the same branch
+        // but breakdown was priced as inter-branch (or assigned to an inactive franchise like Banepa)
+        $breakdownData = $payload['delivery_charge_breakdown'] ?? null;
+
+        $breakdownSameBranch = $breakdownData['route']['same_branch']
+            ?? (
+                isset($breakdownData['pickup_branch']['id'], $breakdownData['delivery_branch']['id'])
+                && (int) $breakdownData['pickup_branch']['id'] === (int) $breakdownData['delivery_branch']['id']
+            );
+
+        if (
+            $isSameBranchShipment &&
+            $breakdownData !== null &&
+            $breakdownSameBranch === false
+        ) {
+            try {
+                $pricingEngine = app(\Modules\Rate\Services\PricingEngineService::class);
+                // When origin and destination branch are identical, calculate using pickup branch zone
+                $freshBreakdown = $pricingEngine->calculate([
+                    'pickup_latitude'   => (float) ($shipment->pickup_lat ?? 0),
+                    'pickup_longitude'  => (float) ($shipment->pickup_lng ?? 0),
+                    'delivery_latitude' => (float) ($shipment->pickup_lat ?? 0),
+                    'delivery_longitude'=> (float) ($shipment->pickup_lng ?? 0),
+                    'service_type'      => $shipment->service_type ?? 'standard',
+                    'parcel_weight'     => (float) ($shipment->weight ?? 1.5),
+                    'weight'            => (float) ($shipment->weight ?? 1.5),
+                    'parcel_type'       => $shipment->parcel_type ?? 'non_fragile',
+                    'payment_type'      => $shipment->payment_type ?? 'pod',
+                    'pod_amount'        => (float) ($shipment->pod_amount ?? 0),
+                ], $shipment->merchant_id ? (int) $shipment->merchant_id : null);
+
+                if (! empty($freshBreakdown['final_price'])) {
+                    $newDeliveryCharge = round((float) $freshBreakdown['final_price'], 2);
+                    $freeBy = \Modules\Settlement\Services\SettlementWorkflowService::normalizeFreeBy(
+                        $shipment->delivery_free_by ?? 'none'
+                    );
+                    $paidBy = strtolower((string) ($shipment->delivery_charge_paid_by ?? 'customer'));
+                    $customerPaysDelivery = ($freeBy === 'none' && $paidBy === 'customer');
+                    $podAmount = (float) ($shipment->pod_amount ?? 0);
+                    $newTotalCollectable = $podAmount + ($customerPaysDelivery ? $newDeliveryCharge : 0.0);
+
+                    $actualDistance = round($this->distanceKm(
+                        (float) ($shipment->pickup_lat ?? 0),
+                        (float) ($shipment->pickup_lng ?? 0),
+                        (float) ($shipment->delivery_lat ?? 0),
+                        (float) ($shipment->delivery_lng ?? 0)
+                    ), 2);
+
+                    $shipment->forceFill([
+                        'delivery_charge_breakdown' => $freshBreakdown,
+                        'delivery_charge'           => $newDeliveryCharge,
+                        'route_distance_km'         => $actualDistance > 0 ? $actualDistance : $shipment->route_distance_km,
+                        'total_collectable_amount'  => round($newTotalCollectable, 2),
+                    ])->save();
+
+                    $payload['delivery_charge_breakdown'] = $freshBreakdown;
+                    $payload['delivery_charge'] = $newDeliveryCharge;
+                    $payload['route_distance_km'] = $actualDistance > 0 ? $actualDistance : $shipment->route_distance_km;
+                    $payload['total_collectable_amount'] = round($newTotalCollectable, 2);
+                }
+            } catch (\Throwable $e) {
+                // Keep existing breakdown on calculation error
+            }
         }
 
         $payload['price_breakdown'] = $this->buildPriceBreakdown(
@@ -318,6 +462,22 @@ final class ShipmentController extends Controller
 
         if ($totalDistance <= 0 && $routeStepsTotal > 0) {
             $totalDistance = $routeStepsTotal;
+        }
+
+        $originId = (int) ($shipment->origin_branch_id ?? 0);
+        $destId = (int) ($shipment->destination_branch_id ?? 0);
+        $isSameBranch = ($originId > 0 && $originId === $destId);
+
+        if ($isSameBranch && ($totalDistance > 20 || $totalDistance <= 0)) {
+            $directDist = $this->haversineKm(
+                (float) ($shipment->pickup_lat ?? $originLat),
+                (float) ($shipment->pickup_lng ?? $originLng),
+                (float) ($shipment->delivery_lat ?? $destLat),
+                (float) ($shipment->delivery_lng ?? $destLng)
+            );
+            if ($directDist > 0) {
+                $totalDistance = round($directDist, 2);
+            }
         }
 
         if ($totalDistance <= 0 && $originLat && $destLat) {
@@ -418,15 +578,39 @@ final class ShipmentController extends Controller
 
         $b = $raw['breakdown'] ?? $raw;
 
+        $pickupBranchName = $raw['pickup_branch']['name'] ?? null;
+        $deliveryBranchName = $raw['delivery_branch']['name'] ?? null;
+        $sameBranch = (bool) (
+            $raw['route']['same_branch']
+            ?? (
+                isset($raw['pickup_branch']['id'], $raw['delivery_branch']['id'])
+                && (int) $raw['pickup_branch']['id'] === (int) $raw['delivery_branch']['id']
+            )
+        );
+
+        $routeBaseRate = (float) (
+            $b['route_base_rate']['total']
+            ?? $b['route_base_rate']['amount']
+            ?? $raw['route']['base_rate']
+            ?? 0
+        );
+
         return [
+            'pickup_branch_name'    => $pickupBranchName,
+            'delivery_branch_name'  => $deliveryBranchName,
+            'same_branch'           => $sameBranch,
+            'route_base_rate'       => $routeBaseRate,
             'base_pickup_fee'       => (float) ($shipment->pickup_fee ?? 0),
-            'base_delivery_fee'     => (float) (
-                $b['route_base_rate']['total'] ?? $b['route_base_rate']['amount'] ?? 0
-            ),
+            'base_delivery_fee'     => $routeBaseRate,
             'base_transfer_fee'     => 0,
             'pickup_extra_charge'   => 0,
             'delivery_extra_charge' => (float) ($b['extra_delivery_distance']['total'] ?? 0),
+            'extra_distance_km'     => (float) ($b['extra_delivery_distance']['extra_distance_km'] ?? 0),
+            'extra_distance_rate'   => (float) ($b['extra_delivery_distance']['rate_per_km'] ?? 0),
             'weight_charge'         => (float) ($b['additional_weight']['total'] ?? 0),
+            'fragile_charge'        => (float) ($b['fragile']['total'] ?? 0),
+            'same_day_charge'       => (float) ($b['same_day']['total'] ?? 0),
+            'express_charge'        => (float) ($b['express']['total'] ?? 0),
             'pod_fee'               => (float) ($shipment->pod_charge ?? 0),
             'final_price'           => (float) (
                 $raw['final_price'] ?? $shipment->delivery_charge ?? 0

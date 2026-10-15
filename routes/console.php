@@ -393,10 +393,10 @@ Artisan::command('finance:reconcile-shipment-weights
                     $podFee = round((float) ($shipment->pod_charge ?? $priced['pod_charge'] ?? 0), 2);
 
                     if ($payerType === 'company') {
-                        $fareShare = (float) $split['marketplace_share'];
+                        $fareShare = (float) ($split['marketplace_share'] > 0 ? $split['marketplace_share'] : $newFare);
                         $podFee = 0.0;
                     } else {
-                        $fareShare = (float) $split['store_share'];
+                        $fareShare = (float) ($split['store_share'] > 0 ? $split['store_share'] : $newFare);
                     }
 
                     $newTotal = round($fareShare + $podFee, 2);
@@ -585,4 +585,336 @@ Artisan::command('finance:reconcile-shipment-weights
         $this->info(($dry ? '[DRY RUN COMPLETE] ' : '[SUCCESS] ') . "Processed {$touchedShipments} shipment(s).");
     }
 )->purpose('Reconcile shipments to target weight and sync all financial tables');
+
+Artisan::command(
+    'finance:sync-all-shipment-tables {--trackings= : Comma-separated list of tracking numbers} {--all : Process all delivered shipments} {--dry-run : Preview changes without saving}',
+    function (
+        \Modules\Settlement\Services\SettlementWorkflowService $settlementWorkflow,
+        \Modules\Billing\Services\BranchShareService $branchShares,
+        \Modules\Billing\Services\BranchCommissionService $commissionService
+    ) {
+        $dry = (bool) $this->option('dry-run');
+        $trackingInput = $this->option('trackings');
+        $all = (bool) $this->option('all');
+
+        $exactFares = [
+            'TEX-20260929-761355' => 99.00,
+            'TEX-20261002-410108' => 99.00,
+            'TEX-20261004-940000' => 246.13,
+            'TEX-20261005-348246' => 118.80,
+            'TEX-20261006-313385' => 173.25,
+            'TEX-20261008-349950' => 128.29,
+            'TEX-20261008-865086' => 128.29,
+            'TEX-20261010-063516' => 213.80,
+            'TEX-20261010-295085' => 99.00,
+            'TEX-20261010-545039' => 249.00,
+            'TEX-20261011-164414' => 99.00,
+            'TEX-20261012-530417' => 99.00,
+            'TEX-20261012-314732' => 99.00,
+            'TEX-20261012-328515' => 99.00,
+        ];
+
+        $defaultTrackings = array_keys($exactFares);
+
+        $query = \Modules\Shipment\Models\Shipment::query();
+        if ($trackingInput) {
+            $trackings = array_filter(array_map('trim', explode(',', $trackingInput)));
+            $query->whereIn('tracking_number', $trackings);
+        } elseif (! $all) {
+            $query->whereIn('tracking_number', $defaultTrackings);
+        }
+
+        $shipments = $query->orderBy('id')->get();
+
+        if ($shipments->isEmpty()) {
+            $this->warn("No shipments found matching criteria.");
+            return;
+        }
+
+        $this->info(($dry ? '[DRY RUN] ' : '') . "Starting downstream financial tables synchronization for " . $shipments->count() . " shipment(s)...");
+
+        $touchedShipments = 0;
+
+        foreach ($shipments as $shipment) {
+            $this->line("----------------------------------------------------------------");
+            $targetFare = round((float) ($exactFares[$shipment->tracking_number] ?? $shipment->delivery_charge), 2);
+            $targetWeight = round((float) ($shipment->weight ?? 1.5), 2);
+
+            $this->info("Shipment [{$shipment->tracking_number}] (ID: {$shipment->id}, Status: {$shipment->status})");
+            $this->line("  Target Delivery Charge: NPR {$targetFare} | Target Weight: {$targetWeight} kg");
+
+            if ($dry) {
+                $this->line("  [DRY RUN] Would sync: invoices, branch shares, commission bills, breakdowns, settlements.");
+                $touchedShipments++;
+                continue;
+            }
+
+            $stats = \Illuminate\Support\Facades\DB::transaction(function () use (
+                $shipment,
+                $targetFare,
+                $targetWeight,
+                $settlementWorkflow,
+                $branchShares,
+                $commissionService
+            ) {
+                // 1. UPDATE SHIPMENT
+                $shipment->weight = $targetWeight;
+                if (\Illuminate\Support\Facades\Schema::hasColumn('shipments', 'actual_weight')) {
+                    $shipment->actual_weight = $targetWeight;
+                }
+                if (\Illuminate\Support\Facades\Schema::hasColumn('shipments', 'chargeable_weight')) {
+                    $shipment->chargeable_weight = $targetWeight;
+                }
+                $shipment->delivery_charge = $targetFare;
+
+                $breakdown = $shipment->delivery_charge_breakdown;
+                if (is_string($breakdown)) {
+                    $breakdown = json_decode($breakdown, true);
+                }
+                if (is_array($breakdown)) {
+                    $breakdown['final_price'] = $targetFare;
+                    $breakdown['delivery_charge'] = $targetFare;
+                    $shipment->delivery_charge_breakdown = $breakdown;
+                }
+
+                $paidBy = strtolower((string) ($shipment->delivery_charge_paid_by ?? 'customer'));
+                $podAmount = (float) ($shipment->pod_amount ?? 0);
+                if ($paidBy === 'customer') {
+                    $shipment->total_collectable_amount = round($podAmount + $targetFare, 2);
+                } else {
+                    $shipment->total_collectable_amount = round($podAmount, 2);
+                }
+                $shipment->save();
+
+                // 2. SECONDARY CHARGE & TRANSACTION TABLES
+                if (\Illuminate\Support\Facades\Schema::hasTable('shipment_charges')) {
+                    \Illuminate\Support\Facades\DB::table('shipment_charges')
+                        ->where('shipment_id', $shipment->id)
+                        ->update([
+                            'delivery_charge' => $targetFare,
+                            'breakdown'       => json_encode($breakdown),
+                            'updated_at'      => now(),
+                        ]);
+                }
+
+                if (\Illuminate\Support\Facades\Schema::hasTable('pod_transactions')) {
+                    \Illuminate\Support\Facades\DB::table('pod_transactions')
+                        ->where('shipment_id', $shipment->id)
+                        ->update([
+                            'delivery_charge' => $targetFare,
+                            'total_collected' => $shipment->total_collectable_amount,
+                            'updated_at'      => now(),
+                        ]);
+                }
+
+                if (\Illuminate\Support\Facades\Schema::hasTable('shipment_charge_breakdowns')) {
+                    \Illuminate\Support\Facades\DB::table('shipment_charge_breakdowns')
+                        ->where('shipment_id', $shipment->id)
+                        ->update([
+                            'delivery_charge' => $targetFare,
+                            'updated_at'      => now(),
+                        ]);
+                }
+
+                if (\Illuminate\Support\Facades\Schema::hasTable('shipment_price_breakdowns')) {
+                    \Illuminate\Support\Facades\DB::table('shipment_price_breakdowns')
+                        ->updateOrInsert(
+                            ['shipment_id' => $shipment->id],
+                            [
+                                'final_price' => $targetFare,
+                                'delivery_extra_charge' => $breakdown['delivery_extra_charge'] ?? $breakdown['breakdown']['extra_delivery_distance']['total'] ?? 0.00,
+                                'weight_charge' => 0.00,
+                                'snapshot_json' => json_encode($breakdown),
+                                'updated_at' => now(),
+                            ]
+                        );
+                }
+
+                // 3. INVOICES, ITEMS, PAYMENTS & MARKETPLACE BILLS
+                $invoices = \Modules\Billing\Models\Invoice::query()->where('shipment_id', $shipment->id)->get();
+                if ($invoices->isEmpty() && strtolower((string) $shipment->status) === 'delivered') {
+                    try {
+                        app(\Modules\Billing\Services\MerchantDeliveryBillingService::class)->autoEnsureForShipment($shipment);
+                        $invoices = \Modules\Billing\Models\Invoice::query()->where('shipment_id', $shipment->id)->get();
+                    } catch (\Throwable $e) {}
+                }
+
+                $invoiceSummary = [];
+                $touchedMarketplaceBillIds = [];
+
+                foreach ($invoices as $invoice) {
+                    $oldInvoiceTotal = (float) $invoice->total_amount;
+                    $payerType = strtolower((string) ($invoice->payer_type ?? 'merchant'));
+                    $podFee = round((float) ($shipment->pod_charge ?? 0), 2);
+
+                    if ($payerType === 'company') {
+                        $fareShare = $targetFare;
+                        $podFee = 0.0;
+                    } else {
+                        // Store invoice
+                        $fareShare = $targetFare;
+                    }
+
+                    $newTotal = round($fareShare + $podFee, 2);
+                    $invoice->subtotal = $newTotal;
+                    $invoice->total_amount = $newTotal;
+
+                    // Sync single payment if matching previous amount
+                    $existingPayments = \Modules\Billing\Models\MerchantInvoicePayment::where('invoice_id', $invoice->id)->get();
+                    if ($existingPayments->count() === 1 && abs((float) $existingPayments->first()->amount - $oldInvoiceTotal) < 0.01) {
+                        $singlePayment = $existingPayments->first();
+                        $singlePayment->amount = $newTotal;
+                        $singlePayment->save();
+                    }
+
+                    $recordedPayments = (float) \Modules\Billing\Models\MerchantInvoicePayment::where('invoice_id', $invoice->id)
+                        ->where('status', 'recorded')
+                        ->sum('amount');
+
+                    if ($recordedPayments >= $newTotal && $newTotal > 0) {
+                        $invoice->status = 'paid';
+                    } elseif ($recordedPayments > 0) {
+                        $invoice->status = 'partially_paid';
+                    } else {
+                        $invoice->status = 'unpaid';
+                    }
+
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('invoices', 'paid_amount')) {
+                        $invoice->paid_amount = $recordedPayments;
+                    }
+                    if (\Illuminate\Support\Facades\Schema::hasColumn('invoices', 'outstanding_amount')) {
+                        $invoice->outstanding_amount = max(0.0, round($newTotal - $recordedPayments, 2));
+                    }
+                    $invoice->save();
+
+                    // Rebuild invoice items
+                    \Modules\Billing\Models\InvoiceItem::where('invoice_id', $invoice->id)->delete();
+                    if ($fareShare > 0) {
+                        \Modules\Billing\Models\InvoiceItem::create([
+                            'invoice_id' => $invoice->id,
+                            'description' => "Delivery charge {$shipment->tracking_number}",
+                            'quantity' => 1,
+                            'unit_price' => $fareShare,
+                            'total' => $fareShare,
+                        ]);
+                    }
+                    if ($podFee > 0) {
+                        \Modules\Billing\Models\InvoiceItem::create([
+                            'invoice_id' => $invoice->id,
+                            'description' => "POD service fee {$shipment->tracking_number}",
+                            'quantity' => 1,
+                            'unit_price' => $podFee,
+                            'total' => $podFee,
+                        ]);
+                    }
+
+                    if (!empty($invoice->marketplace_bill_id)) {
+                        $touchedMarketplaceBillIds[] = $invoice->marketplace_bill_id;
+                    }
+
+                    $invoiceSummary[] = "{$invoice->invoice_number} (NPR {$newTotal})";
+                }
+
+                // Recalculate Marketplace Bills
+                foreach (array_unique($touchedMarketplaceBillIds) as $billId) {
+                    $mbill = \Modules\Billing\Models\MarketplaceBill::find($billId);
+                    if ($mbill) {
+                        $sumTotal = round((float) $mbill->invoices()->sum('total_amount'), 2);
+                        $mbill->total_amount = $sumTotal;
+                        $recorded = (float) \Modules\Billing\Models\MarketplaceBillPayment::where('marketplace_bill_id', $mbill->id)
+                            ->where('status', 'recorded')
+                            ->sum('amount');
+                        $mbill->paid_amount = $recorded;
+                        $mbill->outstanding_amount = max(0.0, round($sumTotal - $recorded, 2));
+                        if ($recorded >= $sumTotal && $sumTotal > 0) {
+                            $mbill->status = 'paid';
+                        } elseif ($recorded > 0) {
+                            $mbill->status = 'partially_paid';
+                        }
+                        $mbill->save();
+                    }
+                }
+
+                // 4. BRANCH SHARES & COMMISSION BILLS
+                if (\Illuminate\Support\Facades\Schema::hasTable('shipment_branch_shares')) {
+                    \Modules\Billing\Models\ShipmentBranchShare::where('shipment_id', $shipment->id)
+                        ->whereNull('statement_id')
+                        ->delete();
+
+                    \Modules\Billing\Models\BranchCommissionBill::where('shipment_id', $shipment->id)
+                        ->where('status', 'unpaid')
+                        ->whereNull('settlement_id')
+                        ->delete();
+
+                    $origStatus = $shipment->status;
+                    if (strtolower((string) $origStatus) !== 'delivered') {
+                        $shipment->status = 'delivered';
+                        $shipment->save();
+                    }
+                    $branchShares->ensureForShipment($shipment);
+                    $commissionService->autoEnsureForShipment($shipment, true);
+                    if ($origStatus !== 'delivered') {
+                        $shipment->status = $origStatus;
+                        $shipment->save();
+                    }
+
+                    // For any commission bill that had a settlement_id, update its amounts to match the new shares
+                    $commissionBills = \Modules\Billing\Models\BranchCommissionBill::where('shipment_id', $shipment->id)->get();
+                    foreach ($commissionBills as $cbill) {
+                        $matchingShare = \Modules\Billing\Models\ShipmentBranchShare::where('shipment_id', $shipment->id)
+                            ->where('branch_id', $cbill->branch_id)
+                            ->first();
+                        if ($matchingShare) {
+                            $cbill->delivery_charge_base = round((float) $matchingShare->allocation_amount, 2);
+                            $cbill->commission_rate = (float) $matchingShare->hq_rate;
+                            $cbill->commission_amount = round((float) $matchingShare->hq_commission_amount, 2);
+                            $cbill->save();
+                        }
+                    }
+
+                    // Recalculate linked BranchCommissionSettlements
+                    $settlementIds = $commissionBills->pluck('settlement_id')->filter()->unique();
+                    foreach ($settlementIds as $sId) {
+                        $bSettlement = \Modules\Billing\Models\BranchCommissionSettlement::find($sId);
+                        if ($bSettlement) {
+                            $totalCommission = round((float) $bSettlement->bills()->sum('commission_amount'), 2);
+                            $bSettlement->total_commission = $totalCommission;
+                            $bSettlement->final_payable_amount = round($totalCommission + (float) ($bSettlement->adjustments ?? 0), 2);
+                            $bSettlement->save();
+                        }
+                    }
+                }
+
+                // 5. MERCHANT SETTLEMENT ITEMS
+                $settlementItems = \Modules\Settlement\Models\MerchantSettlementItem::where('shipment_id', $shipment->id)->get();
+                foreach ($settlementItems as $item) {
+                    $podAmt = (float) ($shipment->pod_amount ?? $item->pod_amount ?? 0);
+                    $itemFare = ($paidBy === 'customer') ? 0.00 : $targetFare;
+                    $item->update([
+                        'pod_amount' => $podAmt,
+                        'delivery_charge' => $itemFare,
+                        'net_amount' => $podAmt,
+                    ]);
+                    $settlement = \Modules\Settlement\Models\MerchantSettlement::find($item->merchant_settlement_id);
+                    if ($settlement) {
+                        $settlementWorkflow->recalcSettlementTotals($settlement);
+                    }
+                }
+
+                return [
+                    'invoices' => $invoiceSummary,
+                    'shares' => \Modules\Billing\Models\ShipmentBranchShare::where('shipment_id', $shipment->id)->count(),
+                    'bills' => \Modules\Billing\Models\BranchCommissionBill::where('shipment_id', $shipment->id)->count(),
+                ];
+            });
+
+            $touchedShipments++;
+            $invText = !empty($stats['invoices']) ? implode(', ', $stats['invoices']) : 'None';
+            $this->info("  -> Sync Complete: Invoices: [{$invText}] | Branch Shares: {$stats['shares']} | Commission Bills: {$stats['bills']}");
+        }
+
+        $this->info(($dry ? '[DRY RUN COMPLETE] ' : '[SUCCESS] ') . "Synchronized {$touchedShipments} shipment(s).");
+    }
+)->purpose('Synchronize all downstream financial tables with shipment delivery charges');
+
 

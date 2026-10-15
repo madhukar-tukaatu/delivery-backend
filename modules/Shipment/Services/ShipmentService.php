@@ -484,7 +484,9 @@ final class ShipmentService
                 }
 
                 if (array_key_exists('route_id', $columns) && !empty($route['route_id'])) {
-                    $shipmentData['route_id'] = $route['route_id'];
+                    if (\Illuminate\Support\Facades\DB::table('delivery_routes')->where('id', $route['route_id'])->exists()) {
+                        $shipmentData['route_id'] = $route['route_id'];
+                    }
                 }
 
                 if (array_key_exists('transfer_route_id', $columns) && !empty($route['transfer_route_id'])) {

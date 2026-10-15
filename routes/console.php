@@ -308,7 +308,9 @@ Artisan::command('finance:reconcile-shipment-weights
                         $shipment->transfer_route_id = $routeDetails['transfer_route_id'];
                     }
                     if (\Illuminate\Support\Facades\Schema::hasColumn('shipments', 'route_id') && !empty($routeDetails['route_id']) && empty($shipment->route_id)) {
-                        $shipment->route_id = $routeDetails['route_id'];
+                        if (\Illuminate\Support\Facades\DB::table('delivery_routes')->where('id', $routeDetails['route_id'])->exists()) {
+                            $shipment->route_id = $routeDetails['route_id'];
+                        }
                     }
                     if (\Illuminate\Support\Facades\Schema::hasColumn('shipments', 'path_text') && !empty($routeDetails['path_text']) && empty($shipment->path_text)) {
                         $shipment->path_text = $routeDetails['path_text'];

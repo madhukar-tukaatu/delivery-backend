@@ -302,7 +302,7 @@ final class BranchAssignmentService
 
         $extraMileKm = max(0.0, round($destToCustomerDistance - $baseDistanceKm, 2));
 
-        $routeId = null;
+        $transferRouteId = null;
         $routeCode = null;
         $routeName = null;
         $pathText = null;
@@ -318,7 +318,7 @@ final class BranchAssignmentService
                 );
 
                 if ($transferRoute) {
-                    $routeId = (int) $transferRoute->id;
+                    $transferRouteId = (int) $transferRoute->id;
                     $routeCode = (string) $transferRoute->route_code;
                     $routeName = (string) $transferRoute->name;
                     $pathText = $transferRoute->path_text ?? (method_exists($transferRoute, 'getPathText') ? $transferRoute->getPathText() : null);
@@ -368,10 +368,10 @@ final class BranchAssignmentService
                 $requiresTransfer,
 
             'route_id' =>
-                $routeId,
+                null,
 
             'transfer_route_id' =>
-                $routeId,
+                $transferRouteId,
 
             'route_code' =>
                 $routeCode,

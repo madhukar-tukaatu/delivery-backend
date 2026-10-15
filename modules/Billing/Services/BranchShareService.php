@@ -57,6 +57,9 @@ class BranchShareService
                 $table[(int) $count] = array_values(array_map('floatval', $percents));
             }
         }
+        if (! isset($table[1])) {
+            $table[1] = [100.0];
+        }
         ksort($table);
 
         return $table;

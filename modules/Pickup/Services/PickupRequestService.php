@@ -919,6 +919,32 @@ final class PickupRequestService
                             $shipment->total_collectable_amount = round($podAmount, 2);
                         }
 
+                        // Maintain route_distance_km and route details (road/flight lane + last mile)
+                        if ($this->shipmentHasColumn('route_distance_km')) {
+                            $assigner = app(\Modules\Shipment\Services\BranchAssignmentService::class);
+                            $routeDetails = $assigner->buildRoute(
+                                ['branch_id' => $shipment->origin_branch_id, 'sub_branch_id' => $shipment->origin_sub_branch_id],
+                                ['branch_id' => $shipment->destination_branch_id, 'sub_branch_id' => $shipment->destination_sub_branch_id],
+                                $shipment->delivery_lat !== null ? (float) $shipment->delivery_lat : null,
+                                $shipment->delivery_lng !== null ? (float) $shipment->delivery_lng : null,
+                                (string) ($shipment->service_type ?? 'standard')
+                            );
+                            $shipment->route_distance_km = $routeDetails['total_distance_km'] ?? $routeDetails['distance_km'] ?? 0;
+                            if ($this->shipmentHasColumn('transfer_route_id') && !empty($routeDetails['transfer_route_id']) && empty($shipment->transfer_route_id)) {
+                                $shipment->transfer_route_id = $routeDetails['transfer_route_id'];
+                            }
+                            if ($this->shipmentHasColumn('route_id') && !empty($routeDetails['route_id']) && empty($shipment->route_id)) {
+                                $shipment->route_id = $routeDetails['route_id'];
+                            }
+                            if ($this->shipmentHasColumn('path_text') && !empty($routeDetails['path_text']) && empty($shipment->path_text)) {
+                                $shipment->path_text = $routeDetails['path_text'];
+                            }
+                        }
+
+                        if ($this->shipmentHasColumn('last_mile_fee') && !empty($resolved['breakdown'])) {
+                            $shipment->last_mile_fee = round((float) data_get($resolved, 'breakdown.breakdown.extra_delivery_distance.total', 0), 2);
+                        }
+
                         // Sync downstream pricing breakdown if table exists
                         if (\Illuminate\Support\Facades\Schema::hasTable('shipment_price_breakdowns')) {
                             \Illuminate\Support\Facades\DB::table('shipment_price_breakdowns')

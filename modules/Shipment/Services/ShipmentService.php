@@ -273,10 +273,17 @@ final class ShipmentService
                 |--------------------------------------------------------------------------
                 */
 
+                $deliveryLat = isset($data['delivery_lat']) && is_numeric($data['delivery_lat']) ? (float) $data['delivery_lat'] : null;
+                $deliveryLng = isset($data['delivery_lng']) && is_numeric($data['delivery_lng']) ? (float) $data['delivery_lng'] : null;
+                $serviceType = (string) ($data['service_type'] ?? 'standard');
+
                 $route =
                     $this->branchAssignment->buildRoute(
                         $origin,
-                        $destination
+                        $destination,
+                        $deliveryLat,
+                        $deliveryLng,
+                        $serviceType
                     );
 
                 /*
@@ -476,6 +483,18 @@ final class ShipmentService
                         );
                 }
 
+                if (array_key_exists('route_id', $columns) && !empty($route['route_id'])) {
+                    $shipmentData['route_id'] = $route['route_id'];
+                }
+
+                if (array_key_exists('transfer_route_id', $columns) && !empty($route['transfer_route_id'])) {
+                    $shipmentData['transfer_route_id'] = $route['transfer_route_id'];
+                }
+
+                if (array_key_exists('path_text', $columns) && !empty($route['path_text'])) {
+                    $shipmentData['path_text'] = $route['path_text'];
+                }
+
                 if (
                     array_key_exists(
                         'route_distance_km',
@@ -483,7 +502,15 @@ final class ShipmentService
                     )
                 ) {
                     $shipmentData['route_distance_km'] =
-                        $route['distance_km'] ?? 0;
+                        $route['total_distance_km'] ?? $route['distance_km'] ?? 0;
+                }
+
+                if (array_key_exists('last_mile_fee', $columns)) {
+                    $shipmentData['last_mile_fee'] = round((float) data_get($charges, 'breakdown.breakdown.extra_delivery_distance.total', 0), 2);
+                }
+
+                if (array_key_exists('route_fee', $columns)) {
+                    $shipmentData['route_fee'] = round((float) data_get($charges, 'breakdown.breakdown.route_base_rate.total', 0), 2);
                 }
 
                 /*

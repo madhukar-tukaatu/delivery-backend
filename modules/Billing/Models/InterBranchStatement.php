@@ -10,8 +10,8 @@ class InterBranchStatement extends Model
     protected $guarded = [];
 
     protected $casts = [
-        'period_start' => 'date',
-        'period_end' => 'date',
+        'period_start' => 'date:Y-m-d',
+        'period_end' => 'date:Y-m-d',
         'total_amount' => 'float',
         'issued_at' => 'datetime',
         'paid_at' => 'datetime',

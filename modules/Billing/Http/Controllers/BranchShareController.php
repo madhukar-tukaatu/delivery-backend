@@ -18,11 +18,19 @@ class BranchShareController extends Controller
     {
     }
 
-    /** GET admin/branch-shares */
+    /**
+     * GET admin/branch-shares
+     * Default: one row per shipment with its per-branch split (paginated by shipment).
+     * ?flat=1 keeps the old one-row-per-share response.
+     */
     public function index(Request $request)
     {
         $user = $request->user();
         abort_if(FinanceBranchScope::isMerchant($user), 403);
+
+        if (! $request->boolean('flat')) {
+            return ApiResponse::success(app(\Modules\Billing\Services\InterBranchInsightService::class)->shipmentList($request, $user));
+        }
 
         $q = ShipmentBranchShare::query()
             ->with(['branch:id,name,code', 'collectingBranch:id,name,code', 'shipment:id,tracking_number,merchant_id,status,delivered_at,delivery_charge_paid_by,delivery_free_by'])

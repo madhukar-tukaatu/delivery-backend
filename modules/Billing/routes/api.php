@@ -168,6 +168,13 @@ Route::prefix('v1/admin')
             Route::get('inter-branch-settlements', [InterBranchStatementController::class, 'index'])
                 ->name('inter-branch-settlements.index')
                 ->adminMenu('Inter-branch settlements', '/admin/inter-branch-settlements', 'settlements', 48, 'Finance');
+            Route::get('inter-branch-settlements/position', [InterBranchStatementController::class, 'position'])
+                ->name('inter-branch-settlements.summary');
+            Route::get('inter-branch-settlements/shipments', [InterBranchStatementController::class, 'shipments'])
+                ->name('inter-branch-settlements.shipments.index');
+            Route::get('inter-branch-settlements/shipments/{shipment}', [InterBranchStatementController::class, 'shipmentBreakdown'])
+                ->whereNumber('shipment')
+                ->name('inter-branch-settlements.shipments.show');
             Route::post('inter-branch-settlements/generate', [InterBranchStatementController::class, 'generate'])
                 ->name('inter-branch-settlements.generate');
             Route::get('inter-branch-settlements/{statement}', [InterBranchStatementController::class, 'show'])

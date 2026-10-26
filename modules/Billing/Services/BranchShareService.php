@@ -165,32 +165,78 @@ class BranchShareService
         return ['branch_ids' => $chain, 'transport_by_branch' => $transport, 'hops' => $hops];
     }
 
-    /** Stored extra last-mile distance charge (not recomputed). */
-    public function extraDistanceAmount(Shipment $shipment): float
+    /** Stored extra last-mile distance charge, reconciled with the fare actually charged. */
+    public function extraDistanceAmount(Shipment $shipment, ?float $fare = null): float
+    {
+        return $this->extraDistanceDetails($shipment, $fare)['amount'];
+    }
+
+    /**
+     * Extra last-mile distance charge with how it was derived.
+     *
+     * The stored price breakdown can be re-written after the fare was charged
+     * (e.g. a later re-price measured the distance from another coverage
+     * point). The extra distance can never be more than the part of the fare
+     * that is not route base + other add-ons, so when the stored extra is
+     * larger than that residual we use the residual and flag it.
+     *
+     * @return array{amount:float, stored:float, residual:?float, reconciled:bool, source:string, breakdown_final:?float, km:?float, included_km:?float, rate_per_km:?float, delivery_distance_km:?float}
+     */
+    public function extraDistanceDetails(Shipment $shipment, ?float $fare = null): array
     {
         $breakdown = $shipment->delivery_charge_breakdown;
         if (is_string($breakdown)) {
             $breakdown = json_decode($breakdown, true);
         }
+
+        $out = [
+            'amount' => 0.0, 'stored' => 0.0, 'residual' => null, 'reconciled' => false, 'source' => 'none',
+            'breakdown_final' => null, 'km' => null, 'included_km' => null, 'rate_per_km' => null, 'delivery_distance_km' => null,
+        ];
+
+        $stored = null;
         if (is_array($breakdown)) {
-            $val = data_get($breakdown, 'breakdown.extra_delivery_distance.total')
-                ?? data_get($breakdown, 'extra_delivery_distance.total');
+            $node = data_get($breakdown, 'breakdown.extra_delivery_distance') ?? data_get($breakdown, 'extra_delivery_distance');
+            $val = is_array($node) ? ($node['total'] ?? null) : null;
             if (is_numeric($val)) {
-                return round(max(0, (float) $val), 2);
+                $stored = round(max(0, (float) $val), 2);
+                $out['source'] = 'breakdown';
+                $out['km'] = isset($node['extra_distance_km']) ? (float) $node['extra_distance_km'] : null;
+                $out['included_km'] = isset($node['included_distance_km']) ? (float) $node['included_distance_km'] : null;
+                $out['rate_per_km'] = isset($node['rate_per_km']) ? (float) $node['rate_per_km'] : null;
+                $out['delivery_distance_km'] = isset($node['delivery_distance_km']) ? (float) $node['delivery_distance_km'] : null;
             }
+            $inner = data_get($breakdown, 'breakdown.final_price');
+            $out['breakdown_final'] = is_numeric($inner) ? round((float) $inner, 2) : null;
         }
 
-        if (Schema::hasTable('shipment_price_breakdowns')) {
+        if ($stored === null && Schema::hasTable('shipment_price_breakdowns')) {
             $val = DB::table('shipment_price_breakdowns')
                 ->where('shipment_id', $shipment->id)
                 ->orderByDesc('id')
                 ->value('delivery_extra_charge');
             if (is_numeric($val)) {
-                return round(max(0, (float) $val), 2);
+                $stored = round(max(0, (float) $val), 2);
+                $out['source'] = 'price_breakdown_table';
             }
         }
 
-        return 0.0;
+        $stored = $stored ?? 0.0;
+        $out['stored'] = $stored;
+        $out['amount'] = $stored;
+
+        // Reconcile with the fare that was actually charged.
+        if ($fare !== null && $stored > 0 && $out['breakdown_final'] !== null) {
+            $baseAndAddons = round($out['breakdown_final'] - $stored, 2);
+            $residual = round($fare - $baseAndAddons, 2);
+            $out['residual'] = $residual;
+            if ($residual >= 0 && $stored > $residual + 0.01) {
+                $out['amount'] = $residual;
+                $out['reconciled'] = true;
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -226,7 +272,8 @@ class BranchShareService
     {
         $fare = round($this->settlements->checkoutDeliveryCharge($shipment), 2);
         $chain = $this->chainForShipment($shipment);
-        $extra = $this->extraDistanceAmount($shipment);
+        $extraInfo = $this->extraDistanceDetails($shipment, $fare);
+        $extra = $extraInfo['amount'];
 
         $commissions = app(BranchCommissionService::class);
         $rates = [];
@@ -246,8 +293,12 @@ class BranchShareService
         if ($fare <= 0) {
             $result['status'] = 'no_fare';
         }
+        if ($extraInfo['reconciled']) {
+            $result['flags'] = array_values(array_unique(array_merge($result['flags'] ?? [], ['extra_distance_reconciled'])));
+        }
 
         $result['chain'] = $chain;
+        $result['extra_info'] = $extraInfo;
         $result += $this->collection($shipment, $chain['branch_ids']);
 
         return $result;

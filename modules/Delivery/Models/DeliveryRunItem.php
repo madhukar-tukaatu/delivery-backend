@@ -8,6 +8,8 @@ use Modules\Shipment\Models\Shipment;
 class DeliveryRunItem extends Model
 {
     public const STATUS_QUEUED = 'queued';
+    /** Rider picked it up at the warehouse and bagged it; run not started yet. */
+    public const STATUS_BAGGED = 'bagged';
     public const STATUS_OUT = 'out_for_delivery';
     public const STATUS_DELIVERED = 'delivered';
     public const STATUS_FAILED = 'failed';
@@ -27,6 +29,7 @@ class DeliveryRunItem extends Model
         'delivered_at' => 'datetime',
         'failed_at' => 'datetime',
         'removed_at' => 'datetime',
+        'bagged_at' => 'datetime',
     ];
 
     public function run()

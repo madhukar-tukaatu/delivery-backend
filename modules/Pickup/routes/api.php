@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Route;
 use Modules\Pickup\Http\Controllers\AdminPickupController;
 use Modules\Pickup\Http\Controllers\GatewayPickupController;
 use Modules\Pickup\Http\Controllers\PickupController;
+use Modules\Pickup\Http\Controllers\PickupRunController;
 
 /*
 |--------------------------------------------------------------------------
@@ -70,6 +71,86 @@ Route::prefix('v1/admin')
         'branch.scope',
     ])
     ->group(function (): void {
+
+        /*
+        |--------------------------------------------------------------------------
+        | PR PICKUP RUNS (Containers for multi-stop pickups)
+        |--------------------------------------------------------------------------
+        */
+        Route::get('pickups/runs', [PickupRunController::class, 'index'])
+            ->middleware(['route.permission:pickups.view'])
+            ->name('pickups.runs.index');
+
+        Route::get('pickups/runs/stats', [PickupRunController::class, 'stats'])
+            ->middleware(['route.permission:pickups.view'])
+            ->name('pickups.runs.stats');
+
+        Route::get('pickups/runs/ready', [PickupRunController::class, 'ready'])
+            ->middleware(['route.permission:pickups.view'])
+            ->name('pickups.runs.ready.index');
+
+        Route::get('pickups/runs/riders', [PickupRunController::class, 'riders'])
+            ->middleware(['route.permission:pickups.view'])
+            ->name('pickups.runs.riders.index');
+
+        Route::get('pickups/runs/lookup', [PickupRunController::class, 'lookup'])
+            ->middleware(['route.permission:pickups.view'])
+            ->name('pickups.runs.lookup.show');
+
+        Route::get('pickups/runs/{run}', [PickupRunController::class, 'show'])
+            ->whereNumber('run')
+            ->middleware(['route.permission:pickups.view'])
+            ->name('pickups.runs.show');
+
+        Route::post('pickups/runs', [PickupRunController::class, 'store'])
+            ->middleware(['route.permission:pickups.assign'])
+            ->name('pickups.runs.store.assign');
+
+        Route::post('pickups/runs/{run}/items', [PickupRunController::class, 'addItems'])
+            ->whereNumber('run')
+            ->middleware(['route.permission:pickups.assign'])
+            ->name('pickups.runs.items.add.assign');
+
+        Route::post('pickups/runs/{run}/items/remove', [PickupRunController::class, 'removeItems'])
+            ->whereNumber('run')
+            ->middleware(['route.permission:pickups.assign'])
+            ->name('pickups.runs.items.remove.assign');
+
+        Route::post('pickups/runs/{run}/rider', [PickupRunController::class, 'assignRider'])
+            ->whereNumber('run')
+            ->middleware(['route.permission:pickups.assign'])
+            ->name('pickups.runs.rider.assign');
+
+        Route::post('pickups/runs/{run}/sequence', [PickupRunController::class, 'sequence'])
+            ->whereNumber('run')
+            ->middleware(['route.permission:pickups.assign'])
+            ->name('pickups.runs.sequence.assign');
+
+        Route::post('pickups/runs/{run}/dispatch', [PickupRunController::class, 'dispatch'])
+            ->whereNumber('run')
+            ->middleware(['route.permission:pickups.assign'])
+            ->name('pickups.runs.dispatch.assign');
+
+        Route::post('pickups/runs/{run}/close', [PickupRunController::class, 'close'])
+            ->whereNumber('run')
+            ->middleware(['route.permission:pickups.assign'])
+            ->name('pickups.runs.close.assign');
+
+        Route::post('pickups/runs/{run}/cancel', [PickupRunController::class, 'cancel'])
+            ->whereNumber('run')
+            ->middleware(['route.permission:pickups.assign'])
+            ->name('pickups.runs.cancel.assign');
+
+        Route::post('pickups/runs/{run}/receive-shipment', [PickupRunController::class, 'receiveShipment'])
+            ->whereNumber('run')
+            ->middleware(['route.permission:pickups.assign'])
+            ->name('pickups.runs.receive_shipment.assign');
+
+        Route::post('pickups/runs/{run}/receive-all', [PickupRunController::class, 'receiveAll'])
+            ->whereNumber('run')
+            ->middleware(['route.permission:pickups.assign'])
+            ->name('pickups.runs.receive_all.assign');
+
 
         Route::get(
             'pickups',
@@ -280,6 +361,28 @@ Route::prefix('v1/staff')
         'branch.scope',
     ])
     ->group(function (): void {
+
+        // PR pickup runs assigned to the rider
+        Route::get('pickups/runs', [PickupRunController::class, 'staffIndex'])
+            ->middleware(['route.permission:pickups.view'])
+            ->name('pickups.runs.index');
+
+        Route::get('pickups/runs/{run}', [PickupRunController::class, 'staffShow'])
+            ->whereNumber('run')
+            ->middleware(['route.permission:pickups.view'])
+            ->name('pickups.runs.show');
+
+        Route::post('pickups/runs/{run}/start', [PickupRunController::class, 'staffStart'])
+            ->whereNumber('run')
+            ->middleware(['route.permission:pickups.start'])
+            ->name('pickups.runs.start'); // maps to pickups.start (riders/pickup staff hold it; .status would require pickups.status)
+
+        // Rider finishes the run; the ".start" suffix maps it to pickups.start too.
+        Route::post('pickups/runs/{run}/finish', [PickupRunController::class, 'staffFinish'])
+            ->whereNumber('run')
+            ->middleware(['route.permission:pickups.start'])
+            ->name('pickups.runs.finish.start');
+
 
         /*
         |--------------------------------------------------------------------------

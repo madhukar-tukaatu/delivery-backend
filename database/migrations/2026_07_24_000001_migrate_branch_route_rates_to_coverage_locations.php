@@ -9,12 +9,12 @@ return new class extends Migration
 {
     private function hasColumn(string $column): bool
     {
-        return collect(DB::select("SHOW COLUMNS FROM branch_route_rates LIKE ?", [$column]))->isNotEmpty();
+        return Schema::hasColumn('branch_route_rates', $column);
     }
 
     private function hasIndex(string $keyName): bool
     {
-        return collect(DB::select("SHOW INDEX FROM branch_route_rates WHERE Key_name = ?", [$keyName]))->isNotEmpty();
+        return collect(Schema::getIndexes('branch_route_rates'))->contains(fn ($i) => $i['name'] === $keyName);
     }
 
     public function up(): void

@@ -48,6 +48,7 @@ class DeliveryController extends Controller
         $perPage = min(max((int) $request->input('per_page', 20), 1), 100);
         $page = $query->latest('id')->paginate($perPage);
         $this->runs->attachRunInfo($page->getCollection());
+        $this->attachHandlingInfo($page->getCollection(), $request);
 
         return ApiResponse::success($page);
     }
@@ -110,11 +111,97 @@ class DeliveryController extends Controller
         $query->where('rider_id', $user->id);
     }
 
+    /**
+     * A branch sees:
+     *  - deliveries it handles (delivery_assignments.branch_id / sub_branch_id), and
+     *  - deliveries whose FINAL destination is the branch (shipments.destination_*)
+     *    but that another branch handles, e.g. a parcel the origin branch sorted
+     *    for last mile and delivered with its own rider. Those rows are view-only
+     *    for the destination (`handled_elsewhere`), and unassigned "pending" ones
+     *    stay in the handling branch's Ready to Assign queue only (the parcel is
+     *    physically there, not at the destination).
+     */
     private function whereBranch($query, array $branchIds): void
     {
         $query->where(function ($q) use ($branchIds) {
-            $q->whereIn('branch_id', $branchIds)->orWhereIn('sub_branch_id', $branchIds);
+            $q->whereIn('delivery_assignments.branch_id', $branchIds)
+                ->orWhereIn('delivery_assignments.sub_branch_id', $branchIds)
+                ->orWhere(function ($d) use ($branchIds) {
+                    $d->where('delivery_assignments.status', '!=', 'pending')
+                        ->whereExists(function ($e) use ($branchIds) {
+                            $e->selectRaw('1')->from('shipments as dest_s')
+                                ->whereColumn('dest_s.id', 'delivery_assignments.shipment_id')
+                                ->where(function ($w) use ($branchIds) {
+                                    $w->whereIn('dest_s.destination_branch_id', $branchIds)
+                                        ->orWhereIn('dest_s.destination_sub_branch_id', $branchIds);
+                                });
+                        });
+                });
         });
+    }
+
+    /** Branch family the request is scoped to (null = HQ, every branch). */
+    private function viewerFamily(Request $request): ?array
+    {
+        $user = $request->user();
+        if ($this->isHq($user)) {
+            $branchId = (int) $request->input('branch_id', 0);
+
+            return $branchId > 0 ? $this->runs->branchFamily($branchId) : null;
+        }
+        $branchId = (int) ($user->branch_id ?? 0);
+        if ($branchId > 0 && $this->isBranchOperator($user)) {
+            return $this->runs->branchFamily($branchId);
+        }
+
+        return null;
+    }
+
+    /**
+     * Flag rows another branch handles (shown to the final-destination branch
+     * as view-only) with that branch's name.
+     */
+    private function attachHandlingInfo($rows, Request $request): void
+    {
+        $family = $this->viewerFamily($request);
+        $ids = collect($rows)->flatMap(fn ($r) => [$r->branch_id, $r->sub_branch_id])->filter()->unique()->values()->all();
+        $names = $ids ? \Illuminate\Support\Facades\DB::table('branches')->whereIn('id', $ids)->pluck('name', 'id') : collect();
+
+        foreach ($rows as $row) {
+            $handlerId = (int) ($row->sub_branch_id ?: $row->branch_id ?: 0);
+            $row->setAttribute('handling_branch', $handlerId ? [
+                'id' => $handlerId,
+                'name' => $names[$handlerId] ?? $names[(int) $row->branch_id] ?? null,
+            ] : null);
+            $row->setAttribute('handled_elsewhere', $family !== null && ! $this->handles($row, $family));
+        }
+    }
+
+    private function handles(DeliveryAssignment $delivery, array $family): bool
+    {
+        return in_array((int) $delivery->branch_id, $family, true)
+            || in_array((int) $delivery->sub_branch_id, $family, true);
+    }
+
+    /**
+     * Branch staff may only act (assign, fail) on deliveries their branch
+     * handles; HQ may act on any. Rows another branch handles are view-only.
+     */
+    private function assertHandles(Request $request, DeliveryAssignment $delivery): void
+    {
+        $user = $request->user();
+        if ($this->isHq($user)) {
+            return;
+        }
+        $branchId = (int) ($user->branch_id ?? 0);
+        if ($branchId <= 0) {
+            return;
+        }
+        if (! $this->handles($delivery, $this->runs->branchFamily($branchId))) {
+            throw \Illuminate\Validation\ValidationException::withMessages([
+                'delivery' => ['This parcel is handled by another branch. It is view-only here.'],
+            ]);
+        }
     }
 
     private function isHq(User $user): bool
@@ -258,6 +345,8 @@ class DeliveryController extends Controller
      */
     public function assignableRiders(Request $request, DeliveryAssignment $delivery)
     {
+        $this->assertHandles($request, $delivery);
+
         $riders = $this->service->assignableRiders(
             $delivery->shipment,
             $delivery->branch_id ?? $delivery->sub_branch_id
@@ -281,13 +370,22 @@ class DeliveryController extends Controller
         $data = $request->validate([
             'rider_id' => ['required', 'integer', 'exists:users,id'],
             'delivery_free_by' => ['sometimes', 'nullable', 'in:none,store,marketplace'],
+            'run_mode' => ['sometimes', 'nullable', 'in:auto,run,individual'],
         ]);
+
+        $this->assertHandles($request, $delivery);
 
         if ($delivery->shipment) {
             $settlements->applyFreeDelivery($delivery->shipment, $data, true);
         }
 
         $rider = User::query()->findOrFail($data['rider_id']);
+
+        // Rider still collecting a run here: the parcel joins that run (bag + start) by default.
+        $merged = $this->joinRidersRun([$delivery], $rider, $request, (string) ($data['run_mode'] ?? 'auto'));
+        if ($merged && $merged['added'] !== []) {
+            return ApiResponse::success($merged['payload'], $merged['message']);
+        }
 
         return ApiResponse::success(
             $this->service->assign($delivery, $rider, $request->user()),
@@ -304,11 +402,50 @@ class DeliveryController extends Controller
             'rider_id' => ['required', 'integer', 'exists:users,id'],
             'delivery_ids' => ['required', 'array', 'min:1'],
             'delivery_ids.*' => ['integer'],
+            'run_mode' => ['sometimes', 'nullable', 'in:auto,run,individual'],
         ]);
 
         $rider = User::query()->findOrFail($data['rider_id']);
 
-        $result = $this->service->bulkAssign($data['delivery_ids'], $rider, $request->user());
+        // Branch staff can only bulk-assign parcels their branch handles.
+        $foreign = [];
+        $user = $request->user();
+        if (! $this->isHq($user) && (int) ($user->branch_id ?? 0) > 0) {
+            $family = $this->runs->branchFamily((int) $user->branch_id);
+            $foreign = DeliveryAssignment::query()->whereIn('id', $data['delivery_ids'])->get()
+                ->reject(fn (DeliveryAssignment $d) => $this->handles($d, $family))
+                ->pluck('id')->map(fn ($v) => (int) $v)->all();
+        }
+        $ids = array_values(array_diff(array_map('intval', $data['delivery_ids']), $foreign));
+
+        $runNote = '';
+        $runPayload = null;
+        if ($ids) {
+            $merged = $this->joinRidersRun(
+                DeliveryAssignment::query()->whereIn('id', $ids)->get()->all(),
+                $rider,
+                $request,
+                (string) ($data['run_mode'] ?? 'auto')
+            );
+            if ($merged && $merged['added'] !== []) {
+                $joined = DeliveryAssignment::query()->whereIn('id', $ids)->whereIn('shipment_id', $merged['added'])->pluck('id')->map(fn ($v) => (int) $v)->all();
+                $ids = array_values(array_diff($ids, $joined));
+                $runNote = $merged['message'];
+                $runPayload = $merged['payload'];
+            }
+        }
+
+        $result = $ids ? $this->service->bulkAssign($ids, $rider, $request->user()) : ['assigned' => [], 'skipped' => []];
+        foreach ($foreign as $id) {
+            $result['skipped'][$id] = 'Handled by another branch (view-only).';
+        }
+        if ($runPayload) {
+            $result['run'] = $runPayload['run'];
+            $result['joined_run'] = $runPayload['added'];
+            if ($ids === []) {
+                return ApiResponse::success($result, $runNote.($foreign ? ' '.count($foreign).' skipped (another branch).' : ''));
+            }
+        }
 
         $assignedCount = count($result['assigned']);
         $skippedCount = count($result['skipped']);
@@ -316,9 +453,55 @@ class DeliveryController extends Controller
         return ApiResponse::success(
             $result,
             $skippedCount === 0
-                ? "{$assignedCount} deliveries assigned to {$rider->name}."
-                : "{$assignedCount} assigned, {$skippedCount} skipped."
+                ? "{$assignedCount} deliveries assigned to {$rider->name}.".($runNote ? ' '.$runNote : '')
+                : "{$assignedCount} assigned, {$skippedCount} skipped.".($runNote ? ' '.$runNote : '')
         );
+    }
+
+    /**
+     * When the rider has an un-started DR at this branch, put these deliveries'
+     * parcels on it instead of assigning them one by one. Returns null when the
+     * rider has no such run or individual assignment was asked for.
+     *
+     * @param  list<DeliveryAssignment>  $deliveries
+     */
+    private function joinRidersRun(array $deliveries, User $rider, Request $request, string $mode): ?array
+    {
+        if ($mode === 'individual' || $deliveries === []) {
+            return null;
+        }
+        $first = $deliveries[0];
+        $branchId = (int) ($first->branch_id ?? 0) ?: (int) ($first->sub_branch_id ?? 0);
+        if ($branchId <= 0 && $first->shipment) {
+            $branchId = (int) ($first->shipment->current_branch_id ?? $first->shipment->destination_branch_id ?? 0);
+        }
+        $run = $this->runs->unstartedRunFor((int) $rider->id, $branchId);
+        if (! $run) {
+            if ($mode === 'run') {
+                throw \Illuminate\Validation\ValidationException::withMessages(['rider_id' => [$rider->name.' has no delivery run that is still collecting.']]);
+            }
+
+            return null;
+        }
+        $shipmentIds = array_values(array_unique(array_map(fn (DeliveryAssignment $d) => (int) $d->shipment_id, $deliveries)));
+        $out = $this->runs->addItems($run, $shipmentIds, $request->user());
+        $n = count($out['added']);
+        $fresh = $out['run'];
+
+        return [
+            'added' => $out['added'],
+            'payload' => [
+                'run' => $this->runs->summarize($fresh),
+                'added' => $out['added'],
+                'skipped' => $out['skipped'],
+                'off_route' => $out['off_route'],
+                'merged' => true,
+            ],
+            'message' => $n
+                ? "Added {$n} parcel".($n === 1 ? '' : 's')." to {$fresh->run_number} ({$rider->name}'s current run, not started; now {$fresh->expected_count} parcels). {$rider->name} must bag them before starting."
+                    .($out['off_route'] ? ' Off-route: '.implode(', ', array_slice($out['off_route'], 0, 5)).'.' : '')
+                : '',
+        ];
     }
 
     public function failed(Request $request, DeliveryAssignment $delivery)
@@ -326,6 +509,8 @@ class DeliveryController extends Controller
         $data = $request->validate([
             'reason' => ['required', 'string', 'max:500'],
         ]);
+
+        $this->assertHandles($request, $delivery);
 
         return ApiResponse::success(
             $this->service->failed($delivery, $request->user(), $data['reason']),

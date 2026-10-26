@@ -10,7 +10,7 @@ return new class extends Migration
     public function up(): void
     {
         /*
-         * Remove per-route pricing settings — all pricing uses global only.
+         * Remove per-route pricing settings - all pricing uses global only.
          */
         if (Schema::hasColumn('pricing_settings', 'scope_type')) {
             DB::table('pricing_settings')
@@ -18,9 +18,13 @@ return new class extends Migration
                 ->delete();
         }
 
-        Schema::table('pricing_settings', function (Blueprint $table): void {
+        $hasRouteFk = $this->foreignKeyExists('pricing_settings', 'branch_transfer_route_id');
+
+        Schema::table('pricing_settings', function (Blueprint $table) use ($hasRouteFk): void {
             if (Schema::hasColumn('pricing_settings', 'branch_transfer_route_id')) {
-                $table->dropForeign(['branch_transfer_route_id']);
+                if ($hasRouteFk) {
+                    $table->dropForeign(['branch_transfer_route_id']);
+                }
                 $table->dropColumn('branch_transfer_route_id');
             }
 
@@ -31,18 +35,21 @@ return new class extends Migration
 
         /*
          * Remove pricing columns from branch_transfer_routes.
-         * The route is a logical path only — pricing comes from
+         * The route is a logical path only - pricing comes from
          * branch_route_rates.base_rate + global pricing_settings.
+         * (On a fresh database the table is created later.)
          */
-        Schema::table('branch_transfer_routes', function (Blueprint $table): void {
-            if (Schema::hasColumn('branch_transfer_routes', 'base_rate')) {
-                $table->dropColumn('base_rate');
-            }
+        if (Schema::hasTable('branch_transfer_routes')) {
+            Schema::table('branch_transfer_routes', function (Blueprint $table): void {
+                if (Schema::hasColumn('branch_transfer_routes', 'base_rate')) {
+                    $table->dropColumn('base_rate');
+                }
 
-            if (Schema::hasColumn('branch_transfer_routes', 'currency')) {
-                $table->dropColumn('currency');
-            }
-        });
+                if (Schema::hasColumn('branch_transfer_routes', 'currency')) {
+                    $table->dropColumn('currency');
+                }
+            });
+        }
     }
 
     public function down(): void
@@ -58,5 +65,19 @@ return new class extends Migration
         });
 
         DB::table('pricing_settings')->update(['scope_type' => 'global']);
+    }
+
+    private function foreignKeyExists(string $table, string $column): bool
+    {
+        if (DB::getDriverName() !== 'mysql') {
+            return Schema::hasColumn($table, $column);
+        }
+
+        return DB::table('information_schema.KEY_COLUMN_USAGE')
+            ->where('TABLE_SCHEMA', DB::getDatabaseName())
+            ->where('TABLE_NAME', $table)
+            ->where('COLUMN_NAME', $column)
+            ->whereNotNull('REFERENCED_TABLE_NAME')
+            ->exists();
     }
 };

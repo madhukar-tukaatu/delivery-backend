@@ -197,12 +197,22 @@ class DeliveryWorkflowService
         });
     }
 
-    public function outForDelivery(DeliveryAssignment $delivery, User $user): Shipment
+    public function outForDelivery(DeliveryAssignment $delivery, User $user, bool $viaRun = false): Shipment
     {
-        return DB::transaction(function () use ($delivery, $user) {
+        return DB::transaction(function () use ($delivery, $user, $viaRun) {
             $delivery = DeliveryAssignment::query()->lockForUpdate()->findOrFail($delivery->id);
 
             $this->ensureRider($delivery, $user);
+
+            if (! $viaRun) {
+                // Parcels on a run that has not started leave together via Start run.
+                $run = app(DeliveryRunService::class)->activeRunFor((int) $delivery->shipment_id);
+                if ($run && in_array($run->status, ['open', 'assigned'], true)) {
+                    throw ValidationException::withMessages([
+                        'status' => ["This parcel is on {$run->run_number}. Bag every parcel on the run and tap Start run."],
+                    ]);
+                }
+            }
 
             if (! in_array($delivery->status, ['assigned', 'accepted'], true)) {
                 throw ValidationException::withMessages([
@@ -353,9 +363,7 @@ class DeliveryWorkflowService
 
             $shipment = $delivery->shipment()->with('merchant')->firstOrFail();
             $isPod = $this->isPod($shipment);
-            $collectable = (float) ($shipment->total_collectable_amount
-                ?: $shipment->total_collectable
-                ?: $shipment->pod_amount);
+            $collectable = (float) $shipment->collect_amount;
             $directPayment = false;
             $cashCollected = false;
             $completionType = 'prepaid'; // prepaid | pod_cash | pod_online

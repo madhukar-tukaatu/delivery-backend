@@ -21,6 +21,7 @@ final class PickupRequest extends Model
 
     protected $fillable = [
         'request_number',
+        'pickup_run_id',
         'merchant_id',
 
         'store_reference',

@@ -33,6 +33,7 @@ final class ShipmentController extends Controller
                 'destinationSubBranch',
                 'currentBranch',
                 'currentSubBranch',
+                'nextHopBranch',
             ])
             ->latest();
 
@@ -51,10 +52,13 @@ final class ShipmentController extends Controller
              */
             if (! $branchId) {
                 return ApiResponse::success([
-                    'data'         => [],
-                    'current_page' => 1,
-                    'per_page'     => (int) $request->get('per_page', 20),
-                    'total'        => 0,
+                    'data'          => [],
+                    'current_page'  => 1,
+                    'per_page'      => (int) $request->get('per_page', 20),
+                    'total'         => 0,
+                    'status_counts' => (object) [],
+                    'counts_total'  => 0,
+                    'facets'        => ['merchants' => [], 'branches' => []],
                 ]);
             }
 
@@ -65,120 +69,11 @@ final class ShipmentController extends Controller
         }
 
         /*
-        |--------------------------------------------------------------------------
-        | GLOBAL ADMIN BRANCH FILTER
-        |--------------------------------------------------------------------------
-        */
+         * Branch-scoped base (before user filters) for filter facets.
+         */
+        $scopedBase = clone $query;
 
-        if (
-            $this->isGlobalAdmin($user)
-            && $request->filled('branch_id')
-        ) {
-            $this->applyBranchScope(
-                $query,
-                (int) $request->input('branch_id')
-            );
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | STATUS
-        |--------------------------------------------------------------------------
-        */
-
-        if ($request->filled('status')) {
-            $query->where(
-                'status',
-                $request->input('status')
-            );
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | MERCHANT
-        |--------------------------------------------------------------------------
-        */
-
-        if ($request->filled('merchant_id')) {
-            $query->where(
-                'merchant_id',
-                $request->input('merchant_id')
-            );
-        }
-
-        if ($request->filled('marketplace_id')) {
-            $marketplaceId = (int) $request->input('marketplace_id');
-            $query->where(function ($q) use ($marketplaceId): void {
-                $q->where('marketplace_id', $marketplaceId)
-                    ->orWhereHas('merchant', fn($mq) => $mq->where('marketplace_id', $marketplaceId));
-            });
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | SEARCH
-        |--------------------------------------------------------------------------
-        */
-
-        $search = trim(
-            (string) (
-                $request->input(
-                    'search',
-                    $request->input('q', '')
-                )
-            )
-        );
-
-        if ($search !== '') {
-            $query->where(function ($q) use ($search): void {
-                $q->where(
-                    'tracking_number',
-                    'like',
-                    "%{$search}%"
-                )
-                    ->orWhere(
-                        'merchant_order_id',
-                        'like',
-                        "%{$search}%"
-                    )
-                    ->orWhere(
-                        'receiver_name',
-                        'like',
-                        "%{$search}%"
-                    )
-                    ->orWhere(
-                        'receiver_phone',
-                        'like',
-                        "%{$search}%"
-                    );
-            });
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | SERVICE TYPE
-        |--------------------------------------------------------------------------
-        */
-
-        if ($request->filled('service_type')) {
-            $query->where(
-                'service_type',
-                $request->input('service_type')
-            );
-        }
-
-        /*
-        |--------------------------------------------------------------------------
-        | PAYMENT TYPE
-        |--------------------------------------------------------------------------
-        */
-
-        if ($request->filled('payment_type')) {
-            $query->where(
-                'payment_type',
-                $request->input('payment_type')
-            );
-        }
+        $this->applyIndexFilters($query, $request, $user, false);
 
         /*
         |--------------------------------------------------------------------------
@@ -198,7 +93,238 @@ final class ShipmentController extends Controller
             ->paginate($perPage)
             ->appends($request->query());
 
-        return ApiResponse::success($shipments);
+        if (! $request->boolean('with_counts')) {
+            return ApiResponse::success($shipments);
+        }
+
+        /*
+        |--------------------------------------------------------------------------
+        | STATUS COUNTS (same scope + filters, ignoring the status filter)
+        |--------------------------------------------------------------------------
+        */
+
+        $countsQuery = (clone $scopedBase)->setEagerLoads([]);
+        $countsQuery->getQuery()->orders = null;
+        $this->applyIndexFilters($countsQuery, $request, $user, true);
+
+        $statusCounts = $countsQuery
+            ->selectRaw('status, COUNT(*) as aggregate')
+            ->groupBy('status')
+            ->pluck('aggregate', 'status')
+            ->map(fn($value) => (int) $value)
+            ->all();
+
+        /*
+        |--------------------------------------------------------------------------
+        | FACETS (merchants / branches visible in the user's scope)
+        |--------------------------------------------------------------------------
+        */
+
+        $facetBase = (clone $scopedBase)->setEagerLoads([]);
+        $facetBase->getQuery()->orders = null;
+
+        $merchantIds = (clone $facetBase)
+            ->whereNotNull('merchant_id')
+            ->distinct()
+            ->limit(500)
+            ->pluck('merchant_id')
+            ->all();
+
+        $merchants = $merchantIds
+            ? \Modules\Merchant\Models\Merchant::query()
+                ->whereIn('id', $merchantIds)
+                ->orderBy('name')
+                ->get(['id', 'name', 'code'])
+                ->map(fn($merchant) => [
+                    'id'   => $merchant->id,
+                    'name' => $merchant->name,
+                    'code' => $merchant->code,
+                ])
+                ->values()
+                ->all()
+            : [];
+
+        $branchIds = collect(['origin_branch_id', 'destination_branch_id', 'current_branch_id'])
+            ->flatMap(fn($column) => (clone $facetBase)
+                    ->whereNotNull($column)
+                    ->distinct()
+                    ->limit(500)
+                    ->pluck($column))
+            ->unique()
+            ->values()
+            ->all();
+
+        $branches = $branchIds
+            ? \Modules\Branch\Models\Branch::query()
+                ->whereIn('id', $branchIds)
+                ->orderBy('name')
+                ->get(['id', 'name'])
+                ->map(fn($branch) => [
+                    'id'   => $branch->id,
+                    'name' => $branch->name,
+                ])
+                ->values()
+                ->all()
+            : [];
+
+        return ApiResponse::success(array_merge(
+            $shipments->toArray(),
+            [
+                'status_counts' => (object) $statusCounts,
+                'counts_total'  => array_sum($statusCounts),
+                'facets'        => [
+                    'merchants' => $merchants,
+                    'branches'  => $branches,
+                ],
+            ]
+        ));
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | INDEX FILTERS
+    |--------------------------------------------------------------------------
+    */
+
+    private function applyIndexFilters(
+        $query,
+        Request $request,
+        $user,
+        bool $skipStatus = false
+    ): void {
+        /*
+         * Global admin branch filter (branch users are already scoped).
+         */
+        if (
+            $this->isGlobalAdmin($user)
+            && $request->filled('branch_id')
+        ) {
+            $this->applyBranchScope(
+                $query,
+                (int) $request->input('branch_id')
+            );
+        }
+
+        if (! $skipStatus && $request->filled('status')) {
+            $statuses = array_values(array_filter(
+                array_map('trim', explode(',', (string) $request->input('status')))
+            ));
+
+            if (count($statuses) > 1) {
+                $query->whereIn('status', $statuses);
+            } elseif ($statuses) {
+                $query->where('status', $statuses[0]);
+            }
+        }
+
+        if ($request->filled('merchant_id')) {
+            $query->where(
+                'merchant_id',
+                $request->input('merchant_id')
+            );
+        }
+
+        if ($request->filled('marketplace_id')) {
+            $marketplaceId = (int) $request->input('marketplace_id');
+            $query->where(function ($q) use ($marketplaceId): void {
+                $q->where('marketplace_id', $marketplaceId)
+                    ->orWhereHas('merchant', fn($mq) => $mq->where('marketplace_id', $marketplaceId));
+            });
+        }
+
+        if ($request->filled('origin_branch_id')) {
+            $originId = (int) $request->input('origin_branch_id');
+            $query->where(function ($q) use ($originId): void {
+                $q->where('origin_branch_id', $originId)
+                    ->orWhere('origin_sub_branch_id', $originId);
+            });
+        }
+
+        if ($request->filled('destination_branch_id')) {
+            $destinationId = (int) $request->input('destination_branch_id');
+            $query->where(function ($q) use ($destinationId): void {
+                $q->where('destination_branch_id', $destinationId)
+                    ->orWhere('destination_sub_branch_id', $destinationId);
+            });
+        }
+
+        if ($request->filled('current_branch_id')) {
+            $currentId = (int) $request->input('current_branch_id');
+            $query->where(function ($q) use ($currentId): void {
+                $q->where('current_branch_id', $currentId)
+                    ->orWhere('current_sub_branch_id', $currentId);
+            });
+        }
+
+        /*
+         * Search: tracking, order refs, receiver, phone, merchant.
+         */
+        $search = trim(
+            (string) (
+                $request->input(
+                    'search',
+                    $request->input('q', '')
+                )
+            )
+        );
+
+        if ($search !== '') {
+            $query->where(function ($q) use ($search): void {
+                $like = "%{$search}%";
+
+                $q->where('tracking_number', 'like', $like)
+                    ->orWhere('merchant_order_id', 'like', $like)
+                    ->orWhere('order_reference', 'like', $like)
+                    ->orWhere('external_order_id', 'like', $like)
+                    ->orWhere('receiver_name', 'like', $like)
+                    ->orWhere('receiver_phone', 'like', $like)
+                    ->orWhereHas('merchant', function ($mq) use ($like): void {
+                        $mq->where('name', 'like', $like)
+                            ->orWhere('code', 'like', $like);
+                    });
+            });
+        }
+
+        if ($request->filled('service_type')) {
+            $query->where(
+                'service_type',
+                $request->input('service_type')
+            );
+        }
+
+        if ($request->filled('payment_type')) {
+            $query->where(
+                'payment_type',
+                $request->input('payment_type')
+            );
+        }
+
+        /*
+         * Created date range (YYYY-MM-DD, inclusive).
+         */
+        if ($request->filled('date_from')) {
+            try {
+                $query->where(
+                    'created_at',
+                    '>=',
+                    \Illuminate\Support\Carbon::parse((string) $request->input('date_from'))->startOfDay()
+                );
+            } catch (\Throwable) {
+                // ignore an invalid date
+            }
+        }
+
+        if ($request->filled('date_to')) {
+            try {
+                $query->where(
+                    'created_at',
+                    '<=',
+                    \Illuminate\Support\Carbon::parse((string) $request->input('date_to'))->endOfDay()
+                );
+            } catch (\Throwable) {
+                // ignore an invalid date
+            }
+        }
     }
 
     /*
@@ -256,7 +382,7 @@ final class ShipmentController extends Controller
             'routeSteps.fromBranch',
             'routeSteps.toBranch',
 
-            // Activity (oldest → newest for timeline)
+            // Activity (oldest â†’ newest for timeline)
             'trackingEvents' => fn($q) => $q->orderBy('created_at'),
         ]);
 
@@ -293,7 +419,7 @@ final class ShipmentController extends Controller
             }
         }
 
-        // is_transfer, hop_meta, etc. already on $appends – no extra append() needed
+        // is_transfer, hop_meta, etc. already on $appends â€“ no extra append() needed
 
         $payload = $shipment->toArray();
 

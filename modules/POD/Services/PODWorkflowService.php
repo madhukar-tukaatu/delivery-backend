@@ -13,9 +13,7 @@ class PODWorkflowService
 {
     public function markCollectedForShipment(Shipment $shipment, User $rider, float $amount): ?PodRecord
     {
-        $due = (float) ($shipment->total_collectable_amount
-            ?: $shipment->total_collectable
-            ?: $shipment->pod_amount);
+        $due = (float) $shipment->collect_amount;
 
         if ($due <= 0) {
             return null;

@@ -131,6 +131,10 @@ class RoleSeeder extends Seeder
                 'dispatches.view', 'dispatches.create', 'dispatches.receive',
                 'dispatches.dispatch', 'dispatches.transfer_batches', 'dispatches.route_workflow',
 
+                // Transfers page (TRs between branches)
+                'transfers.view', 'transfers.dispatch', 'transfers.receive', 'transfers.receive_transit',
+                'transfers.repair',
+
                 // POD
                 'pod.view', 'pod.collect', 'pod.confirm', 'pod.deposit',
                 'pod.rider_deposit', 'pod.collections', 'pod.settle',
@@ -244,6 +248,9 @@ class RoleSeeder extends Seeder
                 'dispatches.view', 'dispatches.create', 'dispatches.receive',
                 'dispatches.dispatch', 'dispatches.transfer_batches', 'dispatches.route_workflow',
 
+                // Transfers page (TRs between branches)
+                'transfers.view', 'transfers.dispatch', 'transfers.receive', 'transfers.receive_transit',
+
                 // POD
                 'pod.view', 'pod.collect', 'pod.deposit', 'pod.collections',
 
@@ -287,6 +294,8 @@ class RoleSeeder extends Seeder
                 'deliveries.delivered', 'deliveries.failed',
 
                 'dispatches.view', 'dispatches.receive', 'dispatches.route_workflow',
+
+                'transfers.view', 'transfers.receive', 'transfers.receive_transit',
 
                 'pod.view', 'pod.collect', 'pod.deposit',
 
@@ -341,6 +350,7 @@ class RoleSeeder extends Seeder
                 'pickups.collect',                   // Collect shipments
                 'pickups.complete',                  // Complete pickup
                 'pickups.receive',                   // Receive at origin
+                'pickups.failed',                    // Mark as failed
                 'pickups.assignable_staff',          // View assignable staff
                 'pickups.failed',                    // Mark as failed if needed
 
@@ -417,6 +427,7 @@ class RoleSeeder extends Seeder
                 'pickups.collect',                   // Collect shipments (ARRIVED → collect each)
                 'pickups.complete',                  // Complete pickup (ARRIVED → COMPLETED)
                 'pickups.receive',                   // Receive at origin branch
+                'pickups.failed',                    // Mark as failed
                 'pickups.assignable_staff',          // View assignable staff
                 'pickups.transfer',                  // Transfer to another staff member
 

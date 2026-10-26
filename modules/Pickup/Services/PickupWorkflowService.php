@@ -346,6 +346,12 @@ class PickupWorkflowService
                 now(),
         ]);
 
+        try {
+            app(PickupRunService::class)->syncFromPickupRequest($pickup);
+        } catch (\Throwable) {
+            // silent fallback
+        }
+
         return $pickup->fresh();
     }
 
@@ -367,6 +373,12 @@ class PickupWorkflowService
             'collection_started_at' =>
                 now(),
         ]);
+
+        try {
+            app(PickupRunService::class)->syncFromPickupRequest($pickup);
+        } catch (\Throwable) {
+            // silent fallback
+        }
 
         return $pickup->fresh([
             'shipments',
@@ -449,6 +461,12 @@ class PickupWorkflowService
                         now(),
                 ]);
 
+                try {
+                    app(PickupRunService::class)->syncFromPickupRequest($pickup);
+                } catch (\Throwable) {
+                    // silent fallback
+                }
+
                 return $pickup->fresh([
                     'shipments',
                 ]);
@@ -511,5 +529,26 @@ class PickupWorkflowService
                 ]
             );
         }
+    }
+
+    public function markPickedUp(
+        PickupRequest $pickup,
+        User $user,
+        ?string $remarks = null
+    ): PickupRequest {
+        return $this->complete($pickup, $user);
+    }
+
+    public function markFailed(
+        PickupRequest $pickup,
+        User $user,
+        string $reason
+    ): PickupRequest {
+        $res = app(PickupRequestService::class)->fail($pickup, $user, $reason);
+        try {
+            app(PickupRunService::class)->syncFromPickupRequest($res);
+        } catch (\Throwable) {
+        }
+        return $res;
     }
 }

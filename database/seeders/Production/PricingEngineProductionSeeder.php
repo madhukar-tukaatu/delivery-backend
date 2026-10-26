@@ -213,6 +213,17 @@ class PricingEngineProductionSeeder extends Seeder
             return;
         }
 
+        // Current schema: branch_transfer_lanes uses a string service_type and
+        // references coverage_locations (managed from the admin Transfer Lanes UI).
+        // This legacy generator only supports the old service_type_id schema.
+        if (!Schema::hasColumn('branch_transfer_lanes', 'service_type_id')) {
+            $this->command?->warn(
+                'branch_transfer_lanes uses the string service_type schema. Skipping generated transfer lanes.'
+            );
+
+            return;
+        }
+
         $services = DB::table('service_types')
             ->whereIn('code', ['standard', 'express', 'same_day'])
             ->where('is_active', true)

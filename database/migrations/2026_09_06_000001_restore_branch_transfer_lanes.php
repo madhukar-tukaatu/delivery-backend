@@ -58,7 +58,9 @@ return new class extends Migration
         }
 
         // Recreate branch_transfer_route_lanes join table
-        if (!Schema::hasTable('branch_transfer_route_lanes')) {
+        // On a fresh database branch_transfer_routes is created later; the join
+        // table is then ensured by 2026_09_09_000030.
+        if (!Schema::hasTable('branch_transfer_route_lanes') && Schema::hasTable('branch_transfer_routes')) {
             Schema::create('branch_transfer_route_lanes', function (Blueprint $table): void {
                 $table->id();
 

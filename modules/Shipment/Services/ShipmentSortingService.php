@@ -46,6 +46,13 @@ final class ShipmentSortingService
 
                 $this->guardSortable($shipment);
 
+                // A parcel with no final destination used to fall through to
+                // "last mile at the current branch", so an out-of-area parcel was
+                // delivered by the origin branch and never reached (or showed on
+                // the Deliveries board of) the branch that covers the receiver.
+                // Resolve the destination from the delivery address first.
+                $this->ensureDestination($shipment);
+
                 $mode = $this->classify($shipment);
 
                 $newStatus = $mode === self::MODE_LAST_MILE
@@ -179,6 +186,39 @@ final class ShipmentSortingService
         }
 
         return self::MODE_TRANSFER;
+    }
+
+    /**
+     * Fill destination_branch_id / destination_sub_branch_id from the delivery
+     * coordinates (or city / area) when they are missing. Never throws: if
+     * nothing resolves, sorting behaves as before.
+     */
+    private function ensureDestination(Shipment $shipment): void
+    {
+        if ($shipment->destination_branch_id || $shipment->destination_sub_branch_id) {
+            return;
+        }
+
+        try {
+            $destination = app(BranchAssignmentService::class)->resolveDestination([
+                'delivery_lat' => $shipment->delivery_lat ?? $shipment->delivery_latitude ?? null,
+                'delivery_lng' => $shipment->delivery_lng ?? $shipment->delivery_longitude ?? null,
+                'delivery_city' => $shipment->delivery_city ?? $shipment->receiver_city ?? null,
+                'delivery_area' => $shipment->delivery_area ?? $shipment->receiver_area ?? null,
+            ]);
+        } catch (\Throwable $e) {
+            return;
+        }
+
+        $branchId = (int) ($destination['branch_id'] ?? 0);
+        if ($branchId <= 0) {
+            return;
+        }
+
+        $shipment->destination_branch_id = $branchId;
+        if (! empty($destination['sub_branch_id']) && $this->shipmentHasColumn('destination_sub_branch_id')) {
+            $shipment->destination_sub_branch_id = (int) $destination['sub_branch_id'];
+        }
     }
 
     /**

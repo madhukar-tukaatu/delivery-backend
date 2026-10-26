@@ -111,6 +111,17 @@ class DeliveryRunController extends Controller
         return ApiResponse::success($this->runs->riders($scope));
     }
 
+    /** GET admin/deliveries/runs/suggest?shipment_ids[]=1 : un-started runs these parcels could join. */
+    public function suggest(Request $request)
+    {
+        $data = $request->validate([
+            'shipment_ids' => ['nullable', 'array', 'max:300'],
+            'shipment_ids.*' => ['integer'],
+        ]);
+
+        return ApiResponse::success($this->runs->suggestRuns($data['shipment_ids'] ?? [], $this->scope($request)));
+    }
+
     /** GET admin/deliveries/runs/lookup?code=DR-KATHM-000004 */
     public function lookup(Request $request)
     {
@@ -141,18 +152,33 @@ class DeliveryRunController extends Controller
             'notes' => ['nullable', 'string', 'max:1000'],
             'auto_sequence' => ['nullable', 'boolean'],
             'dispatch_now' => ['nullable', 'boolean'],
+            'run_mode' => ['nullable', 'string', Rule::in(['auto', 'existing', 'new'])],
         ]);
 
         $out = $this->runs->create($data['shipment_ids'], $this->scope($request), $data, $request->user());
         $run = $out['run'];
-        if (! empty($data['dispatch_now'])) {
-            $run = $this->runs->dispatch($run, $request->user());
+        if (! empty($out['merged'])) {
+            $added = count($out['added']);
+            $skippedN = count($out['skipped']);
+            $riderName = $run->rider?->name ?? 'The rider';
+            $msg = "Added {$added} parcel".($added === 1 ? '' : 's')." to {$run->run_number} ({$riderName}'s current run, not started; now {$run->expected_count} parcels)."
+                .($skippedN ? " {$skippedN} skipped." : '')
+                .($added ? " {$riderName} must bag them before starting." : '')
+                .($out['off_route'] ? ' Off-route: '.implode(', ', array_slice($out['off_route'], 0, 5)).'.' : '');
+
+            return ApiResponse::success([
+                'run' => $this->runs->summarize($run, true), 'skipped' => $out['skipped'], 'added' => $out['added'],
+                'merged' => true, 'off_route' => $out['off_route'],
+            ], $msg);
         }
+        // dispatch_now is ignored: the rider collects, bags every parcel and starts the run.
         $skipped = count($out['skipped']);
+        $rider = $run->rider_user_id ? ($run->rider?->name ?? 'The rider') : null;
 
         return ApiResponse::success(
             ['run' => $this->runs->summarize($run, true), 'skipped' => $out['skipped']],
             "{$run->run_number} created with {$run->expected_count} parcel".($run->expected_count === 1 ? '' : 's').($skipped ? ", {$skipped} skipped" : '').'.'
+                .($rider ? " {$rider} will collect and bag them, then start the run." : ' Assign a rider to start collecting.')
         );
     }
 
@@ -167,7 +193,9 @@ class DeliveryRunController extends Controller
 
         return ApiResponse::success(
             ['run' => $this->runs->summarize($out['run'], true), 'added' => $out['added'], 'skipped' => $out['skipped']],
-            count($out['added']).' added'.($out['skipped'] ? ', '.count($out['skipped']).' skipped' : '').'.'
+            count($out['added']).' added to '.$out['run']->run_number.''.($out['skipped'] ? ', '.count($out['skipped']).' skipped' : '').'.'
+                .($out['added'] && $out['run']->status === DeliveryRun::STATUS_ASSIGNED ? ' The rider must bag them before starting.' : '')
+                .($out['off_route'] ? ' Off-route: '.implode(', ', array_slice($out['off_route'], 0, 5)).'.' : '')
         );
     }
 
@@ -195,6 +223,7 @@ class DeliveryRunController extends Controller
             'vehicle_type' => ['nullable', 'string', Rule::in(DeliveryRun::VEHICLE_TYPES)],
             'vehicle_number' => ['nullable', 'string', 'max:60'],
             'notes' => ['nullable', 'string', 'max:1000'],
+            'allow_second_run' => ['nullable', 'boolean'],
         ]);
         $run = $this->runs->assignRider($run, (int) $data['rider_user_id'], $data, $request->user());
 
@@ -221,9 +250,11 @@ class DeliveryRunController extends Controller
             'vehicle_type' => ['nullable', 'string', Rule::in(DeliveryRun::VEHICLE_TYPES)],
             'vehicle_number' => ['nullable', 'string', 'max:60'],
         ]);
-        $run = $this->runs->dispatch($run, $request->user(), $data);
+        $user = $request->user();
+        abort_unless($user->isSuperAdmin() || $user->hasRole('main_admin'), 403, 'The rider starts the run after bagging every parcel.');
+        $run = $this->runs->dispatch($run, $user, $data);
 
-        return ApiResponse::success($this->runs->summarize($run, true), "{$run->run_number} is out for delivery.");
+        return ApiResponse::success($this->runs->summarize($run, true), "{$run->run_number} started by admin override. ".$this->outCount($run).'.');
     }
 
     public function close(Request $request, DeliveryRun $run)
@@ -282,12 +313,70 @@ class DeliveryRunController extends Controller
         return ApiResponse::success($this->runs->summarize($run, true));
     }
 
-    /** POST staff/deliveries/runs/{run}/start : rider collected the parcels and leaves. */
+    /** POST staff/deliveries/runs/{run}/bag : {item_id} or {code} (scanned / typed tracking no.). */
+    public function staffBag(Request $request, DeliveryRun $run)
+    {
+        $data = $request->validate([
+            'item_id' => ['nullable', 'integer', 'required_without:code'],
+            'code' => ['nullable', 'string', 'max:80', 'required_without:item_id'],
+        ]);
+        $out = $this->runs->bag($run, $request->user(), isset($data['item_id']) ? (int) $data['item_id'] : null, $data['code'] ?? null);
+        $summary = $this->runs->summarize($out['run'], true);
+        $progress = "Bagged {$summary['bagged_count']}/".($summary['bagged_count'] + $summary['to_bag_count']);
+
+        return ApiResponse::success(
+            ['run' => $summary, 'item_id' => $out['item']->id],
+            $out['already'] ? "{$out['tracking']} is already bagged. {$progress}." : "{$out['tracking']} bagged. {$progress}."
+        );
+    }
+
+    /** POST staff/deliveries/runs/{run}/unbag : {item_id} */
+    public function staffUnbag(Request $request, DeliveryRun $run)
+    {
+        $data = $request->validate(['item_id' => ['required', 'integer']]);
+        $out = $this->runs->unbag($run, $request->user(), (int) $data['item_id']);
+
+        return ApiResponse::success(['run' => $this->runs->summarize($out['run'], true)], "{$out['tracking']} taken out of the bag.");
+    }
+
+    /** POST staff/deliveries/runs/{run}/missing : {item_id, note?} parcel not found at the warehouse. */
+    public function staffMissing(Request $request, DeliveryRun $run)
+    {
+        $data = $request->validate([
+            'item_id' => ['required', 'integer'],
+            'note' => ['nullable', 'string', 'max:200'],
+        ]);
+        $out = $this->runs->reportMissing($run, $request->user(), (int) $data['item_id'], $data['note'] ?? null);
+
+        return ApiResponse::success(
+            ['run' => $this->runs->summarize($out['run'], true)],
+            "{$out['tracking']} removed from {$out['run']->run_number} and sent back to the branch queue. The branch has been told."
+        );
+    }
+
+    /** POST staff/deliveries/runs/{run}/start : every parcel bagged, rider leaves. */
     public function staffStart(Request $request, DeliveryRun $run)
     {
         $run = $this->runs->startByRider($run, $request->user());
 
-        return ApiResponse::success($this->runs->summarize($run, true), "{$run->run_number} started. Deliver in the listed order.");
+        return ApiResponse::success($this->runs->summarize($run, true), "{$run->run_number} started. ".$this->outCount($run).'. Deliver in the listed order.');
+    }
+
+    /** "3 deliveries accepted and out for delivery" for the start/dispatch toast. */
+    private function outCount(DeliveryRun $run): string
+    {
+        $n = \Modules\Delivery\Models\DeliveryRunItem::query()->where('delivery_run_id', $run->id)
+            ->where('status', \Modules\Delivery\Models\DeliveryRunItem::STATUS_OUT)->count();
+
+        return $n.' parcel'.($n === 1 ? '' : 's').' out for delivery';
+    }
+
+    /** POST staff/deliveries/runs/{run}/finish : rider finished every stop and heads back. */
+    public function staffFinish(Request $request, DeliveryRun $run)
+    {
+        $run = $this->runs->finishByRider($run, $request->user());
+
+        return ApiResponse::success($this->runs->summarize($run, true), "{$run->run_number} finished. Hand over cash and failed parcels at the branch.");
     }
 
     /* --------------------------- helpers --------------------------- */

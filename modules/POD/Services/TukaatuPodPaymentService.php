@@ -834,7 +834,7 @@ final class TukaatuPodPaymentService
 
     private function shipmentAmount(Shipment $shipment): float
     {
-        return round((float) ($shipment->total_collectable_amount ?: $shipment->total_collectable ?: $shipment->pod_amount), 2);
+        return (float) $shipment->collect_amount;
     }
 
     private function cents(float $amount): int

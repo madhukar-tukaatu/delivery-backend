@@ -33,7 +33,32 @@ class Shipment extends Model
         'transfer_stage_label',
         'hop_meta',
         'route_progress',
+        'collect_amount',
     ];
+
+    /**
+     * Amount the rider collects at the door. Same rule as the shipment
+     * drawer and settlement (cashPodAmount): POD collects pod_amount (the
+     * order total, delivery already included when the customer pays it);
+     * total_collectable_amount is only a fallback when pod_amount is empty.
+     * Prepaid shipments collect nothing.
+     */
+    public function getCollectAmountAttribute(): float
+    {
+        $type = strtolower((string) ($this->attributes['payment_type'] ?? ''));
+        if (! in_array($type, ['pod', 'cod', 'to_pay'], true)) {
+            return 0.0;
+        }
+
+        foreach (['pod_amount', 'total_collectable_amount', 'total_collectable'] as $field) {
+            $value = (float) ($this->attributes[$field] ?? 0);
+            if ($value > 0) {
+                return round($value, 2);
+            }
+        }
+
+        return 0.0;
+    }
 
     /**
      * True when the parcel must move between two different branch "nodes"

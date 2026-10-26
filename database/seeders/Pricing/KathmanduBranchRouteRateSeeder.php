@@ -4,6 +4,7 @@ namespace Database\Seeders\Pricing;
 
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use RuntimeException;
 
 class KathmanduBranchRouteRateSeeder extends Seeder
@@ -48,57 +49,70 @@ class KathmanduBranchRouteRateSeeder extends Seeder
             throw new RuntimeException('Kathmandu Main Branch not found.');
         }
 
-        foreach ($routes as $route) {
+        // Current schema keys route rates by coverage location
+        // (branches.coverage_location_id); older databases keyed them by branch.
+        $byCoverage = Schema::hasColumn('branch_route_rates', 'pickup_coverage_location_id');
+        $pickupKey = $byCoverage ? 'pickup_coverage_location_id' : 'pickup_branch_id';
+        $deliveryKey = $byCoverage ? 'delivery_coverage_location_id' : 'delivery_branch_id';
+        $keyOf = function (object $branch) use ($byCoverage) {
+            if (!$byCoverage) {
+                return $branch->id;
+            }
+            if (!empty($branch->coverage_location_id)) {
+                return $branch->coverage_location_id;
+            }
 
+            // Fall back to the coverage zone that points at the branch.
+            return DB::table('coverage_locations')
+                ->where('branch_id', $branch->id)
+                ->orderByRaw("type = 'main_branch_zone' DESC")
+                ->orderBy('id')
+                ->value('id');
+        };
+
+        $kathmanduKey = $keyOf($kathmandu);
+        if (!$kathmanduKey) {
+            $this->command?->warn('Kathmandu Main Branch has no coverage location; skipping route rates.');
+
+            return;
+        }
+
+        foreach ($routes as $route) {
             $destination = DB::table('branches')
                 ->where('code', $route['code'])
                 ->first();
 
             if (!$destination) {
-
-                $this->command->warn(
-                    "Branch {$route['code']} not found."
-                );
+                $this->command?->warn("Branch {$route['code']} not found.");
 
                 continue;
             }
 
-            DB::table('branch_route_rates')->updateOrInsert(
+            $destinationKey = $keyOf($destination);
+            if (!$destinationKey) {
+                $this->command?->warn("Branch {$route['code']} has no coverage location; skipped.");
 
-                [
-                    'pickup_branch_id'   => $kathmandu->id,
-                    'delivery_branch_id' => $destination->id,
-                ],
-
-                [
-                    'base_rate'  => $route['rate'],
-                    'is_active'  => true,
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ]
-            );
-
-            if ($destination->id != $kathmandu->id) {
-
-                DB::table('branch_route_rates')->updateOrInsert(
-
-                    [
-                        'pickup_branch_id'   => $destination->id,
-                        'delivery_branch_id' => $kathmandu->id,
-                    ],
-
-                    [
-                        'base_rate'  => $route['rate'],
-                        'is_active'  => true,
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ]
-                );
+                continue;
             }
 
-            $this->command->info(
-                "{$kathmandu->code} ↔ {$destination->code} = Rs. {$route['rate']}"
-            );
+            $pairs = [[$kathmanduKey, $destinationKey]];
+            if ((int) $destinationKey !== (int) $kathmanduKey) {
+                $pairs[] = [$destinationKey, $kathmanduKey];
+            }
+
+            foreach ($pairs as [$from, $to]) {
+                $match = [$pickupKey => $from, $deliveryKey => $to];
+                $exists = DB::table('branch_route_rates')->where($match)->exists();
+
+                DB::table('branch_route_rates')->updateOrInsert($match, array_filter([
+                    'base_rate' => $route['rate'],
+                    'is_active' => true,
+                    'created_at' => $exists ? null : now(),
+                    'updated_at' => now(),
+                ], fn ($v) => $v !== null));
+            }
+
+            $this->command?->info("{$kathmandu->code} <-> {$destination->code} = Rs. {$route['rate']}");
         }
     }
 }

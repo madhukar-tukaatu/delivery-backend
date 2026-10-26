@@ -12,15 +12,23 @@ return new class extends Migration
      */
     public function up(): void
     {
-        if (Schema::hasColumn('branch_transfer_routes', 'transit_branch_ids')) {
+        // On a fresh database branch_transfer_routes is created later; the column
+        // is then added by 2026_09_09_000050 / 2026_09_10.
+        if (
+            !Schema::hasTable('branch_transfer_routes')
+            || Schema::hasColumn('branch_transfer_routes', 'transit_branch_ids')
+        ) {
             return;
         }
 
         Schema::table('branch_transfer_routes', function (Blueprint $table): void {
-            $table->json('transit_branch_ids')
+            $column = $table->json('transit_branch_ids')
                 ->nullable()
-                ->after('transit_count')
                 ->comment('Array of transit branch IDs in order (for accounting/commissions)');
+
+            if (Schema::hasColumn('branch_transfer_routes', 'transit_count')) {
+                $column->after('transit_count');
+            }
         });
     }
 

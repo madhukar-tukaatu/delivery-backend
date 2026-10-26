@@ -910,3 +910,49 @@ Artisan::command(
 )->purpose('Synchronize all downstream financial tables with shipment delivery charges');
 
 
+
+
+Artisan::command('pickups:sync-run-status {--run= : Run number (e.g. RPR-01) or id} {--dry-run : Only list lagging pickups}', function () {
+    $runs = app(\Modules\Pickup\Services\PickupRunService::class);
+    $runOpt = $this->option('run');
+    $runId = null;
+    if ($runOpt) {
+        $run = \Modules\Pickup\Models\PickupRun::query()->where('id', is_numeric($runOpt) ? (int) $runOpt : 0)
+            ->orWhere('run_number', $runOpt)->first();
+        if (! $run) {
+            $this->error("Run {$runOpt} not found.");
+
+            return 1;
+        }
+        $runId = (int) $run->id;
+    }
+
+    $lagging = \Illuminate\Support\Facades\DB::table('pickup_runs as r')
+        ->join('pickup_run_items as i', 'i.pickup_run_id', '=', 'r.id')
+        ->join('pickup_requests as p', 'p.id', '=', 'i.pickup_request_id')
+        ->where('r.status', 'in_progress')->where('i.status', '!=', 'removed')
+        ->whereIn('p.status', ['requested', 'pending', 'assigned', 'accepted'])
+        ->when($runId, fn ($q) => $q->where('r.id', $runId))
+        ->get(['r.run_number', 'p.request_number', 'p.status']);
+    foreach ($lagging as $l) {
+        $this->line("{$l->run_number}  {$l->request_number}  {$l->status}");
+    }
+    if ($lagging->isEmpty()) {
+        $this->info('Nothing to sync: every pickup on in-progress runs is started or later.');
+
+        return 0;
+    }
+    if ($this->option('dry-run')) {
+        $this->info('[DRY RUN] '.$lagging->count().' pickup(s) would be accepted/started.');
+
+        return 0;
+    }
+
+    foreach ($runs->syncLaggingRuns(null, $runId) as $number => $results) {
+        foreach ($results as $r) {
+            $this->line("{$number}  {$r['request_number']}  {$r['from']} -> {$r['to']}".($r['error'] ? "  ({$r['error']})" : ''));
+        }
+    }
+
+    return 0;
+})->purpose('Accept and start pickups that lag behind their in-progress pickup run');

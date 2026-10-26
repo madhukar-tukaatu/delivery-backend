@@ -9,9 +9,18 @@ return new class extends Migration
 {
     public function up(): void
     {
-        if (!Schema::hasColumn('branch_transfer_routes', 'stops')) {
+        // On a fresh database branch_transfer_routes is created later
+        // (2026_09_08_create_transfer_system), so only touch it if present.
+        if (
+            Schema::hasTable('branch_transfer_routes')
+            && !Schema::hasColumn('branch_transfer_routes', 'stops')
+        ) {
             Schema::table('branch_transfer_routes', function (Blueprint $table): void {
-                $table->json('stops')->nullable()->after('transit_count');
+                $column = $table->json('stops')->nullable();
+
+                if (Schema::hasColumn('branch_transfer_routes', 'transit_count')) {
+                    $column->after('transit_count');
+                }
             });
         }
 
@@ -24,8 +33,10 @@ return new class extends Migration
 
     public function down(): void
     {
-        Schema::table('branch_transfer_routes', function (Blueprint $table): void {
-            $table->dropColumn('stops');
-        });
+        if (Schema::hasColumn('branch_transfer_routes', 'stops')) {
+            Schema::table('branch_transfer_routes', function (Blueprint $table): void {
+                $table->dropColumn('stops');
+            });
+        }
     }
 };

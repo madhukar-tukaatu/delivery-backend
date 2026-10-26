@@ -51,6 +51,10 @@ Route::prefix('v1/admin')
             ->middleware(['route.permission'])
             ->name('deliveries.runs.riders.index');
 
+        Route::get('deliveries/runs/suggest', [DeliveryRunController::class, 'suggest'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.suggest.index');
+
         Route::get('deliveries/runs/lookup', [DeliveryRunController::class, 'lookup'])
             ->middleware(['route.permission'])
             ->name('deliveries.runs.lookup.show');
@@ -145,10 +149,31 @@ Route::prefix('v1/staff')
             ->middleware(['route.permission'])
             ->name('deliveries.runs.show');
 
+        Route::post('deliveries/runs/{run}/bag', [DeliveryRunController::class, 'staffBag'])
+            ->whereNumber('run')
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.bag.status');
+
+        Route::post('deliveries/runs/{run}/unbag', [DeliveryRunController::class, 'staffUnbag'])
+            ->whereNumber('run')
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.unbag.status');
+
+        Route::post('deliveries/runs/{run}/missing', [DeliveryRunController::class, 'staffMissing'])
+            ->whereNumber('run')
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.missing.status');
+
         Route::post('deliveries/runs/{run}/start', [DeliveryRunController::class, 'staffStart'])
             ->whereNumber('run')
             ->middleware(['route.permission'])
             ->name('deliveries.runs.start.status');
+
+        // Rider finishes the run (maps to deliveries.status, same as start).
+        Route::post('deliveries/runs/{run}/finish', [DeliveryRunController::class, 'staffFinish'])
+            ->whereNumber('run')
+            ->middleware(['route.permission'])
+            ->name('deliveries.runs.finish.status');
 
         Route::get('deliveries', [StaffDeliveryController::class, 'index'])
             ->middleware(['route.permission'])

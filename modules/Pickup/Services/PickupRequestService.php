@@ -705,6 +705,13 @@ final class PickupRequestService
             $this->callbacks->pickupCollected($result->pickupRequest);
         }
 
+        try {
+            if ($result->pickupRequest) {
+                app(\Modules\Pickup\Services\PickupRunService::class)->syncFromPickupRequest($result->pickupRequest);
+            }
+        } catch (\Throwable) {
+        }
+
         return $result;
     }
 
@@ -1081,6 +1088,13 @@ final class PickupRequestService
             $result->setRelation('pickupRequest', $completed);
         }
 
+        try {
+            if ($result->pickupRequest) {
+                app(\Modules\Pickup\Services\PickupRunService::class)->syncFromPickupRequest($result->pickupRequest);
+            }
+        } catch (\Throwable) {
+        }
+
         return $result;
     }
 
@@ -1268,7 +1282,9 @@ final class PickupRequestService
         }
 
         // Guard against a duplicate pickup.completed callback.
-        $completedCallbackSent = \Modules\Pickup\Models\PickupCallbackLog::query()
+        // pickup_callback_logs has no migration yet; treat a missing table as "not sent".
+        $completedCallbackSent = \Illuminate\Support\Facades\Schema::hasTable('pickup_callback_logs')
+            && \Modules\Pickup\Models\PickupCallbackLog::query()
             ->where('pickup_request_id', $pickupRequest->id)
             ->where('event', 'pickup.completed')
             ->whereIn('status', ['delivered', 'pending', 'queued'])
@@ -1299,6 +1315,11 @@ final class PickupRequestService
 
         if (! $completedCallbackSent) {
             $this->callbacks->pickupCompleted($pickupRequest);
+        }
+
+        try {
+            app(\Modules\Pickup\Services\PickupRunService::class)->syncFromPickupRequest($pickupRequest);
+        } catch (\Throwable) {
         }
 
         return $pickupRequest;
@@ -1752,6 +1773,10 @@ final class PickupRequestService
     private function pickupCompletedCallbackAlreadyFired(
         int $pickupId
     ): bool {
+        if (! \Illuminate\Support\Facades\Schema::hasTable('pickup_callback_logs')) {
+            return false;
+        }
+
         return \Modules\Pickup\Models\PickupCallbackLog::query()
             ->where('pickup_request_id', $pickupId)
             ->where('event', 'pickup.completed')
@@ -2070,6 +2095,13 @@ final class PickupRequestService
         string $type,
         string $description
     ): void {
+        // Keep any pickup run (PR) stop in step with the rider's workflow.
+        try {
+            app(PickupRunService::class)->syncFromPickupRequest($pickup);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::info('pickup_run.sync_skipped', ['pickup_request_id' => $pickup->id, 'error' => $e->getMessage()]);
+        }
+
         $schema = DB::getSchemaBuilder();
 
         if (! $schema->hasTable('pickup_events')) {

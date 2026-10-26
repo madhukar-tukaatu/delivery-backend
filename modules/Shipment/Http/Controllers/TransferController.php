@@ -48,6 +48,11 @@ final class TransferController extends Controller
         CourierStatus::DELIVERY_FAILED,
     ];
 
+    /** TR (dispatch manifest) statuses: still arriving at the receiver / checked in. */
+    private const TR_ARRIVING_STATUSES = ['dispatched', 'in_transit', 'partially_received'];
+
+    private const TR_CLOSED_STATUSES = ['received', 'partially_received'];
+
     /** Statuses a cross-branch parcel can have after it left its origin. */
     private const POST_DISPATCH_STATUSES = [
         CourierStatus::IN_TRANSIT,
@@ -127,33 +132,10 @@ final class TransferController extends Controller
         }
 
         if ($direction === 'inbound') {
-            // INBOUND: transfers coming TO this branch as NEXT hop or final destination.
-            // in_transit parcels have current_branch_id=null, so also match open
-            // dispatch manifests whose to_branch_id is this branch (hop-by-hop).
-            $query->whereIn('status', [
-                CourierStatus::IN_TRANSIT,
-                CourierStatus::RECEIVED_AT_DESTINATION_BRANCH,
-                CourierStatus::RECEIVED_AT_TRANSIT_HUB,
-                CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
-            ]);
-
-            $query->whereColumn('origin_branch_id', '!=', 'destination_branch_id');
-
-            if ($branchId !== 0) {
-                $query->where(function ($q) use ($branchId) {
-                    $q->where('destination_branch_id', $branchId)
-                        ->orWhere('current_branch_id', $branchId)
-                        ->orWhereExists(function ($sub) use ($branchId) {
-                            $sub->selectRaw('1')
-                                ->from('dispatch_manifest_items as dmi')
-                                ->join('dispatch_manifests as dm', 'dm.id', '=', 'dmi.dispatch_manifest_id')
-                                ->whereColumn('dmi.shipment_id', 'shipments.id')
-                                ->where('dm.to_branch_id', $branchId)
-                                ->whereIn('dm.status', ['dispatched', 'in_transit'])
-                                ->whereIn('dmi.status', ['sent', 'dispatched', 'in_transit']);
-                        });
-                });
-            }
+            // INBOUND: parcels on their way TO this branch (next hop), i.e. on a
+            // TR addressed here that has not been checked in yet. Parcels
+            // already received here are under Received, not arriving.
+            $this->applyInboundScope($query, $branchId);
         } else {
             // OUTBOUND: cross-branch parcels ready to leave this branch.
             //
@@ -593,30 +575,9 @@ final class TransferController extends Controller
         $outbound = $outboundQuery->count();
 
         // In Transit: cross-branch transfers in transit to this branch
-        $inTransit = Shipment::query()
-            ->whereColumn('origin_branch_id', '!=', 'destination_branch_id')
-            ->whereIn('status', [
-                CourierStatus::IN_TRANSIT,
-                CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
-                CourierStatus::RECEIVED_AT_TRANSIT_HUB,
-            ]);
-        
-        if ($branchId !== 0) {
-            $inTransit->where(function ($q) use ($branchId) {
-                $q->where('destination_branch_id', $branchId)
-                    ->orWhere('current_branch_id', $branchId)
-                    ->orWhereExists(function ($sub) use ($branchId) {
-                        $sub->selectRaw('1')
-                            ->from('dispatch_manifest_items as dmi')
-                            ->join('dispatch_manifests as dm', 'dm.id', '=', 'dmi.dispatch_manifest_id')
-                            ->whereColumn('dmi.shipment_id', 'shipments.id')
-                            ->where('dm.to_branch_id', $branchId)
-                            ->whereIn('dm.status', ['dispatched', 'in_transit'])
-                            ->whereIn('dmi.status', ['sent', 'dispatched', 'in_transit']);
-                    });
-            });
-        }
-        $inTransit = $inTransit->count();
+        $inTransitQuery = Shipment::query();
+        $this->applyInboundScope($inTransitQuery, $branchId);
+        $inTransit = $inTransitQuery->count();
 
         // Received: every transfer that arrived at this branch, including ones
         // already assigned to a rider, out for delivery or delivered.
@@ -629,15 +590,13 @@ final class TransferController extends Controller
         $this->applySentScope($sentQuery, $branchId);
         $sent = $sentQuery->count();
 
-        // Completed: cross-branch parcels delivered at destination.
-        $completed = Shipment::query()
-            ->whereColumn('origin_branch_id', '!=', 'destination_branch_id')
-            ->where('status', CourierStatus::DELIVERED);
-        
-        if ($branchId !== 0) {
-            $completed->where('destination_branch_id', $branchId);
-        }
-        $completed = $completed->count();
+        // Completed (Transfer Outs): parcels THIS branch sent on a transfer that
+        // were later delivered at another branch. A destination match alone is
+        // not a transfer (a parcel can be delivered by the origin branch without
+        // ever leaving it), and a parcel delivered here is a Transfer In.
+        $completedQuery = Shipment::query();
+        $this->applyCompletedOutScope($completedQuery, $branchId);
+        $completed = $completedQuery->count();
 
         // Today's TR activity (TRs + parcels) for the HQ / branch summary strip.
         $today = now()->toDateString();
@@ -649,12 +608,29 @@ final class TransferController extends Controller
         $openTrs = $trs()->where('status', 'open')
             ->when($branchId !== 0, fn ($q) => $q->where('from_branch_id', $branchId));
 
+        // TR counts that match each tab's default "By TR" list exactly
+        // (same filters as GET transfers/containers).
+        $trCount = function (string $direction, array $statuses) use ($branchId): int {
+            $q = DB::table('dispatch_manifests')->whereIn('status', $statuses);
+            if ($branchId !== 0) {
+                $q->where($direction === 'inbound' ? 'to_branch_id' : 'from_branch_id', $branchId);
+            }
+
+            return $q->count();
+        };
+
         return ApiResponse::success([
+            // Parcel counts.
             'outbound' => $outbound,
             'sent' => $sent,
             'in_transit' => $inTransit,
             'received' => $received,
             'completed' => $completed,
+            'completed_parcels' => $completed,
+            // TR counts (badges): Transfer Ins > Process / Received, Transfer Outs > Completed.
+            'in_transit_trs' => $trCount('inbound', self::TR_ARRIVING_STATUSES),
+            'received_trs' => $trCount('inbound', self::TR_CLOSED_STATUSES),
+            'completed_trs' => $trCount('outbound', self::TR_CLOSED_STATUSES),
             'received_today' => (clone $receivedToday)->count(),
             'received_today_parcels' => (int) (clone $receivedToday)->sum('received_count'),
             'dispatched_today' => (clone $dispatchedToday)->count(),
@@ -677,30 +653,9 @@ final class TransferController extends Controller
         $this->applyOutboundScope($outboundQuery, $branchId);
         $outbound = $outboundQuery->count();
 
-        $inbound = Shipment::query()
-            ->whereColumn('origin_branch_id', '!=', 'destination_branch_id')
-            ->whereIn('status', [
-                CourierStatus::IN_TRANSIT,
-                CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
-                CourierStatus::RECEIVED_AT_TRANSIT_HUB,
-            ]);
-        
-        if ($branchId !== 0) {
-            $inbound->where(function ($q) use ($branchId) {
-                $q->where('destination_branch_id', $branchId)
-                    ->orWhere('current_branch_id', $branchId)
-                    ->orWhereExists(function ($sub) use ($branchId) {
-                        $sub->selectRaw('1')
-                            ->from('dispatch_manifest_items as dmi')
-                            ->join('dispatch_manifests as dm', 'dm.id', '=', 'dmi.dispatch_manifest_id')
-                            ->whereColumn('dmi.shipment_id', 'shipments.id')
-                            ->where('dm.to_branch_id', $branchId)
-                            ->whereIn('dm.status', ['dispatched', 'in_transit'])
-                            ->whereIn('dmi.status', ['sent', 'dispatched', 'in_transit']);
-                    });
-            });
-        }
-        $inbound = $inbound->count();
+        $inboundQuery = Shipment::query();
+        $this->applyInboundScope($inboundQuery, $branchId);
+        $inbound = $inboundQuery->count();
 
         return ApiResponse::success([
             'outbound' => $outbound,
@@ -731,6 +686,38 @@ final class TransferController extends Controller
         $this->applyReceivedScope($query, $branchId);
         $this->applyCommonListFilters($query, $request);
 
+        // Date range = when the parcel was checked in (receipt event or the
+        // recorded destination receipt).
+        $from = $request->filled('date_from') ? $request->date('date_from')?->startOfDay() : null;
+        $to = $request->filled('date_to') ? $request->date('date_to')?->endOfDay() : null;
+        if ($from || $to) {
+            $query->where(function ($q) use ($from, $to, $branchId) {
+                $q->whereExists(function ($sub) use ($from, $to, $branchId) {
+                    $sub->selectRaw('1')
+                        ->from('tracking_events as te')
+                        ->whereColumn('te.shipment_id', 'shipments.id')
+                        ->whereIn('te.status', self::RECEIPT_EVENT_STATUSES);
+                    if ($branchId !== 0) {
+                        $sub->where('te.branch_id', $branchId);
+                    }
+                    if ($from) {
+                        $sub->where('te.created_at', '>=', $from);
+                    }
+                    if ($to) {
+                        $sub->where('te.created_at', '<=', $to);
+                    }
+                })->orWhere(function ($d) use ($from, $to) {
+                    $d->whereNotNull('received_at_destination_at');
+                    if ($from) {
+                        $d->where('received_at_destination_at', '>=', $from);
+                    }
+                    if ($to) {
+                        $d->where('received_at_destination_at', '<=', $to);
+                    }
+                });
+            });
+        }
+
         $perPage = min(max((int) $request->input('per_page', 20), 1), 100);
 
         $results = $query->latest('id')->paginate($perPage);
@@ -756,24 +743,11 @@ final class TransferController extends Controller
             'destinationBranch',
         ]);
 
-        // ONLY cross-branch transfers (delivered to this branch from another branch)
-        $query->where('status', CourierStatus::DELIVERED)
-            ->whereColumn('origin_branch_id', '!=', 'destination_branch_id'); // Cross-branch only!
-
-        if ($branchId !== 0) {
-            $query->where('destination_branch_id', $branchId);
-        }
-
-        if ($request->filled('search')) {
-            $search = trim($request->string('search')->toString());
-            if ($search !== '') {
-                $query->where(function ($q) use ($search) {
-                    $q->where('tracking_number', 'like', "%{$search}%")
-                        ->orWhere('receiver_name', 'like', "%{$search}%")
-                        ->orWhere('receiver_phone', 'like', "%{$search}%");
-                });
-            }
-        }
+        // Transfer Outs > Completed > Delivered parcels: parcels THIS branch sent
+        // on a transfer that were later delivered at another branch. Parcels
+        // received here are under Transfer Ins > Received.
+        $this->applyCompletedOutScope($query, $branchId);
+        $this->applyCommonListFilters($query, $request->merge(['status' => null]));
 
         if ($request->filled('date_from')) {
             $query->whereDate('delivered_at', '>=', $request->date('date_from'));
@@ -790,12 +764,18 @@ final class TransferController extends Controller
 
         // Add transfer metadata
         $results->getCollection()->transform(function ($shipment) {
+            $sentAt = $shipment->dispatched_at ? \Illuminate\Support\Carbon::parse($shipment->dispatched_at) : null;
+            $recvAt = $shipment->received_at_destination_at ? \Illuminate\Support\Carbon::parse($shipment->received_at_destination_at) : null;
             $shipment->transfer_details = [
                 'origin' => $shipment->originBranch?->name ?? 'Unknown',
                 'destination' => $shipment->destinationBranch?->name ?? 'Unknown',
                 'dispatched_at' => $shipment->dispatched_at,
                 'received_at' => $shipment->received_at_destination_at,
                 'delivered_at' => $shipment->delivered_at,
+                // Dispatch -> check-in at the destination branch.
+                'transfer_duration' => $sentAt && $recvAt && $recvAt->gte($sentAt)
+                    ? $sentAt->diffForHumans($recvAt, \Carbon\CarbonInterface::DIFF_ABSOLUTE, true, 2)
+                    : null,
             ];
             return $shipment;
         });
@@ -1607,12 +1587,15 @@ final class TransferController extends Controller
                         $sub->where('dm.from_branch_id', $branchId);
                     }
                 })->orWhere(function ($d) use ($branchId) {
+                    // Older parcels without a manifest row: the origin's own
+                    // recorded dispatch. A later status alone is not proof (a
+                    // parcel delivered by its origin never left it).
                     if ($branchId !== 0) {
                         $d->where('origin_branch_id', $branchId);
                     }
                     $d->where(function ($x) {
                         $x->whereNotNull('dispatched_at')
-                            ->orWhereIn('status', self::POST_DISPATCH_STATUSES);
+                            ->orWhereNotNull('transfer_status');
                     });
                 });
             });
@@ -1649,13 +1632,66 @@ final class TransferController extends Controller
                     if ($branchId !== 0) {
                         $d->where('destination_branch_id', $branchId);
                     }
+                    // Older parcels without events: the recorded receipt at the
+                    // destination. Sitting at the destination is not enough (it
+                    // may never have been transferred there).
                     $d->whereIn('status', self::POST_RECEIPT_STATUSES)
-                        ->where(function ($x) {
-                            $x->whereNotNull('received_at_destination_at')
-                                ->orWhereColumn('current_branch_id', 'destination_branch_id');
-                        });
+                        ->whereNotNull('received_at_destination_at');
                 });
             });
+    }
+
+    /**
+     * INBOUND (Transfer Ins > Process): parcels on a dispatched TR addressed to
+     * this branch that it has not checked in yet. Older parcels without any
+     * manifest row fall back to "in transit to this final destination".
+     */
+    private function applyInboundScope($query, int $branchId): void
+    {
+        $query->whereColumn('origin_branch_id', '!=', 'destination_branch_id')
+            ->whereIn('status', [
+                CourierStatus::IN_TRANSIT,
+                CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
+            ])
+            ->where(function ($w) use ($branchId) {
+                $w->whereExists(function ($sub) use ($branchId) {
+                    $sub->selectRaw('1')
+                        ->from('dispatch_manifest_items as dmi')
+                        ->join('dispatch_manifests as dm', 'dm.id', '=', 'dmi.dispatch_manifest_id')
+                        ->whereColumn('dmi.shipment_id', 'shipments.id')
+                        ->whereIn('dm.status', self::TR_ARRIVING_STATUSES)
+                        ->whereIn('dmi.status', ['sent', 'dispatched', 'in_transit']);
+                    if ($branchId !== 0) {
+                        $sub->where('dm.to_branch_id', $branchId);
+                    }
+                })->orWhere(function ($legacy) use ($branchId) {
+                    $legacy->whereNotExists(function ($sub) {
+                        $sub->selectRaw('1')
+                            ->from('dispatch_manifest_items as dmi')
+                            ->whereColumn('dmi.shipment_id', 'shipments.id');
+                    });
+                    if ($branchId !== 0) {
+                        $legacy->where('destination_branch_id', $branchId);
+                    }
+                });
+            });
+    }
+
+    /**
+     * Transfer Outs > Completed: delivered parcels this branch SENT on a
+     * transfer (dispatch manifest from this branch, or the origin's recorded
+     * dispatch for older data), delivered at another branch.
+     */
+    private function applyCompletedOutScope($query, int $branchId): void
+    {
+        $query->where('status', CourierStatus::DELIVERED);
+        $this->applySentScope($query, $branchId);
+        if ($branchId !== 0) {
+            $query->where(function ($q) use ($branchId) {
+                $q->whereNull('destination_branch_id')
+                    ->orWhere('destination_branch_id', '!=', $branchId);
+            });
+        }
     }
 
     /**
@@ -1764,6 +1800,17 @@ final class TransferController extends Controller
                     // leaves the last branch that recorded it.
                     $fromBranch = $eventBranch ?: $lastBranch;
                     $manifest = $this->matchManifest($rows, $fromBranch, (string) $e->created_at);
+                    if (! $manifest && ! $eventBranch && $rows->isNotEmpty()) {
+                        // The branch was only inferred from earlier events; the TR row
+                        // nearest in time says where the parcel really left from.
+                        $target = strtotime((string) $e->created_at) ?: 0;
+                        $gap = fn ($m) => abs((strtotime((string) ($m->dispatched_at ?? $m->created_at ?? '')) ?: 0) - $target);
+                        $manifest = $rows->sortBy($gap)->first();
+                        if ($manifest && $gap($manifest) > 6 * 3600) {
+                            $manifest = null; // too far apart to be the same dispatch
+                        }
+                        $fromBranch = $manifest ? (int) $manifest->from_branch_id : $fromBranch;
+                    }
                     $toBranch = $manifest ? (int) $manifest->to_branch_id : null;
                     $entry['from_branch_id'] = $fromBranch;
                     $entry['from_branch_name'] = $name($branches, $fromBranch);
@@ -1834,7 +1881,7 @@ final class TransferController extends Controller
                 ];
             } elseif ($receivedBranch === $destinationId
                 && in_array($shipment->status, self::POST_RECEIPT_STATUSES, true)
-                && ($shipment->received_at_destination_at || (int) ($shipment->current_branch_id ?? 0) === $destinationId)) {
+                && $shipment->received_at_destination_at) {
                 $received = [
                     'branch_id' => $receivedBranch,
                     'branch_name' => $name($branches, $receivedBranch),
@@ -1869,10 +1916,23 @@ final class TransferController extends Controller
 
             $shipment->setAttribute('timeline', $timeline);
             $shipment->setAttribute('branch_events', $branchEvents);
+            // Direction for the viewing branch: out = it sent the parcel on,
+            // in = it received it, in_out = received and sent on (transit hub),
+            // out_pending = still waiting here to be sent.
+            $direction = null;
+            if ($branchId !== 0) {
+                $direction = $sent && $received ? 'in_out' : ($sent ? 'out' : ($received ? 'in' : null));
+                if ($direction === null && (int) ($shipment->current_branch_id ?? 0) === $branchId
+                    && $destinationId !== $branchId) {
+                    $direction = 'out_pending';
+                }
+            }
+
             $shipment->setAttribute('transfer_info', [
                 'branch_id' => $branchId ?: null,
                 'branch_name' => $name($branches, $branchId ?: null),
                 'role' => $role,
+                'direction' => $direction,
                 'sent' => $sent,
                 'received' => $received,
                 'current_status' => $shipment->status,
@@ -1972,6 +2032,12 @@ final class TransferController extends Controller
                 }
             });
         }
+        if ($request->filled('service_type') && $request->string('service_type')->toString() !== 'all') {
+            // TRs carrying at least one parcel of this service type.
+            $service = $request->string('service_type')->toString();
+            $query->whereHas('items', fn ($i) => $i->whereNotIn('status', ['cancelled', 'moved'])
+                ->whereHas('shipment', fn ($s) => $s->where('service_type', $service)));
+        }
         if ($request->filled('date_from')) {
             $query->whereDate('created_at', '>=', $request->input('date_from'));
         }
@@ -1983,7 +2049,14 @@ final class TransferController extends Controller
         $page = $query->orderByRaw("FIELD(status, 'partially_received', 'in_transit', 'dispatched', 'open') DESC")
             ->latest('id')
             ->paginate($perPage);
-        $page->setCollection($page->getCollection()->map(fn ($m) => $this->containers->summarize($m)));
+        $page->setCollection($page->getCollection()->map(function ($m) use ($branchId) {
+            $row = $this->containers->summarize($m);
+            // In / Out for the viewing branch (History and other mixed lists).
+            $row['viewer_direction'] = $branchId === 0 ? null
+                : ((int) $m->from_branch_id === $branchId ? 'out' : ((int) $m->to_branch_id === $branchId ? 'in' : null));
+
+            return $row;
+        }));
 
         return ApiResponse::success($page);
     }
@@ -2381,6 +2454,11 @@ final class TransferController extends Controller
             return 0; // No scope restriction
         }
 
-        return (int) ($user->branch_id ?? 0);
+        $branchId = (int) ($user->branch_id ?? 0);
+        // 0 means "all branches": a branch user without a branch must not get
+        // every branch's transfers.
+        abort_if($branchId === 0, 403, 'Your account is not linked to a branch, so it has no transfers.');
+
+        return $branchId;
     }
 }

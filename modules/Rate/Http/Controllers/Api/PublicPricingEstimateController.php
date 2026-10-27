@@ -277,7 +277,7 @@ final class PublicPricingEstimateController extends Controller
                         'to_coverage_location_id'     => data_get($result, 'route.to_coverage_location_id', data_get($result, 'route.delivery_branch_id')),
                         'to_coverage_location_name'   => data_get($result, 'route.to_coverage_location_name'),
 
-                        // branch_route mode: straight-line pickup pin -> delivery pin.
+                        // branch_route mode: straight-line pickup pin -> delivery pin. 
                         // configured_transfer_route mode: configured route distance.
                         'total_distance_km' => round(
                             (float) data_get($result, 'route.total_distance_km', 0),

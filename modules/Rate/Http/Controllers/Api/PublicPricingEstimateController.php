@@ -222,9 +222,10 @@ final class PublicPricingEstimateController extends Controller
                     'price'                    => round((float) $finalPrice, 2),
                     'delivery_charge'          => round((float) $finalPrice, 2),
                     /*
-                     * Branch ids/names are the matched coverage locations and
-                     * all distances are measured from those coverage locations
-                     * (the same distances the price is calculated from).
+                     * pickup_branch / delivery_branch are the customer's
+                     * coverage locations (display). The price is based on the
+                     * operational serving branches reported in
+                     * pickup_serving_branch / delivery_serving_branch.
                      */
                     'pickup_branch'            => [
                         'id'                               => (int) data_get($result, 'pickup_branch.id'),
@@ -242,13 +243,41 @@ final class PublicPricingEstimateController extends Controller
                         'distance_basis'                   => 'coverage_location',
                     ],
 
+                    'pickup_serving_branch'    => $this->servingBranchPayload(
+                        (array) data_get($result, 'pickup_serving_branch', [])
+                    ),
+
+                    'delivery_serving_branch'  => $this->servingBranchPayload(
+                        (array) data_get($result, 'delivery_serving_branch', [])
+                    ),
+
+                    'extra_delivery_distance'  => [
+                        'distance_km'          => round((float) data_get($result, 'breakdown.extra_delivery_distance.delivery_distance_km', 0), 3),
+                        'included_distance_km' => round((float) data_get($result, 'breakdown.extra_delivery_distance.included_distance_km', 0), 3),
+                        'extra_distance_km'    => round((float) data_get($result, 'breakdown.extra_delivery_distance.extra_distance_km', 0), 3),
+                        'rate_per_km'          => round((float) data_get($result, 'breakdown.extra_delivery_distance.rate_per_km', 0), 2),
+                        'charge'               => round((float) data_get($result, 'breakdown.extra_delivery_distance.total', 0), 2),
+                        'distance_basis'       => (string) data_get($result, 'delivery_serving_branch.distance_basis', 'coverage_location'),
+                    ],
+
+                    'pricing_setting'          => [
+                        'id'   => data_get($result, 'pricing_setting.id'),
+                        'name' => data_get($result, 'pricing_setting.name'),
+                    ],
+
                     'route'                    => [
                         'base_rate'         => round(
                             (float) data_get($result, 'route.base_rate', 0),
                             2
                         ),
 
-                        // branch_route mode: straight-line pickup pin -> delivery pin.
+                        // Coverage locations of the serving branches used for the base rate.
+                        'from_coverage_location_id'   => data_get($result, 'route.from_coverage_location_id', data_get($result, 'route.pickup_branch_id')),
+                        'from_coverage_location_name' => data_get($result, 'route.from_coverage_location_name'),
+                        'to_coverage_location_id'     => data_get($result, 'route.to_coverage_location_id', data_get($result, 'route.delivery_branch_id')),
+                        'to_coverage_location_name'   => data_get($result, 'route.to_coverage_location_name'),
+
+                        // branch_route mode: straight-line pickup pin -> delivery pin. 
                         // configured_transfer_route mode: configured route distance.
                         'total_distance_km' => round(
                             (float) data_get($result, 'route.total_distance_km', 0),
@@ -356,5 +385,24 @@ final class PublicPricingEstimateController extends Controller
         }
 
         return Carbon::parse((string) $value)->toIso8601String();
+    }
+
+    /**
+     * Public shape of an operational serving branch block.
+     */
+    private function servingBranchPayload(array $serving): array
+    {
+        return [
+            'id'                       => $serving['id'] ?? null,
+            'name'                     => $serving['name'] ?? null,
+            'sub_branch_id'            => $serving['sub_branch_id'] ?? null,
+            'coverage_location_id'     => $serving['coverage_location_id'] ?? null,
+            'coverage_location_name'   => $serving['coverage_location_name'] ?? null,
+            'coverage_location_source' => $serving['coverage_location_source'] ?? null,
+            'distance_km'              => isset($serving['distance_km']) ? round((float) $serving['distance_km'], 3) : null,
+            'distance_basis'           => $serving['distance_basis'] ?? 'coverage_location',
+            'fallback'                 => (bool) ($serving['fallback'] ?? true),
+            'fallback_reason'          => $serving['fallback_reason'] ?? null,
+        ];
     }
 }

@@ -297,7 +297,9 @@ final class BranchAssignmentService
 
         $baseDistanceKm = 5.0;
         try {
-            $baseDistanceKm = max(0.0, (float) (DB::table('pricing_settings')->where('is_active', true)->value('included_delivery_distance_km') ?? 5.0));
+            // Admin-managed column first (base_distance_km), legacy column second.
+            $activeSetting = DB::table('pricing_settings')->where('is_active', true)->orderByDesc('id')->first();
+            $baseDistanceKm = max(0.0, (float) ($activeSetting->base_distance_km ?? $activeSetting->included_delivery_distance_km ?? 5.0));
         } catch (\Throwable $e) {}
 
         $extraMileKm = max(0.0, round($destToCustomerDistance - $baseDistanceKm, 2));

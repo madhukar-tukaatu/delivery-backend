@@ -46,38 +46,66 @@ final class PricingEngineService
             (float) ($data['delivery_longitude'] ?? 0)
         );
 
-        $pickupBranchId   = (int) $pickupLocation->id;
-        $deliveryBranchId = (int) $deliveryLocation->id;
+        /*
+         * Customer-facing coverage locations (display only). These are the
+         * zones the pins fall in; they are reported as pickup_branch /
+         * delivery_branch so the customer sees "their" coverage location.
+         */
+        $customerPickupZoneId   = (int) $pickupLocation->id;
+        $customerDeliveryZoneId = (int) $deliveryLocation->id;
 
-        $isSameBranch =
-            $pickupBranchId === $deliveryBranchId;
-
-        $pickupDistanceKm = max(
+        $pickupZoneDistanceKm = max(
             0,
             (float) ($pickupLocation->resolved_distance_km ?? 0)
         );
 
-        $deliveryDistanceKm = max(
+        $zoneDeliveryDistanceKm = max(
             0,
             (float) ($deliveryLocation->resolved_distance_km ?? 0)
         );
 
         /*
-         * Pricing is driven purely by coverage locations: the base rate uses
-         * the pickup and delivery coverage zones, and the extra last-mile
-         * distance is measured from the matched delivery coverage location
-         * to the delivery pin ($deliveryDistanceKm above).
+         * Operational pricing.
          *
-         * The operational branch (nearest row in `branches`, the same rule
-         * BranchAssignmentService uses for destination_branch_id) is looked
-         * up for reporting only. It must NOT change the price: when a zone
-         * has no active branch record nearby, the nearest operational branch
-         * can be tens of km away and would inflate the extra-distance charge.
+         * The serving branch for each pin is the one BranchAssignmentService
+         * would assign (nearest active operational branch). The price uses:
+         *  - base rate: active route rate between the pickup serving branch's
+         *    coverage location and the delivery serving branch's coverage
+         *    location;
+         *  - extra distance: delivery serving branch -> delivery pin.
+         * When no serving branch (or no branch coordinates) is available the
+         * customer coverage location is used instead and flagged.
          */
-        $zoneDeliveryDistanceKm = $deliveryDistanceKm;
-        $deliveringBranch = $this->deliveringBranch(
+        $pickupServing = $this->servingBranch(
+            (float) ($data['pickup_latitude'] ?? 0),
+            (float) ($data['pickup_longitude'] ?? 0),
+            $pickupLocation,
+            $pickupZoneDistanceKm
+        );
+
+        $deliveryServing = $this->servingBranch(
             (float) ($data['delivery_latitude'] ?? 0),
-            (float) ($data['delivery_longitude'] ?? 0)
+            (float) ($data['delivery_longitude'] ?? 0),
+            $deliveryLocation,
+            $zoneDeliveryDistanceKm
+        );
+
+        // Coverage locations used for the route rate (pricing identity).
+        $pickupBranchId   = (int) $pickupServing['coverage_location_id'];
+        $deliveryBranchId = (int) $deliveryServing['coverage_location_id'];
+        $pickupPricingZoneName   = $pickupServing['coverage_location_name'];
+        $deliveryPricingZoneName = $deliveryServing['coverage_location_name'];
+
+        $isSameBranch =
+            $pickupBranchId === $deliveryBranchId;
+
+        // Pickup side: there is no pickup extra-distance charge (unchanged).
+        $pickupDistanceKm = $pickupZoneDistanceKm;
+
+        // Priced last-mile distance: delivery serving branch -> delivery pin.
+        $deliveryDistanceKm = max(
+            0,
+            (float) $deliveryServing['distance_km']
         );
 
         /*
@@ -126,8 +154,8 @@ final class PricingEngineService
             $routeRate = $this->routeBaseRate(
                 $pickupBranchId,
                 $deliveryBranchId,
-                $pickupLocation->name ?? null,
-                $deliveryLocation->name ?? null
+                $pickupPricingZoneName,
+                $deliveryPricingZoneName
             );
 
             $baseRate = max(
@@ -236,13 +264,15 @@ final class PricingEngineService
          * Step 6: Apply the fragile multiplier only to each fragile
          * packet's allocated base-rate and weight-charge portion.
          */
-        $fragileMultiplier = max(
-            1,
-            (float) (
-                $settings->fragile_multiplier
-                ?? 1.05
+        $fragileMultiplier = $this->settingEnabled($settings, 'fragile_enabled')
+            ? max(
+                1,
+                (float) (
+                    $settings->fragile_multiplier
+                    ?? 1.05
+                )
             )
-        );
+            : 1.0;
 
         $packetBreakdown = [];
         $totalFragileCharge = 0.0;
@@ -521,14 +551,15 @@ final class PricingEngineService
                     (string) $serviceType->name,
             ],
 
+            // Customer coverage location of the pickup pin (display).
             'pickup_branch' => [
                 'id' =>
-                    $pickupBranchId,
+                    $customerPickupZoneId,
 
                 'name' =>
                     (string) (
                         $pickupLocation->name
-                        ?? "Zone {$pickupBranchId}"
+                        ?? "Zone {$customerPickupZoneId}"
                     ),
 
                 'distance_km' =>
@@ -540,24 +571,36 @@ final class PricingEngineService
                 // Distance from the pickup pin to the pickup coverage location.
                 'zone_distance_km' =>
                     round(
-                        $pickupDistanceKm,
+                        $pickupZoneDistanceKm,
                         3
                     ),
 
                 'distance_basis' =>
                     'coverage_location',
+
+                'operational_branch_id' =>
+                    $pickupServing['id'],
+
+                'operational_branch_name' =>
+                    $pickupServing['name'],
+
+                'operational_branch_distance_km' =>
+                    $pickupServing['branch_distance_km'],
             ],
 
+            // Customer coverage location of the delivery pin (display).
             'delivery_branch' => [
                 'id' =>
-                    $deliveryBranchId,
+                    $customerDeliveryZoneId,
 
                 'name' =>
                     (string) (
                         $deliveryLocation->name
-                        ?? "Zone {$deliveryBranchId}"
+                        ?? "Zone {$customerDeliveryZoneId}"
                     ),
 
+                // Priced last-mile distance (serving branch -> pin), kept
+                // under the original key for shipment/reconcile consumers.
                 'distance_km' =>
                     round(
                         $deliveryDistanceKm,
@@ -565,7 +608,6 @@ final class PricingEngineService
                     ),
 
                 // Distance from the delivery coverage location to the pin.
-                // This is the distance the extra-distance charge uses.
                 'zone_distance_km' =>
                     round(
                         $zoneDeliveryDistanceKm,
@@ -573,20 +615,27 @@ final class PricingEngineService
                     ),
 
                 'distance_basis' =>
-                    'coverage_location',
+                    $deliveryServing['distance_basis'],
 
-                // Operational info only (branch assignment); not priced.
                 'operational_branch_id' =>
-                    $deliveringBranch['branch_id'] ?? null,
+                    $deliveryServing['id'],
 
                 'operational_branch_name' =>
-                    $deliveringBranch['name'] ?? null,
+                    $deliveryServing['name'],
 
                 'operational_branch_distance_km' =>
-                    $deliveringBranch !== null
-                        ? round((float) $deliveringBranch['distance_km'], 3)
-                        : null,
+                    $deliveryServing['branch_distance_km'],
             ],
+
+            // Operational branches the price is based on.
+            'pickup_serving_branch' =>
+                $pickupServing,
+
+            'delivery_serving_branch' =>
+                $deliveryServing,
+
+            'pricing_setting' =>
+                $this->settingsSummary($settings),
 
             'base_rate_mode' =>
                 $baseRateMode,
@@ -656,6 +705,21 @@ final class PricingEngineService
 
                     'base_rate' =>
                         round($baseRate, 2),
+
+                    'base_rate_basis' =>
+                        'operational_branch_coverage_locations',
+
+                    'from_coverage_location_id' =>
+                        $pickupBranchId,
+
+                    'from_coverage_location_name' =>
+                        $pickupPricingZoneName,
+
+                    'to_coverage_location_id' =>
+                        $deliveryBranchId,
+
+                    'to_coverage_location_name' =>
+                        $deliveryPricingZoneName,
 
                     // Straight-line pickup pin -> delivery pin (informational).
                     'total_distance_km' =>
@@ -833,7 +897,87 @@ final class PricingEngineService
             ]);
         }
 
+        return $this->normalizeSettings($settings);
+    }
+
+    /**
+     * The admin pricing screen (AdminPricingSettingsController /
+     * StorePricingSettingsRequest) saves the active version under the newer
+     * column names (base_distance_km, extra_distance_rate, base_weight_kg,
+     * local_/transfer_extra_weight_rate, local_/transfer_same_day_multiplier,
+     * minimum_free_pickup_packets, small_pickup_charge). The engine used to
+     * read only the original column names, so admin edits were ignored and
+     * the column defaults (5 km, NPR 6/km, 1.5 kg, ...) were used instead.
+     *
+     * Map every engine key to the admin-managed column first, then the
+     * legacy column, recording which column supplied the value.
+     */
+    private function normalizeSettings(object $row): object
+    {
+        $map = [
+            'included_weight_kg' => ['base_weight_kg', 'included_weight_kg'],
+            'same_branch_weight_rate' => ['local_extra_weight_rate', 'same_branch_weight_rate', 'same_branch_excess_weight_rate'],
+            'other_branch_weight_rate' => ['transfer_extra_weight_rate', 'other_branch_weight_rate', 'transfer_branch_excess_weight_rate'],
+            'included_delivery_distance_km' => ['base_distance_km', 'included_delivery_distance_km'],
+            'extra_distance_rate_per_km' => ['extra_distance_rate', 'extra_distance_rate_per_km'],
+            'same_branch_sdd_multiplier' => ['local_same_day_multiplier', 'same_branch_sdd_multiplier', 'same_day_same_branch_multiplier'],
+            'other_branch_sdd_multiplier' => ['transfer_same_day_multiplier', 'other_branch_sdd_multiplier', 'same_day_transfer_branch_multiplier'],
+            'minimum_pickup_packets' => ['minimum_free_pickup_packets', 'minimum_pickup_packets', 'minimum_pickup_packet_count'],
+            'low_packet_pickup_charge' => ['small_pickup_charge', 'low_packet_pickup_charge'],
+        ];
+
+        $settings = clone $row;
+        $sources = [];
+
+        foreach ($map as $key => $columns) {
+            $settings->{$key} = null;
+            $sources[$key] = 'default';
+
+            foreach ($columns as $column) {
+                if (
+                    property_exists($row, $column)
+                    && $row->{$column} !== null
+                    && $row->{$column} !== ''
+                ) {
+                    $settings->{$key} = $row->{$column};
+                    $sources[$key] = $column;
+                    break;
+                }
+            }
+        }
+
+        $settings->_value_sources = $sources;
+
         return $settings;
+    }
+
+    /**
+     * Boolean toggle on the active setting; missing column means enabled.
+     */
+    private function settingEnabled(object $settings, string $column): bool
+    {
+        if (! property_exists($settings, $column) || $settings->{$column} === null) {
+            return true;
+        }
+
+        return (bool) $settings->{$column};
+    }
+
+    /**
+     * Which active pricing setting (and which values) priced this quote.
+     */
+    private function settingsSummary(object $settings): array
+    {
+        return [
+            'id' => isset($settings->id) ? (int) $settings->id : null,
+            'name' => $settings->name ?? null,
+            'included_delivery_distance_km' => (float) ($settings->included_delivery_distance_km ?? 5),
+            'extra_distance_rate_per_km' => (float) ($settings->extra_distance_rate_per_km ?? 6),
+            'included_weight_kg' => (float) ($settings->included_weight_kg ?? 1.5),
+            'same_branch_weight_rate' => (float) ($settings->same_branch_weight_rate ?? 20),
+            'other_branch_weight_rate' => (float) ($settings->other_branch_weight_rate ?? 30),
+            'value_sources' => $settings->_value_sources ?? [],
+        ];
     }
 
     /**
@@ -1634,15 +1778,43 @@ final class PricingEngineService
     }
 
     /**
-     * Operational branch that delivers to these coordinates and its distance.
-     * Null when coordinates are missing or no branch has a location.
+     * Serving operational branch for a pin and the coverage location used to
+     * price it.
      *
-     * @return array{branch_id:int, name:?string, distance_km:float}|null
+     * Branch selection is delegated to BranchAssignmentService (the same
+     * nearest-active-branch rule used for shipment assignment). The branch's
+     * pricing coverage location comes from MainBranchResolverService::
+     * resolveZoneForBranch (branches.coverage_location_id, then
+     * coverage_locations.branch_id, then the parent branch, then the zone
+     * nearest the branch coordinates - flagged).
+     *
+     * Falls back to the customer's coverage location ($zone) when no
+     * serving branch / branch coordinates exist, flagged as fallback.
      */
-    private function deliveringBranch(float $latitude, float $longitude): ?array
-    {
+    private function servingBranch(
+        float $latitude,
+        float $longitude,
+        object $zone,
+        float $zoneDistanceKm
+    ): array {
+        $fallback = function (string $reason) use ($zone, $zoneDistanceKm): array {
+            return [
+                'id' => null,
+                'name' => null,
+                'sub_branch_id' => null,
+                'coverage_location_id' => (int) $zone->id,
+                'coverage_location_name' => (string) ($zone->name ?? "Zone {$zone->id}"),
+                'coverage_location_source' => 'customer_coverage_location',
+                'distance_km' => round($zoneDistanceKm, 3),
+                'branch_distance_km' => null,
+                'distance_basis' => 'coverage_location',
+                'fallback' => true,
+                'fallback_reason' => $reason,
+            ];
+        };
+
         if ($latitude == 0.0 && $longitude == 0.0) {
-            return null;
+            return $fallback('missing_coordinates');
         }
 
         try {
@@ -1653,26 +1825,57 @@ final class PricingEngineService
             ]);
 
             $node = $payload['sub_branch'] ?? $payload['branch'] ?? null;
-            $nodeLat = $node?->latitude ?? $node?->office_latitude ?? $node?->lat ?? null;
-            $nodeLng = $node?->longitude ?? $node?->office_longitude ?? $node?->lng ?? null;
-            if (! $node || $nodeLat === null || $nodeLng === null) {
-                return null;
+
+            if (! $node) {
+                return $fallback('no_operational_branch');
+            }
+
+            $parent = $payload['sub_branch'] !== null ? ($payload['branch'] ?? null) : null;
+
+            $nodeLat = $node->latitude ?? $node->office_latitude ?? $node->lat ?? null;
+            $nodeLng = $node->longitude ?? $node->office_longitude ?? $node->lng ?? null;
+
+            if ($nodeLat === null || $nodeLng === null) {
+                return $fallback('operational_branch_without_coordinates');
+            }
+
+            $distanceKm = (float) $assigner->distanceKm(
+                $latitude,
+                $longitude,
+                (float) $nodeLat,
+                (float) $nodeLng
+            );
+
+            $pricingZone = $this->branchResolver->resolveZoneForBranch(
+                $node,
+                $parent,
+                (float) $nodeLat,
+                (float) $nodeLng
+            );
+
+            if ($pricingZone === null) {
+                return $fallback('operational_branch_without_coverage_location');
             }
 
             return [
-                'branch_id' => (int) $node->id,
-                'name' => $node->name ?? null,
-                'distance_km' => (float) $assigner->distanceKm(
-                    $latitude,
-                    $longitude,
-                    (float) $nodeLat,
-                    (float) $nodeLng
-                ),
+                'id' => (int) ($payload['branch_id'] ?? $node->id),
+                'name' => $parent !== null ? ($parent->name ?? null) : ($node->name ?? null),
+                'sub_branch_id' => $payload['sub_branch_id'] ?? null,
+                'sub_branch_name' => $payload['sub_branch'] !== null ? ($node->name ?? null) : null,
+                'coverage_location_id' => (int) $pricingZone->id,
+                'coverage_location_name' => (string) $pricingZone->name,
+                'coverage_location_source' => (string) $pricingZone->source,
+                'coverage_location_fallback' => (bool) $pricingZone->fallback,
+                'distance_km' => round($distanceKm, 3),
+                'branch_distance_km' => round($distanceKm, 3),
+                'distance_basis' => 'operational_branch',
+                'fallback' => false,
+                'fallback_reason' => null,
             ];
         } catch (\Throwable $e) {
             report($e);
 
-            return null;
+            return $fallback('operational_branch_lookup_failed');
         }
     }
 
@@ -1710,7 +1913,7 @@ final class PricingEngineService
 
     /**
      * Charge for delivery distance beyond the included coverage radius.
-     * $deliveryDistanceKm is the delivery coverage location -> pin distance.
+     * $deliveryDistanceKm is the delivery serving branch -> pin distance.
      */
     private function extraDeliveryDistanceCharge(
         float $deliveryDistanceKm,
@@ -1803,6 +2006,12 @@ final class PricingEngineService
             return $notApplied;
         }
 
+        if (! $this->settingEnabled($settings, 'same_day_enabled')) {
+            throw ValidationException::withMessages([
+                'service_type' => ['Same-day delivery is currently disabled.'],
+            ]);
+        }
+
         // Branch-level toggle overrides global
         if ($routeRate !== null && isset($routeRate->same_day_enabled) && !(bool) $routeRate->same_day_enabled) {
             throw ValidationException::withMessages([
@@ -1854,6 +2063,12 @@ final class PricingEngineService
 
         if ($normalizedCode !== 'express') {
             return $notApplied;
+        }
+
+        if (! $this->settingEnabled($settings, 'express_enabled')) {
+            throw ValidationException::withMessages([
+                'service_type' => ['Express delivery is currently disabled.'],
+            ]);
         }
 
         // Branch-level toggle overrides global

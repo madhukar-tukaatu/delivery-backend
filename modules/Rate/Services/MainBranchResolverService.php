@@ -123,6 +123,96 @@ final class MainBranchResolverService
         return $result;
     }
 
+    /**
+     * Pricing coverage location for an operational branch node.
+     *
+     * Order:
+     *  1. branches.coverage_location_id of the node (source: branch_coverage_location_id)
+     *  2. coverage_locations.branch_id = node id   (source: coverage_location_branch_id)
+     *  3. the parent branch's coverage_location_id (sub-branches only)
+     *  4. the coverage location nearest the branch's own coordinates
+     *     (source: nearest_to_branch, fallback = true)
+     *
+     * Sub-branch zones resolve up to their main zone, the same as resolve().
+     * Returns null when nothing can be resolved (no link and no coordinates).
+     */
+    public function resolveZoneForBranch(
+        object $branch,
+        ?object $parentBranch = null,
+        ?float $branchLatitude = null,
+        ?float $branchLongitude = null
+    ): ?object {
+        $zones = $this->activeZones();
+
+        if ($zones->isEmpty()) {
+            return null;
+        }
+
+        $zonesById = $zones->keyBy(
+            static fn (object $zone): int => (int) $zone->id
+        );
+
+        $candidates = [];
+
+        if (! empty($branch->coverage_location_id)) {
+            $candidates[] = [(int) $branch->coverage_location_id, 'branch_coverage_location_id'];
+        }
+
+        $linked = $zones->first(
+            static fn (object $zone): bool =>
+                isset($zone->branch_id) && (int) $zone->branch_id === (int) ($branch->id ?? 0)
+        );
+
+        if ($linked !== null) {
+            $candidates[] = [(int) $linked->id, 'coverage_location_branch_id'];
+        }
+
+        if ($parentBranch !== null && ! empty($parentBranch->coverage_location_id)) {
+            $candidates[] = [(int) $parentBranch->coverage_location_id, 'parent_branch_coverage_location_id'];
+        }
+
+        foreach ($candidates as [$zoneId, $source]) {
+            $zone = $zonesById->get($zoneId);
+
+            if ($zone === null) {
+                continue;
+            }
+
+            $main = $this->resolveMainZone($zone, $zonesById);
+
+            return $this->zonePayload($main, $source, false);
+        }
+
+        if ($branchLatitude === null || $branchLongitude === null) {
+            return null;
+        }
+
+        $nearest = $this->resolve($branchLatitude, $branchLongitude);
+        $main = $zonesById->get((int) $nearest->id);
+
+        if ($main === null) {
+            return null;
+        }
+
+        $payload = $this->zonePayload($main, 'nearest_to_branch', true);
+        $payload->branch_to_zone_distance_km = (float) $nearest->resolved_distance_km;
+
+        return $payload;
+    }
+
+    private function zonePayload(object $zone, string $source, bool $fallback): object
+    {
+        $payload = new stdClass();
+        $payload->id = (int) $zone->id;
+        $payload->name = (string) $zone->name;
+        $payload->code = (string) $zone->code;
+        $payload->type = (string) $zone->type;
+        $payload->source = $source;
+        $payload->fallback = $fallback;
+
+        return $payload;
+    }
+
     private function activeZones(): Collection
     {
         return DB::table('coverage_locations as cl')
@@ -169,6 +259,7 @@ final class MainBranchResolverService
                 'cl.code',
                 'cl.type',
                 'cl.parent_id',
+                'cl.branch_id',
                 'cl.latitude',
                 'cl.longitude',
                 'cl.coverage_radius_km',

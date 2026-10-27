@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Modules\Shipment\Models\Shipment;
 
 class AdminShipmentController extends Controller
 {
@@ -14,7 +15,7 @@ class AdminShipmentController extends Controller
         return response()->json(['success'=>true,'data'=>$q->paginate($request->integer('per_page',25))]);
     }
 
-    public function show($id) {
+    public function show(Request $request, $id) {
         $shipment = DB::table('shipments')->where('id', $id)->first();
 
         if (!$shipment) {
@@ -23,6 +24,16 @@ class AdminShipmentController extends Controller
                 'message' => 'Shipment not found.',
             ], 404);
         }
+
+        // Same branch scope as the shipments list (ShipmentController@index).
+        if (!$this->canViewShipment($request->user(), $shipment)) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You do not have access to this shipment.',
+            ], 403);
+        }
+
+        $this->attachListFields($shipment);
 
         return response()->json(['success' => true, 'data' => [
             'shipment' => $shipment,
@@ -33,6 +44,71 @@ class AdminShipmentController extends Controller
         ]]);
     }
 
+    /**
+     * Add the same branch names and computed fields the shipments list uses, so the
+     * drawer shows current branch names (not the stale path_text snapshot) and the
+     * same transfer / collect values as the table. Additive only.
+     */
+    private function attachListFields(object $shipment): void
+    {
+        $keys = ['origin', 'destination', 'current', 'next_hop'];
+        $ids = array_values(array_filter(array_map(
+            fn ($key) => $shipment->{$key . '_branch_id'} ?? null,
+            $keys
+        )));
+        $branches = $ids
+            ? DB::table('branches')->whereIn('id', $ids)->get(['id', 'name', 'code'])->keyBy('id')
+            : collect();
+
+        foreach ($keys as $key) {
+            $branchId = $shipment->{$key . '_branch_id'} ?? null;
+            $branch = $branchId ? $branches->get($branchId) : null;
+            $shipment->{$key . '_branch'} = $branch;
+            $shipment->{$key . '_branch_name'} = $branch->name ?? null;
+        }
+
+        try {
+            $model = Shipment::find($shipment->id);
+            if ($model) {
+                $shipment->is_transfer = $model->is_transfer;
+                $shipment->transfer_stage_label = $model->transfer_stage_label;
+                $shipment->collect_amount = $model->collect_amount;
+            }
+        } catch (\Throwable) {
+            // computed fields are optional extras
+        }
+    }
+
+    private function canViewShipment($user, object $shipment): bool
+    {
+        if (!$user) {
+            return false;
+        }
+
+        $isGlobalAdmin = (bool) (
+            $user->is_super_admin
+            || $user->role === 'super_admin'
+            || (method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin())
+            || (method_exists($user, 'hasRole') && $user->hasRole('main_admin'))
+        );
+        if ($isGlobalAdmin) {
+            return true;
+        }
+
+        $branchId = (int) ($user->branch_id ?? 0);
+        if (!$branchId) {
+            return false;
+        }
+
+        return in_array($branchId, array_map('intval', [
+            $shipment->origin_branch_id ?? 0,
+            $shipment->origin_sub_branch_id ?? 0,
+            $shipment->destination_branch_id ?? 0,
+            $shipment->destination_sub_branch_id ?? 0,
+            $shipment->current_branch_id ?? 0,
+            $shipment->current_sub_branch_id ?? 0,
+        ]), true);
+    }
     private function optionalFirst(string $table, string $fk, mixed $id): mixed
     {
         if (!Schema::hasTable($table)) {

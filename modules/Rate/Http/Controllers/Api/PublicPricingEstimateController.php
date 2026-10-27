@@ -195,6 +195,24 @@ final class PublicPricingEstimateController extends Controller
                 ? (int) $estimatedHours
                 : null;
 
+            $pickupZoneDistanceKm = round(
+                (float) data_get(
+                    $result,
+                    'pickup_branch.zone_distance_km',
+                    data_get($result, 'pickup_branch.distance_km', 0)
+                ),
+                3
+            );
+
+            $deliveryZoneDistanceKm = round(
+                (float) data_get(
+                    $result,
+                    'delivery_branch.zone_distance_km',
+                    data_get($result, 'delivery_branch.distance_km', 0)
+                ),
+                3
+            );
+
             return response()->json([
                 'success' => true,
                 'message' => 'Delivery price estimated successfully.',
@@ -203,22 +221,25 @@ final class PublicPricingEstimateController extends Controller
 
                     'price'                    => round((float) $finalPrice, 2),
                     'delivery_charge'          => round((float) $finalPrice, 2),
+                    /*
+                     * Branch ids/names are the matched coverage locations and
+                     * all distances are measured from those coverage locations
+                     * (the same distances the price is calculated from).
+                     */
                     'pickup_branch'            => [
                         'id'                               => (int) data_get($result, 'pickup_branch.id'),
                         'name'                             => (string) data_get($result, 'pickup_branch.name'),
-                        'distance_from_pickup_location_km' => round(
-                            (float) data_get($result, 'pickup_branch.distance_km', 0),
-                            3
-                        ),
+                        'distance_from_pickup_location_km' => $pickupZoneDistanceKm,
+                        'zone_distance_km'                 => $pickupZoneDistanceKm,
+                        'distance_basis'                   => 'coverage_location',
                     ],
 
                     'delivery_branch'          => [
                         'id'                               => (int) data_get($result, 'delivery_branch.id'),
                         'name'                             => (string) data_get($result, 'delivery_branch.name'),
-                        'distance_to_delivery_location_km' => round(
-                            (float) data_get($result, 'delivery_branch.distance_km', 0),
-                            3
-                        ),
+                        'distance_to_delivery_location_km' => $deliveryZoneDistanceKm,
+                        'zone_distance_km'                 => $deliveryZoneDistanceKm,
+                        'distance_basis'                   => 'coverage_location',
                     ],
 
                     'route'                    => [
@@ -227,9 +248,17 @@ final class PublicPricingEstimateController extends Controller
                             2
                         ),
 
+                        // branch_route mode: straight-line pickup pin -> delivery pin.
+                        // configured_transfer_route mode: configured route distance.
                         'total_distance_km' => round(
                             (float) data_get($result, 'route.total_distance_km', 0),
                             3
+                        ),
+
+                        'total_distance_basis' => (string) data_get(
+                            $result,
+                            'route.total_distance_basis',
+                            'configured_route'
                         ),
                     ],
 

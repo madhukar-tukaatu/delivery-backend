@@ -1,0 +1,74 @@
+name: Deploy Backend (Demo)
+
+on:
+  push:
+    branches:
+      - deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy backend to Dev VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEV_VPS_HOST }}
+          username: ${{ secrets.DEV_VPS_USERNAME }}
+          password: ${{ secrets.DEV_VPS_PASSWORD }}
+          port: ${{ secrets.DEV_VPS_PORT || 22 }}
+          command_timeout: 30m
+          script_stop: true
+          script: |
+            set -e
+
+            echo "Moving to backend repo..."
+            cd /var/www/delivery/delivery-backend
+
+            echo "Fixing backend file permissions..."
+            DEPLOY_UID=$(id -u)
+            DEPLOY_GID=$(id -g)
+
+            docker run --rm \
+              -v /var/www/delivery/delivery-backend:/app \
+              alpine:3.20 \
+              sh -c "chown -R ${DEPLOY_UID}:${DEPLOY_GID} /app"
+
+            echo "Fixing backend git remote..."
+            git remote set-url origin git@github.com:madhukar-tukaatu/delivery-backend.git || true
+
+            echo "Pulling latest backend code..."
+            git fetch origin deploy
+            git reset --hard origin/deploy
+            git clean -fd
+
+            echo "Moving to deployment repo..."
+            cd /var/www/delivery/delivery-deployment
+
+            echo "Building backend containers..."
+            docker compose --env-file .env.production build backend-app backend-nginx backend-queue backend-scheduler backend-reverb
+
+            echo "Starting backend containers..."
+            docker compose --env-file .env.production up -d backend-app backend-nginx backend-queue backend-scheduler backend-reverb
+
+            echo "Running migrations..."
+            docker compose --env-file .env.production exec -T backend-app php artisan migrate --force
+
+            echo "Clearing Laravel cache..."
+            docker compose --env-file .env.production exec -T backend-app php artisan optimize:clear
+
+            echo "Caching Laravel config..."
+            docker compose --env-file .env.production exec -T backend-app php artisan config:cache
+
+            echo "Clearing routes and views..."
+            docker compose --env-file .env.production exec -T backend-app php artisan route:clear || true
+            docker compose --env-file .env.production exec -T backend-app php artisan view:clear || true
+
+            echo "Restarting workers..."
+            docker compose --env-file .env.production restart backend-queue backend-scheduler backend-reverb || true
+
+            echo "Checking backend containers..."
+            docker ps --filter "name=delivery"
+
+            echo "Backend Dev deploy completed."
+

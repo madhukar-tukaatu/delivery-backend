@@ -63,21 +63,34 @@ final class PricingEngineService
         );
 
         /*
-         * Extra last-mile distance is measured from the operational branch that
-         * will deliver (same nearest-active-branch rule BranchAssignmentService
-         * uses for destination_branch_id), not from the nearest coverage zone.
-         * A zone without its own branch (e.g. Baglung) is delivered by another
-         * branch (e.g. Pokhara), so the rider's distance is from that branch.
-         * Route base rates still use the coverage zones above.
+         * Pricing is driven purely by coverage locations: the base rate uses
+         * the pickup and delivery coverage zones, and the extra last-mile
+         * distance is measured from the matched delivery coverage location
+         * to the delivery pin ($deliveryDistanceKm above).
+         *
+         * The operational branch (nearest row in `branches`, the same rule
+         * BranchAssignmentService uses for destination_branch_id) is looked
+         * up for reporting only. It must NOT change the price: when a zone
+         * has no active branch record nearby, the nearest operational branch
+         * can be tens of km away and would inflate the extra-distance charge.
          */
         $zoneDeliveryDistanceKm = $deliveryDistanceKm;
         $deliveringBranch = $this->deliveringBranch(
             (float) ($data['delivery_latitude'] ?? 0),
             (float) ($data['delivery_longitude'] ?? 0)
         );
-        if ($deliveringBranch !== null) {
-            $deliveryDistanceKm = max(0, (float) $deliveringBranch['distance_km']);
-        }
+
+        /*
+         * Straight-line (haversine) distance between the pickup and delivery
+         * pins. Reported as route.total_distance_km in branch_route mode so
+         * the field is meaningful; it is informational and not priced.
+         */
+        $pinToPinDistanceKm = $this->pinDistanceKm(
+            (float) ($data['pickup_latitude'] ?? 0),
+            (float) ($data['pickup_longitude'] ?? 0),
+            (float) ($data['delivery_latitude'] ?? 0),
+            (float) ($data['delivery_longitude'] ?? 0)
+        );
 
         /*
          * Step 1: Select the base-rate source.
@@ -523,6 +536,16 @@ final class PricingEngineService
                         $pickupDistanceKm,
                         3
                     ),
+
+                // Distance from the pickup pin to the pickup coverage location.
+                'zone_distance_km' =>
+                    round(
+                        $pickupDistanceKm,
+                        3
+                    ),
+
+                'distance_basis' =>
+                    'coverage_location',
             ],
 
             'delivery_branch' => [
@@ -541,18 +564,28 @@ final class PricingEngineService
                         3
                     ),
 
-                // Branch the extra distance is measured from.
+                // Distance from the delivery coverage location to the pin.
+                // This is the distance the extra-distance charge uses.
+                'zone_distance_km' =>
+                    round(
+                        $zoneDeliveryDistanceKm,
+                        3
+                    ),
+
+                'distance_basis' =>
+                    'coverage_location',
+
+                // Operational info only (branch assignment); not priced.
                 'operational_branch_id' =>
                     $deliveringBranch['branch_id'] ?? null,
 
                 'operational_branch_name' =>
                     $deliveringBranch['name'] ?? null,
 
-                'zone_distance_km' =>
-                    round(
-                        $zoneDeliveryDistanceKm,
-                        3
-                    ),
+                'operational_branch_distance_km' =>
+                    $deliveringBranch !== null
+                        ? round((float) $deliveringBranch['distance_km'], 3)
+                        : null,
             ],
 
             'base_rate_mode' =>
@@ -623,6 +656,13 @@ final class PricingEngineService
 
                     'base_rate' =>
                         round($baseRate, 2),
+
+                    // Straight-line pickup pin -> delivery pin (informational).
+                    'total_distance_km' =>
+                        $pinToPinDistanceKm,
+
+                    'total_distance_basis' =>
+                        'straight_line',
                 ],
 
             'packet_count' =>
@@ -1637,7 +1677,40 @@ final class PricingEngineService
     }
 
     /**
-     * Charge for delivery distance beyond the included branch radius.
+     * Haversine distance in km between two pins, rounded to 3 decimals.
+     * Returns 0.0 when either pin is missing (0,0).
+     */
+    private function pinDistanceKm(
+        float $latitudeOne,
+        float $longitudeOne,
+        float $latitudeTwo,
+        float $longitudeTwo
+    ): float {
+        if (
+            ($latitudeOne == 0.0 && $longitudeOne == 0.0) ||
+            ($latitudeTwo == 0.0 && $longitudeTwo == 0.0)
+        ) {
+            return 0.0;
+        }
+
+        $earthRadiusKm = 6371.0088;
+
+        $a = sin(deg2rad($latitudeTwo - $latitudeOne) / 2) ** 2
+            + cos(deg2rad($latitudeOne))
+            * cos(deg2rad($latitudeTwo))
+            * sin(deg2rad($longitudeTwo - $longitudeOne) / 2) ** 2;
+
+        $a = min(1.0, max(0.0, $a));
+
+        return round(
+            $earthRadiusKm * 2 * atan2(sqrt($a), sqrt(1 - $a)),
+            3
+        );
+    }
+
+    /**
+     * Charge for delivery distance beyond the included coverage radius.
+     * $deliveryDistanceKm is the delivery coverage location -> pin distance.
      */
     private function extraDeliveryDistanceCharge(
         float $deliveryDistanceKm,

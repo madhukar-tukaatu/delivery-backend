@@ -258,24 +258,30 @@ final class PricingRuleCalculator
         $subtotalBeforeVat =
             $serviceCharge + $smallPickupCharge;
 
-        $vatEnabled = (bool) (
-            $settings->vat_enabled ?? true
+        $vatEnabled = filter_var(
+            $settings->vat_enabled ?? false,
+            FILTER_VALIDATE_BOOLEAN
         );
 
         $vatPercentage = $vatEnabled
             ? max(
                 0,
-                (float) ($settings->vat_percentage ?? 13)
+                (float) ($settings->vat_percentage ?? 0)
             )
             : 0.0;
 
-        $vatInclusive = true;
+        $vatInclusive = $vatEnabled && filter_var(
+            $settings->vat_inclusive ?? true,
+            FILTER_VALIDATE_BOOLEAN
+        );
 
         $vatAmount =
             $vatEnabled && $vatPercentage > 0
-                ? $subtotalBeforeVat *
-                    $vatPercentage /
-                    (100 + $vatPercentage)
+                ? (
+                    $vatInclusive
+                        ? ($subtotalBeforeVat * $vatPercentage / (100 + $vatPercentage))
+                        : ($subtotalBeforeVat * ($vatPercentage / 100))
+                )
                 : 0.0;
 
         $finalPrice = $this->applyMoneyRounding(

@@ -524,17 +524,25 @@ final class PricingEngineService
                 $packetInputSource,
 
             'vat' => [
+                'enabled' =>
+                    filter_var(
+                        $settings->vat_enabled ?? false,
+                        FILTER_VALIDATE_BOOLEAN
+                    ),
+
                 'inclusive' =>
-                    (bool) (
-                        $settings->vat_inclusive
-                        ?? true
+                    filter_var(
+                        $settings->vat_inclusive ?? true,
+                        FILTER_VALIDATE_BOOLEAN
                     ),
 
                 'percentage' =>
-                    (float) (
-                        $settings->vat_percentage
-                        ?? 13
-                    ),
+                    filter_var(
+                        $settings->vat_enabled ?? false,
+                        FILTER_VALIDATE_BOOLEAN
+                    )
+                        ? (float) ($settings->vat_percentage ?? 0)
+                        : 0.0,
 
                 'additional_vat_added' =>
                     false,

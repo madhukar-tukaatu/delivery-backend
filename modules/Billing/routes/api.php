@@ -155,10 +155,14 @@ Route::prefix('v1/admin')
             Route::get('branch-shares', [BranchShareController::class, 'index'])
                 ->name('branch-shares.index')
                 ->adminMenu('Branch shares', '/admin/branch-shares', 'money', 47, 'Finance');
+            Route::get('branch-shares/reports', [BranchShareController::class, 'reports'])
+                ->name('branch-shares.reports');
             Route::get('branch-shares/config', [BranchShareController::class, 'config'])
                 ->name('branch-shares.config');
             Route::post('branch-shares/config', [BranchShareController::class, 'saveConfig'])
                 ->name('branch-shares.config.update');
+            Route::post('branch-shares/simulate', [BranchShareController::class, 'simulate'])
+                ->name('branch-shares.simulate');
             Route::get('shipments/{shipment}/branch-shares', [BranchShareController::class, 'shipment'])
                 ->name('branch-shares.shipment');
             Route::post('shipments/{shipment}/branch-shares/recompute', [BranchShareController::class, 'recompute'])

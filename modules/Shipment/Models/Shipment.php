@@ -36,6 +36,24 @@ class Shipment extends Model
         'collect_amount',
     ];
 
+    protected static function booted(): void
+    {
+        static::saved(function (Shipment $shipment) {
+            if (strtolower((string) $shipment->status) === 'delivered' && ($shipment->wasChanged('status') || ! $shipment->branch_share_status)) {
+                try {
+                    app(\Modules\Billing\Services\BranchShareService::class)->ensureForShipment($shipment);
+                } catch (\Throwable $e) {
+                    report($e);
+                }
+                try {
+                    app(\Modules\Billing\Services\BranchCommissionService::class)->autoEnsureForShipment($shipment, false);
+                } catch (\Throwable $e) {
+                    report($e);
+                }
+            }
+        });
+    }
+
     /**
      * Amount the rider collects at the door. Same rule as the shipment
      * drawer and settlement (cashPodAmount): POD collects pod_amount (the

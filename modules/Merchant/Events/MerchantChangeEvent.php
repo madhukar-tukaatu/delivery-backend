@@ -4,7 +4,7 @@ namespace Modules\Merchant\Events;
 
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 use Modules\Merchant\Models\Merchant;
@@ -19,7 +19,7 @@ use App\Models\User;
  * - 'approved' - Admin approved the change request
  * - 'rejected' - Admin rejected the change request
  */
-class MerchantChangeEvent implements ShouldBroadcastNow
+class MerchantChangeEvent implements ShouldBroadcast
 {
     use Dispatchable;
     use InteractsWithSockets;

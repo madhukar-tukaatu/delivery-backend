@@ -21,7 +21,10 @@ class DeliveryStatusUpdated implements ShouldBroadcast
 
     public function broadcastOn(): array
     {
-        $channels = [new PrivateChannel('admin.dashboard')];
+        $channels = [
+            new PrivateChannel('admin.dashboard'),
+            new PrivateChannel('admin.deliveries'),
+        ];
 
         if ($this->delivery->rider_id) {
             $channels[] = new PrivateChannel("staff.{$this->delivery->rider_id}");

@@ -2048,6 +2048,20 @@ final class DeliveryRunService
         } catch (\Throwable $e) {
             Log::info('delivery_run.notify_user_skipped', ['run_id' => $run->id, 'error' => $e->getMessage()]);
         }
+
+        try {
+            if ($run->rider_user_id && class_exists(\App\Events\DeliveryAssigned::class)) {
+                $items = \Modules\Delivery\Models\DeliveryRunItem::where('delivery_run_id', $run->id)
+                    ->whereNotNull('delivery_id')
+                    ->with(['delivery.shipment', 'delivery.rider'])
+                    ->get();
+                foreach ($items as $item) {
+                    if ($item->delivery) {
+                        event(new \App\Events\DeliveryAssigned($item->delivery));
+                    }
+                }
+            }
+        } catch (\Throwable $e) {}
     }
 
     private function notifyBranch(DeliveryRun $run, string $title, string $message, array $data = []): void

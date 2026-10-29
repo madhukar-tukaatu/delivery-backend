@@ -10,7 +10,7 @@ class TrackingService
 {
     public function record(Shipment $shipment, string $status, ?string $description = null, ?int $userId = null, string $visibility = 'public'): TrackingEvent
     {
-        return TrackingEvent::create([
+        $event = TrackingEvent::create([
             'shipment_id' => $shipment->id,
             'tracking_number' => $shipment->tracking_number,
             'status' => $status,
@@ -22,6 +22,16 @@ class TrackingService
             'visibility' => $visibility,
             'created_by' => $userId,
         ]);
+
+        try {
+            if (class_exists(\App\Events\ShipmentStatusUpdated::class)) {
+                event(new \App\Events\ShipmentStatusUpdated($shipment->fresh()));
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('ShipmentStatusUpdated broadcast failed: ' . $e->getMessage());
+        }
+
+        return $event;
     }
 
     private function locationText(Shipment $shipment): ?string

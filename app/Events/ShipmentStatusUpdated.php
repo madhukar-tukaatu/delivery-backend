@@ -24,6 +24,7 @@ class ShipmentStatusUpdated implements ShouldBroadcast
         $channels = [
             new PrivateChannel("shipments.{$this->shipment->id}"),
             new PrivateChannel('admin.dashboard'),
+            new PrivateChannel('admin.shipments'),
         ];
 
         if ($this->shipment->merchant_id) {

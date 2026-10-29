@@ -3,13 +3,82 @@
 use Illuminate\Support\Facades\Broadcast;
 use Modules\Shipment\Models\Shipment;
 
+if (!function_exists('isDeliveryAdminUser')) {
+    function isDeliveryAdminUser($user): bool {
+        if (!$user) {
+            return false;
+        }
+
+        $adminRoles = [
+            'super_admin',
+            'super-admin',
+            'main_admin',
+            'admin',
+            'operations_manager',
+            'operations-manager',
+            'branch_manager',
+            'branch-manager',
+            'merchant_manager',
+            'merchant-manager',
+        ];
+
+        if (isset($user->role) && in_array(strtolower(trim((string)$user->role)), $adminRoles, true)) {
+            return true;
+        }
+
+        if (method_exists($user, 'hasAnyRole')) {
+            try {
+                if ($user->hasAnyRole($adminRoles)) {
+                    return true;
+                }
+            } catch (\Throwable $e) {}
+        }
+
+        if (method_exists($user, 'hasRole')) {
+            foreach ($adminRoles as $role) {
+                try {
+                    if ($user->hasRole($role)) {
+                        return true;
+                    }
+                } catch (\Throwable $e) {}
+            }
+        }
+
+        $candidates = [
+            data_get($user, 'role.slug'),
+            data_get($user, 'role.name'),
+            data_get($user, 'role_name'),
+            data_get($user, 'user_type'),
+        ];
+
+        foreach ($candidates as $candidate) {
+            if (is_scalar($candidate) && in_array(strtolower(trim((string) $candidate)), $adminRoles, true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
 Broadcast::channel('admin.dashboard', function ($user) {
-    return $user->hasRole('super_admin') || $user->hasRole('main_admin');
+    return isDeliveryAdminUser($user);
+});
+
+Broadcast::channel('admin.shipments', function ($user) {
+    return isDeliveryAdminUser($user);
+});
+
+Broadcast::channel('admin.pickups', function ($user) {
+    return isDeliveryAdminUser($user);
+});
+
+Broadcast::channel('admin.deliveries', function ($user) {
+    return isDeliveryAdminUser($user);
 });
 
 Broadcast::channel('merchant.{merchantId}', function ($user, $merchantId) {
-    return $user->hasRole('super_admin')
-        || $user->hasRole('main_admin')
+    return isDeliveryAdminUser($user)
         || (
             $user->hasRole('merchant')
             && $user->merchant
@@ -94,8 +163,7 @@ Broadcast::channel('sub_branch.{subBranchId}', function ($user, $subBranchId) {
 
 Broadcast::channel('staff.{userId}', function ($user, $userId) {
     return (int) $user->id === (int) $userId
-        || $user->hasRole('super_admin')
-        || $user->hasRole('main_admin');
+        || isDeliveryAdminUser($user);
 });
 
 Broadcast::channel('shipments.{shipmentId}', function ($user, $shipmentId) {

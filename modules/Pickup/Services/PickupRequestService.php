@@ -249,6 +249,14 @@ final class PickupRequestService
         */
         $this->callbacks->riderAssigned($fresh);
 
+        try {
+            if (class_exists(\App\Events\PickupAssigned::class)) {
+                event(new \App\Events\PickupAssigned($fresh));
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('PickupAssigned broadcast failed: ' . $e->getMessage());
+        }
+
         return $fresh;
     }
 
@@ -264,7 +272,7 @@ final class PickupRequestService
         User $transferredBy,
         string $reason
     ): PickupRequest {
-        return DB::transaction(
+        $fresh = DB::transaction(
             function () use (
                 $pickup,
                 $newStaff,
@@ -353,6 +361,16 @@ final class PickupRequestService
                 return $this->get($pickup);
             }
         );
+
+        try {
+            if (class_exists(\App\Events\PickupAssigned::class)) {
+                event(new \App\Events\PickupAssigned($fresh));
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('PickupAssigned broadcast failed: ' . $e->getMessage());
+        }
+
+        return $fresh;
     }
 
     /*
@@ -2127,6 +2145,14 @@ final class PickupRequestService
 
         DB::table('pickup_events')
             ->insert($data);
+
+        try {
+            if (class_exists(\App\Events\PickupStatusUpdated::class)) {
+                event(new \App\Events\PickupStatusUpdated($pickup->fresh() ?: $pickup));
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('PickupStatusUpdated broadcast failed: ' . $e->getMessage());
+        }
     }
 
     /*

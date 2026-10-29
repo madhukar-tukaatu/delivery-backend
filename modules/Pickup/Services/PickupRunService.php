@@ -394,6 +394,16 @@ class PickupRunService
             }
         });
 
+        try {
+            $requestIds = $run->activeItems()->pluck('pickup_request_id')->all();
+            if (! empty($requestIds) && class_exists(\App\Events\PickupAssigned::class)) {
+                $pickups = PickupRequest::whereIn('id', $requestIds)->get();
+                foreach ($pickups as $p) {
+                    event(new \App\Events\PickupAssigned($p));
+                }
+            }
+        } catch (\Throwable $e) {}
+
         return $run->fresh(['branch', 'rider', 'items']);
     }
 

@@ -174,7 +174,17 @@ class ShipmentOperationsService
                     $pickup = $this->pickupWorkflowService->createForShipment($shipment->fresh());
                 }
 
-                return $this->showPayload($shipment->fresh(), $pickup);
+                $freshShipment = $shipment->fresh();
+
+                try {
+                    if (class_exists(\App\Events\ShipmentStatusUpdated::class)) {
+                        event(new \App\Events\ShipmentStatusUpdated($freshShipment));
+                    }
+                } catch (\Throwable $e) {
+                    \Illuminate\Support\Facades\Log::warning('ShipmentStatusUpdated broadcast failed: ' . $e->getMessage());
+                }
+
+                return $this->showPayload($freshShipment, $pickup);
             });
         });
     }

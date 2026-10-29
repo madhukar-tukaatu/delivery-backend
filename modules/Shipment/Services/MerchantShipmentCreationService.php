@@ -263,13 +263,23 @@ class MerchantShipmentCreationService
                 $createdBy
             );
 
-            return $shipment->fresh([
+            $freshShipment = $shipment->fresh([
                 'merchant',
                 'originBranch',
                 'originSubBranch',
                 'destinationBranch',
                 'destinationSubBranch',
             ]);
+
+            try {
+                if (class_exists(\App\Events\ShipmentStatusUpdated::class)) {
+                    event(new \App\Events\ShipmentStatusUpdated($freshShipment));
+                }
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('ShipmentStatusUpdated broadcast failed: ' . $e->getMessage());
+            }
+
+            return $freshShipment;
         });
     }
 }

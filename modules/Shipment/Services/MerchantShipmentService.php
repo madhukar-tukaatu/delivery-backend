@@ -426,7 +426,7 @@ final class MerchantShipmentService
             |
             */
 
-            return $shipment->fresh([
+            $freshShipment = $shipment->fresh([
                 'merchant',
                 'items',
                 'originBranch',
@@ -434,6 +434,16 @@ final class MerchantShipmentService
                 'destinationBranch',
                 'destinationSubBranch',
             ]);
+
+            try {
+                if (class_exists(\App\Events\ShipmentStatusUpdated::class)) {
+                    event(new \App\Events\ShipmentStatusUpdated($freshShipment));
+                }
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('ShipmentStatusUpdated broadcast failed: ' . $e->getMessage());
+            }
+
+            return $freshShipment;
         });
     }
 

@@ -6,6 +6,7 @@ use Modules\Billing\Services\BranchCommissionService;
 use Modules\Billing\Services\MerchantDeliveryBillingService;
 use Modules\Settlement\Services\SettlementWorkflowService;
 
+use App\Events\DeliveryAssigned;
 use App\Events\DeliveryStatusUpdated;
 use App\Events\ShipmentStatusUpdated;
 
@@ -63,7 +64,7 @@ class DeliveryWorkflowService
                 return $existing;
             }
 
-            return DeliveryAssignment::create([
+            $delivery = DeliveryAssignment::create([
                 'shipment_id' => $shipment->id,
                 'branch_id' => $shipment->destination_branch_id ?? $shipment->current_branch_id,
                 'sub_branch_id' => $shipment->destination_sub_branch_id ?? $shipment->current_sub_branch_id,
@@ -72,6 +73,14 @@ class DeliveryWorkflowService
                 'attempt_no' => 1,
                 'assigned_by' => $actorId,
             ]);
+
+            try {
+                if (class_exists(DeliveryStatusUpdated::class)) {
+                    event(new DeliveryStatusUpdated($delivery->fresh(['shipment'])));
+                }
+            } catch (\Throwable $e) {}
+
+            return $delivery;
         });
     }
 
@@ -124,7 +133,17 @@ class DeliveryWorkflowService
                 'rider' => ['id' => $rider->id, 'name' => $rider->name, 'phone' => $rider->phone],
             ]);
 
-            return $delivery->fresh(['shipment', 'rider']);
+            $assigned = $delivery->fresh(['shipment', 'rider']);
+
+            try {
+                if (class_exists(DeliveryAssigned::class)) {
+                    event(new DeliveryAssigned($assigned));
+                }
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('DeliveryAssigned broadcast failed: ' . $e->getMessage());
+            }
+
+            return $assigned;
         });
     }
 
@@ -193,7 +212,15 @@ class DeliveryWorkflowService
                 'rider' => ['id' => $user->id, 'name' => $user->name],
             ]);
 
-            return $delivery->fresh(['shipment', 'rider']);
+            $accepted = $delivery->fresh(['shipment', 'rider']);
+
+            try {
+                if (class_exists(DeliveryStatusUpdated::class)) {
+                    event(new DeliveryStatusUpdated($accepted));
+                }
+            } catch (\Throwable $e) {}
+
+            return $accepted;
         });
     }
 
@@ -239,7 +266,19 @@ class DeliveryWorkflowService
                 'out_for_delivery_at' => $delivery->out_for_delivery_at?->toIso8601String(),
             ]);
 
-            return $shipment->fresh();
+            $freshDelivery = $delivery->fresh(['shipment', 'rider']);
+            $freshShipment = $shipment->fresh();
+
+            try {
+                if (class_exists(DeliveryStatusUpdated::class)) {
+                    event(new DeliveryStatusUpdated($freshDelivery));
+                }
+                if (class_exists(ShipmentStatusUpdated::class)) {
+                    event(new ShipmentStatusUpdated($freshShipment));
+                }
+            } catch (\Throwable $e) {}
+
+            return $freshShipment;
         });
     }
 
@@ -282,7 +321,15 @@ class DeliveryWorkflowService
                 'arrived_at' => $arrivedAt->toIso8601String(),
             ]);
 
-            return $delivery->fresh(['shipment', 'rider']);
+            $arrivedDelivery = $delivery->fresh(['shipment', 'rider']);
+
+            try {
+                if (class_exists(DeliveryStatusUpdated::class)) {
+                    event(new DeliveryStatusUpdated($arrivedDelivery));
+                }
+            } catch (\Throwable $e) {}
+
+            return $arrivedDelivery;
         });
 
         $this->syncDeliveryRun((int) $delivery->id);
@@ -610,7 +657,19 @@ class DeliveryWorkflowService
                 'failed_at' => $delivery->failed_at?->toIso8601String(),
             ]);
 
-            return $shipment->fresh();
+            $freshDelivery = $delivery->fresh(['shipment', 'rider']);
+            $freshShipment = $shipment->fresh();
+
+            try {
+                if (class_exists(DeliveryStatusUpdated::class)) {
+                    event(new DeliveryStatusUpdated($freshDelivery));
+                }
+                if (class_exists(ShipmentStatusUpdated::class)) {
+                    event(new ShipmentStatusUpdated($freshShipment));
+                }
+            } catch (\Throwable $e) {}
+
+            return $freshShipment;
         });
 
         $this->syncDeliveryRun((int) $delivery->id);

@@ -35,6 +35,13 @@ class PickupWorkflowService
 
             $id = DB::table('pickup_requests')->insertGetId($pickup);
 
+            try {
+                $pickupModel = \Modules\Pickup\Models\PickupRequest::find($id);
+                if ($pickupModel && class_exists(\App\Events\PickupStatusUpdated::class)) {
+                    event(new \App\Events\PickupStatusUpdated($pickupModel));
+                }
+            } catch (\Throwable $e) {}
+
             return DB::table('pickup_requests')->where('id', $id)->first();
         });
     }
@@ -52,6 +59,13 @@ class PickupWorkflowService
 
         $this->track($shipmentId, $actorId, 'pickup_assigned', 'Pickup assigned', "Pickup assigned to staff #{$staffId}");
 
+        try {
+            $pickupModel = \Modules\Pickup\Models\PickupRequest::find($pickup->id);
+            if ($pickupModel && class_exists(\App\Events\PickupAssigned::class)) {
+                event(new \App\Events\PickupAssigned($pickupModel));
+            }
+        } catch (\Throwable $e) {}
+
         return DB::table('pickup_requests')->where('id', $pickup->id)->first();
     }
 
@@ -61,6 +75,13 @@ class PickupWorkflowService
             'status' => 'accepted',
             'updated_at' => now(),
         ]);
+
+        try {
+            $pickupModel = \Modules\Pickup\Models\PickupRequest::find($pickupId);
+            if ($pickupModel && class_exists(\App\Events\PickupStatusUpdated::class)) {
+                event(new \App\Events\PickupStatusUpdated($pickupModel));
+            }
+        } catch (\Throwable $e) {}
 
         return DB::table('pickup_requests')->where('id', $pickupId)->first();
     }

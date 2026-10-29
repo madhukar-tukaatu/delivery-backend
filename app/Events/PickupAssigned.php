@@ -21,7 +21,10 @@ class PickupAssigned implements ShouldBroadcast
 
     public function broadcastOn(): array
     {
-        $channels = [new PrivateChannel('admin.dashboard')];
+        $channels = [
+            new PrivateChannel('admin.dashboard'),
+            new PrivateChannel('admin.pickups'),
+        ];
 
         if ($this->pickup->assigned_to) {
             $channels[] = new PrivateChannel("staff.{$this->pickup->assigned_to}");

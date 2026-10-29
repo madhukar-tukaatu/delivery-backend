@@ -330,7 +330,12 @@ class ShipmentLifecycleService
         Cache::forget('dashboard:branch:' . ($shipment->origin_branch_id ?? ''));
 
         if (class_exists('App\\Events\\ShipmentStatusUpdated')) {
-            event(new \App\Events\ShipmentStatusUpdated((object) (array) $shipment));
+            $shipmentModel = $shipment instanceof \Modules\Shipment\Models\Shipment
+                ? $shipment
+                : \Modules\Shipment\Models\Shipment::find(data_get($shipment, 'id'));
+            if ($shipmentModel) {
+                event(new \App\Events\ShipmentStatusUpdated($shipmentModel));
+            }
         }
     }
 

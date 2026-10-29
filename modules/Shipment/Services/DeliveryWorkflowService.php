@@ -91,6 +91,16 @@ class DeliveryWorkflowService
             'updated_at' => now(),
         ]);
 
+        try {
+            $freshShipment = Shipment::find($shipment->id);
+            if ($freshShipment) {
+                app(\Modules\Billing\Services\BranchShareService::class)->ensureForShipment($freshShipment);
+                app(\Modules\Billing\Services\BranchCommissionService::class)->autoEnsureForShipment($freshShipment, false);
+            }
+        } catch (\Throwable $e) {
+            report($e);
+        }
+
         if ($shipment->payment_type === 'pod') {
             DB::table('pod_transactions')->where('shipment_id', $shipment->id)->update([
                 'rider_id' => $riderId,

@@ -109,6 +109,8 @@ class DispatchController extends Controller
         $data = $request->validate([
             'received_shipment_ids' => ['nullable', 'array'],
             'received_shipment_ids.*' => ['integer'],
+            'damaged_shipment_ids' => ['nullable', 'array'],
+            'damaged_shipment_ids.*' => ['integer'],
             'remarks' => ['nullable', 'string', 'max:500'],
         ]);
         $user = $request->user();
@@ -117,7 +119,7 @@ class DispatchController extends Controller
         $scanned = $data['received_shipment_ids']
             ?? $dispatch->items()->whereIn('status', TransferContainerService::OPEN_ITEM_STATUSES)->pluck('shipment_id')->all();
 
-        $res = $containers->receive($dispatch, $scanned, $data['remarks'] ?? null, (int) $user->id, $branchId);
+        $res = $containers->receive($dispatch, $scanned, $data['remarks'] ?? null, (int) $user->id, $branchId, [], $data['damaged_shipment_ids'] ?? []);
 
         return ApiResponse::success(
             $res['container']->load('items.shipment'),

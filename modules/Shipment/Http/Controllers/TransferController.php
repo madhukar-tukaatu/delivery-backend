@@ -2231,6 +2231,8 @@ final class TransferController extends Controller
         $data = $request->validate([
             'scanned' => ['present', 'array', 'max:2000'],
             'scanned.*' => ['nullable'],
+            'damaged' => ['nullable', 'array'],
+            'damaged.*' => ['nullable'],
             'remarks' => ['nullable', 'string', 'max:500'],
             // Seal check at arrival (optional for older clients).
             'seal_value' => ['nullable', 'string', 'max:50'],
@@ -2261,6 +2263,7 @@ final class TransferController extends Controller
             (int) $request->user()->id,
             $branchId,
             $seal,
+            $data['damaged'] ?? [],
         );
 
         $c = $res['container'];
@@ -2271,6 +2274,7 @@ final class TransferController extends Controller
             collect($res['received'])->merge($res['extras'])->where('result', 'last_mile')->count(),
             collect($res['received'])->merge($res['extras'])->where('result', 'onward')->count(),
             $res['missing'] ? ', '.count($res['missing']).' missing' : '',
+            ! empty($res['damaged']) ? ', '.count($res['damaged']).' damaged' : '',
             $res['extras'] ? ', '.count($res['extras']).' extra' : '',
         );
         if (! empty($res['seal']) && $res['seal']['status'] !== 'ok') {
@@ -2280,6 +2284,7 @@ final class TransferController extends Controller
         return ApiResponse::success([
             'container' => $this->containers->summarize($c->load('items.shipment.destinationBranch:id,name'), true),
             'received' => $res['received'],
+            'damaged' => $res['damaged'] ?? [],
             'missing' => $res['missing'],
             'extras' => $res['extras'],
             'rejected' => $res['rejected'],

@@ -131,31 +131,55 @@ class BranchShareController extends Controller
     /** GET admin/branch-shares/config */
     public function config(Request $request)
     {
-        abort_if(FinanceBranchScope::isMerchant($request->user()), 403);
+        $user = $request->user();
+        abort_if(FinanceBranchScope::isMerchant($user), 403);
+
+        $branches = \Illuminate\Support\Facades\DB::table('branches')
+            ->where(function ($q) {
+                $q->where('status', 'active')
+                    ->orWhere(function ($franchise) {
+                        $franchise->where('status', 'approved')
+                            ->where('account_invitation_status', 'account_configured');
+                    });
+            })
+            ->orderBy('name')
+            ->get(['id', 'name', 'code', 'type']);
 
         return ApiResponse::success([
+            'rules' => $this->shares->rules(),
+            'rules_is_default' => $this->shares->rulesIsDefault(),
+            'default_rules' => BranchShareCalculator::DEFAULT_RULES,
             'table' => $this->shares->table(),
             'is_default' => $this->shares->tableIsDefault(),
             'defaults' => BranchShareCalculator::DEFAULT_TABLE,
             'hq_percent' => app(BranchCommissionService::class)->commissionRatePercent(),
+            'branches' => $branches,
             'key' => BranchShareService::TABLE_KEY,
+            'rules_key' => BranchShareService::RULES_KEY,
         ]);
     }
 
-    /** POST admin/branch-shares/config (HQ only) body: {table: {"1":[100],"2":[60,40],...}} */
+    /** POST admin/branch-shares/config (HQ only) */
     public function saveConfig(Request $request)
     {
         abort_unless(FinanceBranchScope::isHq($request->user()), 403);
 
-        $data = $request->validate([
-            'table' => ['required', 'array', 'min:1'],
-            'table.*' => ['array'],
-            'table.*.*' => ['numeric', 'min:0', 'max:100'],
-        ]);
+        $response = [];
 
-        $saved = $this->shares->saveTable($data['table']);
+        if ($request->has('rules') && is_array($request->rules)) {
+            $response['rules'] = $this->shares->saveRules($request->rules);
+        }
 
-        // Shipments that were waiting for a missing row can be split now.
+        if ($request->has('table') && is_array($request->table)) {
+            $data = $request->validate([
+                'table' => ['required', 'array', 'min:1'],
+                'table.*' => ['array'],
+                'table.*.*' => ['numeric', 'min:0', 'max:100'],
+            ]);
+            $response['table'] = $this->shares->saveTable($data['table']);
+        }
+
+        // Shipments that were waiting for a missing config can be split now.
         $retried = 0;
         Shipment::query()
             ->where('branch_share_status', 'pending_config')
@@ -172,6 +196,58 @@ class BranchShareController extends Controller
                 }
             });
 
-        return ApiResponse::success(['table' => $saved, 'retried_pending_config' => $retried], 'Branch share table saved.');
+        $response['retried_pending_config'] = $retried;
+
+        return ApiResponse::success($response, 'Branch share configuration saved successfully.');
+    }
+
+    /** POST admin/branch-shares/simulate */
+    public function simulate(Request $request)
+    {
+        $user = $request->user();
+        abort_if(FinanceBranchScope::isMerchant($user), 403);
+
+        $data = $request->validate([
+            'origin_branch_id' => ['required', 'integer', 'exists:branches,id'],
+            'destination_branch_id' => ['required', 'integer', 'exists:branches,id'],
+            'transit_branch_ids' => ['nullable', 'array'],
+            'transit_branch_ids.*' => ['integer', 'exists:branches,id'],
+            'weight_kg' => ['nullable', 'numeric', 'min:0.01'],
+            'is_fragile' => ['nullable', 'boolean'],
+            'service_type' => ['nullable', 'string', 'in:standard,express,same_day'],
+            'delivery_distance_km' => ['nullable', 'numeric', 'min:0'],
+            'product_price_pod' => ['nullable', 'numeric', 'min:0'],
+            'transfer_hops' => ['nullable', 'array'],
+            'transfer_hops.*.transfer_number' => ['nullable', 'string'],
+            'transfer_hops.*.from_branch_id' => ['nullable', 'integer'],
+            'transfer_hops.*.to_branch_id' => ['nullable', 'integer'],
+            'transfer_hops.*.trip_transport_cost' => ['nullable', 'numeric', 'min:0'],
+            'transfer_hops.*.total_shipments_on_tr' => ['nullable', 'integer', 'min:1'],
+            'rules' => ['nullable', 'array'],
+            'hq_commission_percent' => ['nullable', 'numeric', 'min:0', 'max:100'],
+            'extra_distance_rate' => ['nullable', 'numeric', 'min:0'],
+            'base_distance_km' => ['nullable', 'numeric', 'min:0'],
+            'base_weight_kg' => ['nullable', 'numeric', 'min:0'],
+            'weight_rate' => ['nullable', 'numeric', 'min:0'],
+        ]);
+
+        $result = $this->shares->simulate($data);
+
+        return ApiResponse::success($result, 'Simulation completed successfully.');
+    }
+
+    /** GET admin/branch-shares/reports: branch-wise aggregation & history report */
+    public function reports(Request $request)
+    {
+        $user = $request->user();
+        abort_if(FinanceBranchScope::isMerchant($user), 403);
+
+        $from = $request->filled('from') ? $request->from : null;
+        $to = $request->filled('to') ? $request->to : null;
+        $branchId = $request->filled('branch_id') ? (int) $request->branch_id : null;
+
+        $data = $this->shares->branchWiseReports($from, $to, $branchId, $user);
+
+        return ApiResponse::success($data, 'Branch shares reports retrieved successfully.');
     }
 }

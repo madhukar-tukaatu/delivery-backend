@@ -238,6 +238,7 @@ final class TransferContainerService
             if (! $hold) {
                 foreach ($manifests as $m) {
                     $this->notifyNextBranch($m);
+                    $this->notifyRider($m);
                 }
             }
         }
@@ -277,6 +278,7 @@ final class TransferContainerService
         });
 
         $this->notifyNextBranch($container);
+        $this->notifyRider($container);
 
         return $container;
     }
@@ -512,11 +514,14 @@ final class TransferContainerService
      *
      * @param  list<int|string>  $scanned  shipment ids or tracking numbers that physically arrived
      * @param  array{value?:?string,intact?:?bool,remark?:?string,status?:?string}  $seal  seal check at arrival (empty = not checked)
-     * @return array{container: DispatchManifest, received: list<array>, missing: list<array>, extras: list<array>, rejected: list<array>, seal: ?array}
+     * @param  list<int|string>  $scanned  shipment ids or tracking numbers that physically arrived
+     * @param  array{value?:?string,intact?:?bool,remark?:?string,status?:?string}  $seal  seal check at arrival (empty = not checked)
+     * @param  array<int|string, mixed>  $damaged  damaged shipment ids or map of [shipment_id => damage_note]
+     * @return array{container: DispatchManifest, received: list<array>, damaged: list<array>, missing: list<array>, extras: list<array>, rejected: list<array>, seal: ?array}
      */
-    public function receive(DispatchManifest $container, array $scanned, ?string $remarks, ?int $actorId, int $receivingBranchId, array $seal = []): array
+    public function receive(DispatchManifest $container, array $scanned, ?string $remarks, ?int $actorId, int $receivingBranchId, array $seal = [], array $damaged = []): array
     {
-        $result = DB::transaction(function () use ($container, $scanned, $remarks, $actorId, $receivingBranchId, $seal) {
+        $result = DB::transaction(function () use ($container, $scanned, $remarks, $actorId, $receivingBranchId, $seal, $damaged) {
             $container = DispatchManifest::query()->lockForUpdate()->findOrFail($container->id);
             $this->assertReceivable($container, $receivingBranchId);
             $here = (int) $container->to_branch_id;
@@ -524,11 +529,26 @@ final class TransferContainerService
             // Seal first: a broken / wrong seal is recorded, the parcel check still runs.
             $sealResult = $this->applySealCheck($container, $seal, $actorId);
 
+            // Parse damaged map
+            $damagedMap = [];
+            foreach ($damaged as $k => $v) {
+                if (is_array($v) && isset($v['shipment_id'])) {
+                    $damagedMap[(int) $v['shipment_id']] = (string) ($v['note'] ?? 'Damaged/broken on arrival');
+                } elseif (is_numeric($k) && is_numeric($v)) {
+                    $damagedMap[(int) $v] = 'Damaged/broken on arrival';
+                } elseif (is_numeric($k) && is_string($v)) {
+                    $damagedMap[(int) $k] = $v;
+                } elseif (is_string($k) && is_numeric($k)) {
+                    $damagedMap[(int) $k] = (string) $v;
+                }
+            }
+
             $scan = $this->normalizeScanned($scanned);
             $items = $container->items()->with('shipment')->get();
             $label = $container->display_number;
 
             $received = [];
+            $damagedList = [];
             $missing = [];
             $extras = [];
             $rejected = [];
@@ -548,7 +568,15 @@ final class TransferContainerService
                 $hit = $shipment && $this->scanMatches($scan, $shipment);
                 if ($hit) {
                     $matched[(int) $shipment->id] = true;
-                    $received[] = $this->receiveItem($container, $item, $shipment, $here, $actorId);
+                    $isDamaged = isset($damagedMap[(int) $shipment->id]);
+                    $damageNote = $isDamaged ? $damagedMap[(int) $shipment->id] : null;
+
+                    $recRow = $this->receiveItem($container, $item, $shipment, $here, $actorId, $isDamaged, $damageNote);
+                    if ($isDamaged) {
+                        $damagedList[] = $recRow;
+                    } else {
+                        $received[] = $recRow;
+                    }
                     continue;
                 }
 
@@ -608,6 +636,7 @@ final class TransferContainerService
             return [
                 'container' => $container,
                 'received' => $received,
+                'damaged' => $damagedList,
                 'missing' => $missing,
                 'extras' => $extras,
                 'rejected' => $rejected,
@@ -629,6 +658,21 @@ final class TransferContainerService
                     $sealRes['value'] !== '' ? $sealRes['value'] : '(not typed)',
                     $sealRes['status'] === self::SEAL_TAMPERED ? ' Seal broken or missing.' : ' Number mismatch.',
                     $sealRes['remark']),
+            );
+        }
+        if ($result['damaged'] !== []) {
+            $c = $result['container'];
+            $n = count($result['damaged']);
+            $this->notify(
+                (int) $c->from_branch_id,
+                null,
+                "{$c->display_number}: {$n} parcel".($n === 1 ? '' : 's').' damaged on arrival',
+                sprintf('%s received %s with %d damaged/broken parcel%s: %s. Flagged for claim inspection.',
+                    $this->branchName((int) $c->to_branch_id),
+                    $c->display_number,
+                    $n,
+                    $n === 1 ? '' : 's',
+                    implode(', ', array_filter(array_column($result['damaged'], 'tracking_number')))),
             );
         }
         if ($result['missing'] !== []) {
@@ -1143,7 +1187,7 @@ final class TransferContainerService
     /* Internals                                                           */
     /* ------------------------------------------------------------------ */
 
-    private function receiveItem(DispatchManifest $container, DispatchManifestItem $item, Shipment $shipment, int $here, ?int $actorId): array
+    private function receiveItem(DispatchManifest $container, DispatchManifestItem $item, Shipment $shipment, int $here, ?int $actorId, bool $isDamaged = false, ?string $damageNote = null): array
     {
         if (! in_array($shipment->status, self::IN_TRANSIT_SHIPMENT_STATUSES, true)) {
             throw ValidationException::withMessages(['scanned' => [
@@ -1151,17 +1195,36 @@ final class TransferContainerService
             ]]);
         }
 
-        $item->forceFill([
+        $fill = [
             'status' => 'received',
             'received_at' => now(),
             'received_by' => $actorId,
             'scanned_at' => $item->scanned_at ?? now(),
-        ])->save();
+        ];
+        if ($isDamaged) {
+            $fill['discrepancy'] = 'damaged';
+            $fill['discrepancy_note'] = $damageNote ?: 'Arrived damaged / broken';
+        }
+        $item->forceFill($fill)->save();
         $this->hops->closeHopForManifest((int) $shipment->id, (int) $container->id);
 
         $res = $this->receiveAndSort($shipment, $here, $actorId, $container->display_number);
 
-        return $this->receivedRow($item->fresh(), $res);
+        if ($isDamaged) {
+            $this->trackInternal(
+                $shipment,
+                "Received DAMAGED / BROKEN at ".$this->branchName($here)." from {$container->display_number}.".($damageNote ? " Note: {$damageNote}" : ''),
+                $actorId
+            );
+        }
+
+        $row = $this->receivedRow($item->fresh(), $res);
+        if ($isDamaged) {
+            $row['discrepancy'] = 'damaged';
+            $row['discrepancy_note'] = $damageNote;
+        }
+
+        return $row;
     }
 
     /**
@@ -1525,6 +1588,54 @@ final class TransferContainerService
             sprintf('%s dispatched %s with %d parcel%s to your branch%s. Receive it from Transfers > In Transit.',
                 $this->branchName((int) $m->from_branch_id), $m->display_number, $count, $count === 1 ? '' : 's', $how !== '' ? " ({$how})" : ''),
         );
+    }
+
+    private function notifyRider(DispatchManifest $m): void
+    {
+        if (! $m->rider_user_id) {
+            return;
+        }
+        $count = (int) ($m->expected_count ?: $m->items()->where('status', 'sent')->count());
+        $veh = trim(implode(' ', array_filter([
+            $m->vehicle_type ? ucfirst(str_replace('_', ' ', (string) $m->vehicle_type)) : null,
+            $m->vehicle_number ? "({$m->vehicle_number})" : null,
+        ])));
+        $fromName = $this->branchName((int) $m->from_branch_id);
+        $toName = $this->branchName((int) $m->to_branch_id);
+
+        $title = "Transfer Assigned: {$m->display_number}";
+        $message = "You have been assigned to deliver Transfer {$m->display_number} ({$count} parcels) from {$fromName} to {$toName}".($veh ? " using {$veh}" : '').". Verify shipments and proceed with dispatch.";
+
+        try {
+            if (Schema::hasTable('staff_notifications')) {
+                $cols = Schema::getColumnListing('staff_notifications');
+                $row = array_intersect_key([
+                    'title' => $title,
+                    'message' => $message,
+                    'branch_id' => (int) $m->from_branch_id ?: null,
+                    'shipment_id' => null,
+                    'type' => 'transfer_rider_assignment',
+                    'is_read' => false,
+                    'data_json' => json_encode([
+                        'transfer_id' => $m->id,
+                        'transfer_number' => $m->display_number,
+                        'from_branch_id' => $m->from_branch_id,
+                        'to_branch_id' => $m->to_branch_id,
+                        'parcel_count' => $count,
+                        'vehicle_type' => $m->vehicle_type,
+                        'vehicle_number' => $m->vehicle_number,
+                    ]),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ], array_flip($cols));
+                if (in_array('user_id', $cols, true)) {
+                    $row['user_id'] = $m->rider_user_id;
+                }
+                DB::table('staff_notifications')->insert($row);
+            }
+        } catch (\Throwable $e) {
+            Log::info('transfer_container.rider_notify_skipped', ['rider_user_id' => $m->rider_user_id, 'error' => $e->getMessage()]);
+        }
     }
 
     private function notify(int $branchId, ?int $shipmentId, string $title, string $message): void

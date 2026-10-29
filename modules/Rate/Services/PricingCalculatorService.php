@@ -185,15 +185,20 @@ class PricingCalculatorService
             $afterSameDay +
             $pickupCharge;
 
+        $vatEnabled = filter_var(
+            $setting->vat_enabled ?? false,
+            FILTER_VALIDATE_BOOLEAN
+        );
+
         $vatPercentage =
-            $setting->vat_enabled
-                ? (float) $setting->vat_percentage
+            $vatEnabled
+                ? (float) ($setting->vat_percentage ?? 0)
                 : 0.0;
 
         $vatAmount = 0.0;
         $totalAmount = $subtotal;
 
-        if ($vatPercentage > 0) {
+        if ($vatEnabled && $vatPercentage > 0) {
             if ($setting->vat_inclusive) {
                 $vatAmount =
                     $subtotal -

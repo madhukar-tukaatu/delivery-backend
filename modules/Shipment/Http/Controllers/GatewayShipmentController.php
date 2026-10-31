@@ -226,6 +226,35 @@ final class GatewayShipmentController extends Controller
                 'max:1000',
             ],
 
+            'delivery_charge' => [
+                'nullable',
+                'numeric',
+                'min:0',
+            ],
+
+            'delivery_charge_breakdown' => [
+                'nullable',
+                'array',
+            ],
+
+            'pod_charge' => [
+                'nullable',
+                'numeric',
+                'min:0',
+            ],
+
+            'pickup_lat' => [
+                'nullable',
+                'numeric',
+                'between:-90,90',
+            ],
+
+            'pickup_lng' => [
+                'nullable',
+                'numeric',
+                'between:-180,180',
+            ],
+
             'remarks' => [
                 'nullable',
                 'string',
@@ -241,6 +270,18 @@ final class GatewayShipmentController extends Controller
 
         $data['delivery_lng'] =
             (float) $data['delivery_lng'];
+
+        if (isset($data['pickup_lat']) && is_numeric($data['pickup_lat'])) {
+            $data['pickup_lat'] = (float) $data['pickup_lat'];
+        }
+
+        if (isset($data['pickup_lng']) && is_numeric($data['pickup_lng'])) {
+            $data['pickup_lng'] = (float) $data['pickup_lng'];
+        }
+
+        if (isset($data['delivery_charge']) && is_numeric($data['delivery_charge'])) {
+            $data['delivery_charge'] = (float) $data['delivery_charge'];
+        }
 
         $data['self_drop'] =
             (bool) ($data['self_drop'] ?? false);

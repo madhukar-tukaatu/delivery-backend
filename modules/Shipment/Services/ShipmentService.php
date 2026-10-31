@@ -314,6 +314,7 @@ final class ShipmentService
                 |--------------------------------------------------------------------------
                 */
 
+                $data['merchant_id'] = (int) $merchant->id;
                 $charges = $this->resolveCharges($data, $pickupCoordinates);
 
                 if (! empty($charges['breakdown']) && empty($data['delivery_charge_breakdown'])) {

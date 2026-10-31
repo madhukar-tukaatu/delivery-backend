@@ -12,14 +12,14 @@ use Modules\Rate\Models\BranchTransferRoute;
 final class BranchAssignmentService
 {
     /**
-         /** Resolve merchant pickup location.
-         /**
-         /** Priority:
-         /**
-         /** 1. Explicit pickup location
-         /** 2. Default pickup location
-         /** 3. First pickup location
-         /**/
+     * Resolve merchant pickup location.
+     *
+     * Priority:
+     *
+     * 1. Explicit pickup location
+     * 2. Default pickup location
+     * 3. First pickup location
+     */
     public function resolveMerchantPickupLocation(
         Merchant $merchant,
         ?int $pickupLocationId = null
@@ -62,14 +62,14 @@ final class BranchAssignmentService
     }
 
     /**
-         /** Resolve origin branch.
-         /**
-         /** Priority:
-         /**
-         /** 1. Linked main branch
-         /** 2. Linked sub-branch
-         /** 3. Nearest operational branch
-         /**/
+     * Resolve origin branch.
+     *
+     * Priority:
+     *
+     * 1. Linked main branch
+     * 2. Linked sub-branch
+     * 3. Nearest operational branch
+     */
     public function resolveOrigin(
         Merchant $merchant,
         ?object $pickupLocation
@@ -111,11 +111,11 @@ final class BranchAssignmentService
             ??
             null;
 
-    
+        /*
         |--------------------------------------------------------------------------
         | LINKED MAIN BRANCH
         |--------------------------------------------------------------------------
-            /**/
+        */
 
         if ($pickupLocation) {
 
@@ -141,11 +141,11 @@ final class BranchAssignmentService
             }
         }
 
-    
+        /*
         |--------------------------------------------------------------------------
         | LINKED SUB-BRANCH
         |--------------------------------------------------------------------------
-            /**/
+        */
 
         if (
             $pickupLocation
@@ -169,11 +169,11 @@ final class BranchAssignmentService
             }
         }
 
-    
+        /*
         |--------------------------------------------------------------------------
         | NEAREST OPERATIONAL BRANCH
         |--------------------------------------------------------------------------
-            /**/
+        */
 
         return $this->nearestBranch(
             lat:
@@ -191,8 +191,8 @@ final class BranchAssignmentService
     }
 
     /**
-         /** Resolve destination branch/sub-branch.
-         /**/
+     * Resolve destination branch/sub-branch.
+     */
     public function resolveDestination(
         array $delivery
     ): array {
@@ -232,12 +232,12 @@ final class BranchAssignmentService
     }
 
     /**
-         /** Build logical shipment route.
-         /**
-         /** Calculates distance based on:
-         /** - Branch-to-branch transfer route (road distance for standard, aerial distance for flight)
-         /** - Last-mile distance from destination branch to customer delivery address
-         /**/
+     * Build logical shipment route.
+     *
+     * Calculates distance based on:
+     * - Branch-to-branch transfer route (road distance for standard, aerial distance for flight)
+     * - Last-mile distance from destination branch to customer delivery address
+     */
     public function buildRoute(
         array $origin,
         array $destination,
@@ -426,8 +426,8 @@ final class BranchAssignmentService
     }
 
     /**
-         /** Find active transfer route between two branches/coverage locations.
-         /**/
+     * Find active transfer route between two branches/coverage locations.
+     */
     public function findTransferRoute(
         int $originBranchId,
         int $destinationBranchId,
@@ -493,8 +493,8 @@ final class BranchAssignmentService
     }
 
     /**
-         /** Get pickup coordinates.
-         /**/
+     * Get pickup coordinates.
+     */
     public function pickupCoordinates(
         ?object $pickupLocation,
         Merchant $merchant
@@ -555,39 +555,9 @@ final class BranchAssignmentService
         ];
     }
 
-
-    private function _unusedPickupCoordinates(
-        ?object $pickupLocation,
-        Merchant $merchant
-    ): array {
-        return [
-            'lat' =>
-                $pickupLocation?->latitude
-                ??
-                $pickupLocation?->lat
-                ??
-                $merchant->latitude
-                ??
-                $merchant->pickup_lat
-                ??
-                null,
-
-            'lng' =>
-                $pickupLocation?->longitude
-                ??
-                $pickupLocation?->lng
-                ??
-                $merchant->longitude
-                ??
-                $merchant->pickup_lng
-                ??
-                null,
-        ];
-    }
-
     /**
-         /** Calculate Haversine distance.
-         /**/
+     * Calculate Haversine distance.
+     */
     public function distanceKm(
         ?float $lat1,
         ?float $lng1,
@@ -619,31 +589,31 @@ final class BranchAssignmentService
             );
 
         $a =
-            sin($dLat / 2)     /**    /** 2
+            sin($dLat / 2) ** 2
             +
             cos(deg2rad($lat1))
-                /**
+            *
             cos(deg2rad($lat2))
-                /**
-            sin($dLng / 2)     /**    /** 2;
+            *
+            sin($dLng / 2) ** 2;
 
         $c =
             2
-                /**
+            *
             atan2(
                 sqrt($a),
                 sqrt(1 - $a)
             );
 
         return round(
-            $earthRadius     /** $c,
+            $earthRadius * $c,
             2
         );
     }
 
     /**
-         /** Find nearest operational branch.
-         /**/
+     * Find nearest operational branch.
+     */
     private function nearestBranch(
         mixed $lat,
         mixed $lng,
@@ -665,11 +635,11 @@ final class BranchAssignmentService
             return $this->emptyBranchPayload();
         }
 
-    
+        /*
         |--------------------------------------------------------------------------
         | COORDINATE SEARCH
         |--------------------------------------------------------------------------
-            /**/
+        */
 
         if (
             $lat !== null
@@ -704,11 +674,11 @@ final class BranchAssignmentService
             }
         }
 
-    
+        /*
         |--------------------------------------------------------------------------
         | CITY
         |--------------------------------------------------------------------------
-            /**/
+        */
 
         if ($city !== null) {
 
@@ -737,11 +707,11 @@ final class BranchAssignmentService
             }
         }
 
-    
+        /*
         |--------------------------------------------------------------------------
         | AREA
         |--------------------------------------------------------------------------
-            /**/
+        */
 
         if ($area !== null) {
 
@@ -776,8 +746,8 @@ final class BranchAssignmentService
     }
 
     /**
-         /** Find operational branch by ID.
-         /**/
+     * Find operational branch by ID.
+     */
     private function findActiveBranch(
         int $branchId
     ): ?object {
@@ -800,8 +770,8 @@ final class BranchAssignmentService
     }
 
     /**
-         /** Apply operational branch filter.
-         /**/
+     * Apply operational branch filter.
+     */
     private function applyActiveFilter(
         Builder $query
     ): void {
@@ -832,8 +802,8 @@ final class BranchAssignmentService
     }
 
     /**
-         /** Convert branch row to payload.
-         /**/
+     * Convert branch row to payload.
+     */
     private function asBranchPayload(
         ?object $branch
     ): array {

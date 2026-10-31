@@ -1573,6 +1573,25 @@ final class PricingEngineService
             $normalizedType = 'non_fragile';
         }
 
+        return in_array($normalizedType, ['fragile', 'non_fragile'], true) ? $normalizedType : 'non_fragile';
+    }
+
+    private function _legacyNormalizeParcelType(
+        string $parcelType,
+        string $validationPath
+    ): string {
+        return $parcelType;
+    }
+
+    private function _unusedNormalizeMethod(
+        string $parcelType,
+        string $validationPath
+    ): string {
+        $normalizedType = strtolower(trim($parcelType));
+        if ($normalizedType === 'nonfragile') {
+            $normalizedType = 'non_fragile';
+        }
+
         if (
             !in_array(
                 $normalizedType,

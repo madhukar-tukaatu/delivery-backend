@@ -69,14 +69,14 @@ final class CheckoutDeliveryChargeResolver
 
         $weight = $this->resolveWeight($data);
         $serviceType = (string) ($data['service_type'] ?? data_get($data, 'service_type.code') ?? 'standard');
-        $parcelType = (string) ($data['parcel_type'] ?? data_get($data, 'packet.parcel_type') ?? 'non_fragile');
+        $rawParcelType = (string) ($data['parcel_type'] ?? data_get($data, 'packet.parcel_type') ?? 'non_fragile');
         $fragile = filter_var(
             $data['fragile'] ?? data_get($data, 'packet.fragile') ?? false,
             FILTER_VALIDATE_BOOLEAN
         );
-        if ($fragile && $parcelType === 'non_fragile') {
-            $parcelType = 'fragile';
-        }
+        $parcelType = ($fragile || strtolower(trim($rawParcelType)) === 'fragile')
+            ? 'fragile'
+            : 'non_fragile';
 
         $explicitCharge = isset($data['delivery_charge'])
             ? round((float) $data['delivery_charge'], 2)
@@ -95,6 +95,8 @@ final class CheckoutDeliveryChargeResolver
                 'pod_charge' => round((float) ($data['pod_charge'] ?? 0), 2),
             ];
         }
+
+        $pricingEngineError = null;
 
         if ($pickupLat !== null && $pickupLng !== null && $deliveryLat !== null && $deliveryLng !== null) {
             try {
@@ -137,7 +139,7 @@ final class CheckoutDeliveryChargeResolver
                         'length_cm' => $packet['length_cm'] ?? $packet['length'] ?? null,
                         'width_cm' => $packet['width_cm'] ?? $packet['width'] ?? null,
                         'height_cm' => $packet['height_cm'] ?? $packet['height'] ?? null,
-                        'parcel_type' => $packet['parcel_type'] ?? $parcelType,
+                        'parcel_type' => $parcelType,
                         'declared_value' => $packet['declared_value'] ?? null,
                     ]];
                 }
@@ -162,6 +164,7 @@ final class CheckoutDeliveryChargeResolver
                     ];
                 }
             } catch (Throwable $e) {
+                $pricingEngineError = $e->getMessage();
                 Log::warning('checkout_delivery_charge.pricing_engine_failed', [
                     'error' => $e->getMessage(),
                     'pickup_lat' => $pickupLat,
@@ -190,13 +193,21 @@ final class CheckoutDeliveryChargeResolver
             'has_coords' => $pickupLat !== null && $deliveryLat !== null,
             'explicit_charge' => $explicitCharge,
             'merchant_id' => $data['merchant_id'] ?? null,
+            'pricing_error' => $pricingEngineError,
         ]);
+
+        $reason = match (true) {
+            $pricingEngineError !== null => "PricingEngine: {$pricingEngineError}",
+            $pickupLat === null || $pickupLng === null => 'Pickup coordinates could not be resolved from pickup_location or merchant.',
+            $deliveryLat === null || $deliveryLng === null => 'Delivery coordinates (delivery_lat, delivery_lng) are missing.',
+            default => 'PricingEngine returned zero fare.',
+        };
 
         throw ValidationException::withMessages([
             'delivery_charge' => [
                 'Unable to resolve delivery charge from PricingEngine or quote payload. '
                 . 'Recalculate fare with pickup/delivery coordinates, or pass delivery_charge from a valid quote. '
-                . 'Flat config base_fee fallback is disabled.',
+                . "Flat config base_fee fallback is disabled. ({$reason})",
             ],
         ]);
     }

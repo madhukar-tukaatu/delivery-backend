@@ -15,6 +15,10 @@ enum BranchStatus: string
 
     public static function resolve(mixed $value): self
     {
+        if ($value instanceof self) {
+            return $value;
+        }
+
         $normalized = strtolower(trim((string) $value));
 
         return self::tryFrom($normalized) ?? self::Draft;
@@ -31,5 +35,10 @@ enum BranchStatus: string
     public function isOperable(): bool
     {
         return $this === self::Active;
+    }
+
+    public function isApproved(): bool
+    {
+        return in_array($this, [self::Approved, self::Active], true);
     }
 }

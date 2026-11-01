@@ -80,16 +80,7 @@ final class SendBranchAccountInvitation implements ShouldQueue
         }
 
         try {
-            if (
-                !in_array(
-                    $branch->status,
-                    [
-                        Branch::STATUS_APPROVED,
-                        Branch::STATUS_ACTIVE,
-                    ],
-                    true
-                )
-            ) {
+            if (!$branch->isApproved()) {
                 throw new RuntimeException(
                     'The branch is not approved.'
                 );

@@ -51,8 +51,6 @@ class BranchController extends Controller
         ]);
     }
 
-    // comm
-
     public function index(Request $request, BranchVisibilityService $visibility): JsonResponse
     {
         $visibleIds = $visibility->visibleBranchIds($request->user());
@@ -139,42 +137,6 @@ class BranchController extends Controller
 
         return response()->json($query->paginate($perPage));
     }
-
-    // public function store(Request $request, BranchVisibilityService $visibility): JsonResponse
-    // {
-    //     $data = $this->validatedData($request);
-
-    //     $data['type'] = $this->normalizeBranchType($data['type']);
-
-    //     $this->validateHierarchyAccess($request, $visibility, $data);
-
-    //     $this->applyCoverageLocationToBranchPayload($data);
-
-    //     $branch = DB::transaction(function () use ($data) {
-    //         $data['status'] = $data['status'] ?? Branch::STATUS_DRAFT;
-
-    //         $branch = Branch::create($data);
-
-    //         if (!empty($data['coverage_location_id'])) {
-    //             CoverageLocation::where('id', $data['coverage_location_id'])->update([
-    //                 'branch_id' => $branch->id,
-    //             ]);
-    //         }
-
-    //         return $branch;
-    //     });
-
-    //     return response()->json([
-    //         'message' => 'Branch created successfully.',
-    //         'data' => $branch->load([
-    //             'parent',
-    //             'coverageLocation',
-    //             'manager',
-    //             'documents',
-    //             'agreements',
-    //         ]),
-    //     ], 201);
-    // }
 
     public function store(
         Request $request,
@@ -821,130 +783,6 @@ class BranchController extends Controller
         ]);
     }
 
-    // public function approve(
-    //     Request $request,
-    //     Branch $branch,
-    //     BranchVisibilityService $visibility,
-    //     BranchAccountInvitationService $invitationService
-    // ): JsonResponse {
-    //     $this->abortIfBranchNotVisible(
-    //         $request,
-    //         $branch,
-    //         $visibility
-    //     );
-
-    //     $branch->loadMissing('manager');
-
-    //     $isFranchise =
-    //         $this->normalizeBranchType($branch->type) ===
-    //         Branch::TYPE_FRANCHISE_BRANCH;
-
-    //     if ($isFranchise && !$branch->manager_user_id) {
-    //         return response()->json([
-    //             'message' =>
-    //                 'The franchise cannot be approved because its manager account is missing.',
-
-    //             'errors' => [
-    //                 'manager_user_id' => [
-    //                     'A registered branch manager is required before approval.',
-    //                 ],
-    //             ],
-    //         ], 422);
-    //     }
-
-    //     if (
-    //         $isFranchise &&
-    //         blank($branch->manager?->email)
-    //     ) {
-    //         return response()->json([
-    //             'message' =>
-    //                 'The franchise cannot be approved because the manager email is missing.',
-
-    //             'errors' => [
-    //                 'manager_email' => [
-    //                     'A valid manager email is required before approval.',
-    //                 ],
-    //             ],
-    //         ], 422);
-    //     }
-
-    //     $wasAlreadyApproved = in_array(
-    //         $branch->status,
-    //         [
-    //             Branch::STATUS_APPROVED,
-    //             Branch::STATUS_ACTIVE,
-    //         ],
-    //         true
-    //     );
-
-    //     DB::transaction(function () use (
-    //         $request,
-    //         $branch
-    //     ): void {
-    //         $branch->update([
-    //             /*
-    //              * Do not downgrade an active branch back to approved.
-    //              */
-    //             'status' =>
-    //                 $branch->status === Branch::STATUS_ACTIVE
-    //                     ? Branch::STATUS_ACTIVE
-    //                     : Branch::STATUS_APPROVED,
-
-    //             'approved_by' =>
-    //                 $branch->approved_by
-    //                 ?: $request->user()?->id,
-
-    //             'approved_at' =>
-    //                 $branch->approved_at
-    //                 ?: now(),
-
-    //             'rejected_by' => null,
-    //             'rejected_at' => null,
-    //             'rejection_reason' => null,
-    //         ]);
-    //     });
-
-    //     $freshBranch = $branch
-    //         ->fresh()
-    //         ->load([
-    //             'parent',
-    //             'coverageLocation',
-    //             'manager',
-    //         ]);
-
-    //     $invitation = [
-    //         'status' => 'not_required',
-    //         'email' => null,
-    //         'queued_at' => null,
-    //         'sent_at' => null,
-    //     ];
-
-    //     if ($isFranchise) {
-    //         $invitation = $invitationService->queue(
-    //             branch: $freshBranch,
-    //             force: false
-    //         );
-    //     }
-
-    //     return response()->json([
-    //         'message' => match ($invitation['status']) {
-    //             'queued' =>
-    //                 'Franchise approved successfully. The branch manager account setup email has been queued.',
-
-    //             'sent' =>
-    //                 'Franchise approved successfully. The account setup email had already been sent.',
-
-    //             default => $wasAlreadyApproved
-    //                 ? 'Branch was already approved.'
-    //                 : 'Branch approved successfully.',
-    //         },
-
-    //         'data' => $freshBranch,
-
-    //         'account_invitation' => $invitation,
-    //     ]);
-    // }
-
     public function approve(
         Request $request,
         Branch $branch,
@@ -995,27 +833,23 @@ class BranchController extends Controller
             }
         }
 
-        $wasAlreadyApproved = in_array(
-            $branch->status,
-            [
-                Branch::STATUS_APPROVED,
-                Branch::STATUS_ACTIVE,
-            ],
-            true
-        );
+        $wasAlreadyApproved = $branch->isApproved();
 
         DB::transaction(
             function () use (
                 $request,
                 $branch
             ): void {
+                $status = $branch->status instanceof \Modules\Branch\Enums\BranchStatus
+                    ? $branch->status
+                    : \Modules\Branch\Enums\BranchStatus::resolve($branch->status);
+
                 $branch->update([
                     /*
-                 * Never downgrade an active branch.
-                 */
+                     * Never downgrade an active branch.
+                     */
                     'status' =>
-                    $branch->status ===
-                        Branch::STATUS_ACTIVE
+                    $status === \Modules\Branch\Enums\BranchStatus::Active
                         ? Branch::STATUS_ACTIVE
                         : Branch::STATUS_APPROVED,
 
@@ -1112,41 +946,6 @@ class BranchController extends Controller
             $invitation,
         ]);
     }
-
-    // public function resendAccountInvitation(
-    //     Request $request,
-    //     Branch $branch,
-    //     BranchVisibilityService $visibility,
-    //     BranchAccountInvitationService $invitationService
-    // ): JsonResponse {
-    //     $this->abortIfBranchNotVisible(
-    //         $request,
-    //         $branch,
-    //         $visibility
-    //     );
-
-    //     if (
-    //         $this->normalizeBranchType($branch->type) !==
-    //         Branch::TYPE_FRANCHISE_BRANCH
-    //     ) {
-    //         return response()->json([
-    //             'message' =>
-    //             'Account invitations are currently configured for franchise branches only.',
-    //         ], 422);
-    //     }
-
-    //     $invitation = $invitationService->queue(
-    //         branch: $branch->fresh(['manager']),
-    //         force: true
-    //     );
-
-    //     return response()->json([
-    //         'message' =>
-    //         'A new branch manager account setup email has been queued.',
-
-    //         'account_invitation' => $invitation,
-    //     ]);
-    // }
 
     public function resendAccountInvitation(
         Request $request,

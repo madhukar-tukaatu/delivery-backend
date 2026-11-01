@@ -4,6 +4,7 @@ namespace Modules\Branch\Services;
 
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
+use Modules\Branch\Enums\BranchStatus;
 use Modules\Branch\Jobs\SendBranchAccountInvitation;
 use Modules\Branch\Models\Branch;
 
@@ -38,16 +39,11 @@ final class BranchAccountInvitationService
                     ->lockForUpdate()
                     ->findOrFail($branch->id);
 
-                if (
-                    !in_array(
-                        $lockedBranch->status,
-                        [
-                            Branch::STATUS_APPROVED,
-                            Branch::STATUS_ACTIVE,
-                        ],
-                        true
-                    )
-                ) {
+                $status = $lockedBranch->status instanceof BranchStatus
+                    ? $lockedBranch->status
+                    : BranchStatus::resolve($lockedBranch->status);
+
+                if (!$status->isApproved()) {
                     throw ValidationException::withMessages([
                         'branch' => [
                             'The branch must be approved before sending an account invitation.',

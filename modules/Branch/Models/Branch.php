@@ -181,6 +181,15 @@ class Branch extends Model
         return $this->belongsTo(User::class, 'rejected_by');
     }
 
+    public function isApproved(): bool
+    {
+        $status = $this->status instanceof BranchStatus
+            ? $this->status
+            : BranchStatus::resolve($this->status);
+
+        return $status->isApproved();
+    }
+
     public function scopeActive(Builder $query): Builder
     {
         return $query->where('status', BranchStatus::Active);

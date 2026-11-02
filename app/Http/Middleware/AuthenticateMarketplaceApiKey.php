@@ -20,21 +20,26 @@ final class AuthenticateMarketplaceApiKey
      */
     public function handle(Request $request, Closure $next, string $scope = 'pricing'): Response
     {
-        $publicKey = trim((string) $request->header(
-            'X-Tukaatu-Marketplace-Key'
-        ));
+        $rawPublicKey = $request->header('X-Tukaatu-Marketplace-Key')
+            ?? $request->header('X-Tukaatu-Key')
+            ?? $request->header('X-Marketplace-Key');
+
+        $publicKey = trim((string) $rawPublicKey, " \t\n\r\0\x0B\"'");
+        if (str_starts_with(strtolower($publicKey), 'bearer ')) {
+            $publicKey = trim(substr($publicKey, 7), " \t\n\r\0\x0B\"'");
+        }
 
         $timestampHeader = trim((string) $request->header(
             'X-Tukaatu-Timestamp'
-        ));
+        ), " \t\n\r\0\x0B\"'");
 
         $requestId = trim((string) $request->header(
             'X-Tukaatu-Request-Id'
-        ));
+        ), " \t\n\r\0\x0B\"'");
 
         $providedSignature = strtolower(trim((string) $request->header(
             'X-Tukaatu-Signature'
-        )));
+        ), " \t\n\r\0\x0B\"'"));
 
         if (str_starts_with($providedSignature, 'sha256=')) {
             $providedSignature = substr($providedSignature, 7);
@@ -97,8 +102,10 @@ final class AuthenticateMarketplaceApiKey
             ], 401);
         }
 
+        $keyHash = hash('sha256', $publicKey);
+
         $apiKey = DB::table('marketplace_api_keys')
-            ->where('key_hash', hash('sha256', $publicKey))
+            ->where('key_hash', $keyHash)
             ->where('is_active', true)
             ->where(function ($query): void {
                 $query->whereNull('revoked_at');
@@ -109,7 +116,29 @@ final class AuthenticateMarketplaceApiKey
             })
             ->first();
 
+        // Fallback: in case partner configured the 20-character key_prefix instead of the full 57-char public key
+        if (!$apiKey && strlen($publicKey) <= 32) {
+            $apiKey = DB::table('marketplace_api_keys')
+                ->where('key_prefix', $publicKey)
+                ->where('is_active', true)
+                ->where(function ($query): void {
+                    $query->whereNull('revoked_at');
+                })
+                ->where(function ($query): void {
+                    $query->whereNull('expires_at')
+                        ->orWhere('expires_at', '>', now());
+                })
+                ->first();
+        }
+
         if (!$apiKey) {
+            \Illuminate\Support\Facades\Log::warning('AuthenticateMarketplaceApiKey: key rejected', [
+                'received_key_len' => strlen($publicKey),
+                'received_key_prefix' => substr($publicKey, 0, 20),
+                'hash' => $keyHash,
+                'client_ip' => $request->ip(),
+            ]);
+
             return $this->error(
                 'The marketplace API key is invalid or inactive.',
                 401

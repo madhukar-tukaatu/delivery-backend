@@ -59,7 +59,7 @@ if ($destBranch) {
     echo "WARNING: Branch #{$destBranchId} not found in branches table.\n";
 }
 
-// 1. Prepare coordinates & branch
+// 1. Prepare coordinates & branch 
 $shipment->destination_branch_id = $destBranchId;
 $shipment->destination_sub_branch_id = null;
 

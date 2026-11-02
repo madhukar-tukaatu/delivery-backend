@@ -63,7 +63,7 @@ final class TransferRouteProgressService
      *   has_route: bool,
      * }
      */
-    public function resolveForShipment(Shipment $shipment, ?int $atBranchId = null): array
+    public function resolveForShipment(Shipment $shipment, ?int $atBranchId = null, bool $ignoreAssigned = false): array
     {
         $serviceType = strtolower((string) ($shipment->service_type ?? 'standard')) ?: 'standard';
         $destinationBranchId = (int) ($shipment->destination_sub_branch_id
@@ -76,7 +76,7 @@ final class TransferRouteProgressService
                 ?? $shipment->origin_branch_id
                 ?? 0) ?: null;
 
-        $route = $this->resolveRouteModel($shipment, $currentBranchId, $destinationBranchId, $serviceType);
+        $route = $this->resolveRouteModel($shipment, $currentBranchId, $destinationBranchId, $serviceType, $ignoreAssigned);
 
         if (!$route) {
             // Thin decision: at-final uses operational/coverage equality only.
@@ -186,9 +186,9 @@ final class TransferRouteProgressService
     /**
      * Persist next_hop / leg / path onto the shipment without touching destination.
      */
-    public function applyProgressToShipment(Shipment $shipment, ?int $atBranchId = null): Shipment
+    public function applyProgressToShipment(Shipment $shipment, ?int $atBranchId = null, bool $ignoreAssigned = false): Shipment
     {
-        $progress = $this->resolveForShipment($shipment, $atBranchId);
+        $progress = $this->resolveForShipment($shipment, $atBranchId, $ignoreAssigned);
         $columns = Schema::getColumnListing('shipments');
         $updates = [];
 
@@ -308,27 +308,44 @@ final class TransferRouteProgressService
         Shipment $shipment,
         ?int $currentBranchId,
         ?int $destinationBranchId,
-        string $serviceType
+        string $serviceType,
+        bool $ignoreAssigned = false
     ): ?BranchTransferRoute {
-        $assignedId = (int) ($shipment->transfer_route_id ?? 0);
-        if ($assignedId > 0) {
-            $assigned = BranchTransferRoute::query()
-                ->with(['routeLanes.lane.fromBranch', 'routeLanes.lane.toBranch', 'lane.fromBranch', 'lane.toBranch'])
-                ->find($assignedId);
-            if ($assigned && $assigned->is_active) {
-                return $assigned;
-            }
-        }
-
-        if (!$destinationBranchId) {
-            return null;
-        }
-
         $originBranchId = (int) ($currentBranchId
             ?? $shipment->origin_sub_branch_id
             ?? $shipment->origin_branch_id
             ?? 0);
-        if ($originBranchId <= 0) {
+
+        if (!$ignoreAssigned) {
+            $assignedId = (int) ($shipment->transfer_route_id ?? 0);
+            if ($assignedId > 0) {
+                $assigned = BranchTransferRoute::query()
+                    ->with(['routeLanes.lane.fromBranch', 'routeLanes.lane.toBranch', 'lane.fromBranch', 'lane.toBranch'])
+                    ->find($assignedId);
+                if ($assigned && $assigned->is_active) {
+                    $path = array_map('intval', $assigned->getPathBranchIds());
+                    $fromCoverage = $originBranchId > 0 ? ($this->coverageIdForBranch($originBranchId) ?? $originBranchId) : null;
+                    $toCoverage = $destinationBranchId ? ($this->coverageIdForBranch($destinationBranchId) ?? $destinationBranchId) : null;
+
+                    // Verify that origin and destination are actually on this assigned route
+                    $hasOrigin = false;
+                    $hasDest = false;
+                    foreach ($path as $stop) {
+                        if ($originBranchId > 0 && ($this->sameOperationalLocation($stop, $originBranchId) || ($fromCoverage && $stop === (int) $fromCoverage))) {
+                            $hasOrigin = true;
+                        }
+                        if ($destinationBranchId && ($this->sameOperationalLocation($stop, $destinationBranchId) || ($toCoverage && $stop === (int) $toCoverage))) {
+                            $hasDest = true;
+                        }
+                    }
+                    if ($hasOrigin && $hasDest) {
+                        return $assigned;
+                    }
+                }
+            }
+        }
+
+        if (!$destinationBranchId || $originBranchId <= 0) {
             return null;
         }
 
@@ -337,9 +354,14 @@ final class TransferRouteProgressService
         $toCoverage = $this->coverageIdForBranch($destinationBranchId) ?? $destinationBranchId;
 
         $candidates = BranchTransferRoute::query()
-            ->where('service_type', $serviceType)
+            ->where(function ($q) use ($serviceType) {
+                $q->where('service_type', $serviceType)
+                    ->orWhere('service_type', 'standard')
+                    ->orWhereNull('service_type');
+            })
             ->where('is_active', true)
             ->with(['routeLanes.lane.fromBranch', 'routeLanes.lane.toBranch', 'lane.fromBranch', 'lane.toBranch'])
+            ->orderByRaw("CASE WHEN service_type = ? THEN 0 ELSE 1 END", [$serviceType])
             ->orderByDesc('is_default')
             ->orderBy('priority')
             ->orderBy('id')

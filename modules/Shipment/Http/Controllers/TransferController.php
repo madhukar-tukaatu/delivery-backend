@@ -598,22 +598,30 @@ final class TransferController extends Controller
         $this->applyCompletedOutScope($completedQuery, $branchId);
         $completed = $completedQuery->count();
 
+        $branchScopeIds = [];
+        if ($branchId !== 0) {
+            $covId = $this->coverageIdForBranch($branchId);
+            $physId = $this->branchIdForCoverage($branchId);
+            $branchScopeIds = array_values(array_unique(array_filter([(int) $branchId, (int) $covId, (int) $physId])));
+        }
+
         // Today's TR activity (TRs + parcels) for the HQ / branch summary strip.
         $today = now()->toDateString();
         $trs = fn () => DB::table('dispatch_manifests');
         $receivedToday = $trs()->whereDate('received_at', $today)
-            ->when($branchId !== 0, fn ($q) => $q->where('to_branch_id', $branchId));
+            ->when($branchId !== 0, fn ($q) => $q->whereIn('to_branch_id', $branchScopeIds));
         $dispatchedToday = $trs()->whereDate('dispatched_at', $today)
-            ->when($branchId !== 0, fn ($q) => $q->where('from_branch_id', $branchId));
+            ->when($branchId !== 0, fn ($q) => $q->whereIn('from_branch_id', $branchScopeIds));
         $openTrs = $trs()->where('status', 'open')
-            ->when($branchId !== 0, fn ($q) => $q->where('from_branch_id', $branchId));
+            ->when($branchId !== 0, fn ($q) => $q->whereIn('from_branch_id', $branchScopeIds));
 
         // TR counts that match each tab's default "By TR" list exactly
         // (same filters as GET transfers/containers).
-        $trCount = function (string $direction, array $statuses) use ($branchId): int {
+        $trCount = function (string $direction, array $statuses) use ($branchId, $branchScopeIds): int {
             $q = DB::table('dispatch_manifests')->whereIn('status', $statuses);
             if ($branchId !== 0) {
-                $q->where($direction === 'inbound' ? 'to_branch_id' : 'from_branch_id', $branchId);
+                $col = $direction === 'inbound' ? 'to_branch_id' : 'from_branch_id';
+                $q->whereIn($col, $branchScopeIds);
             }
 
             return $q->count();
@@ -2005,10 +2013,13 @@ final class TransferController extends Controller
             ->with(['items.shipment:id,tracking_number,destination_branch_id,status,weight,chargeable_weight,actual_weight', 'fromBranch:id,name', 'toBranch:id,name', 'rider:id,name,phone']);
 
         if ($branchId !== 0) {
+            $covId = $this->coverageIdForBranch($branchId);
+            $physId = $this->branchIdForCoverage($branchId);
+            $branchScopeIds = array_values(array_unique(array_filter([(int) $branchId, (int) $covId, (int) $physId])));
             match ($direction) {
-                'inbound' => $query->where('to_branch_id', $branchId),
-                'all' => $query->where(fn ($q) => $q->where('from_branch_id', $branchId)->orWhere('to_branch_id', $branchId)),
-                default => $query->where('from_branch_id', $branchId),
+                'inbound' => $query->whereIn('to_branch_id', $branchScopeIds),
+                'all' => $query->where(fn ($q) => $q->whereIn('from_branch_id', $branchScopeIds)->orWhereIn('to_branch_id', $branchScopeIds)),
+                default => $query->whereIn('from_branch_id', $branchScopeIds),
             };
         }
 
@@ -2487,7 +2498,7 @@ final class TransferController extends Controller
         foreach ($shipments as $shipment) {
             $at = (int) ($shipment->current_branch_id ?? $shipment->origin_branch_id ?? 0) ?: null;
             $beforeHop = (int) ($shipment->next_hop_branch_id ?? 0);
-            $p = $this->progress->resolveForShipment($shipment, $at);
+            $p = $this->progress->resolveForShipment($shipment, $at, true);
             $afterHop = (int) ($p['next_hop_branch_id'] ?? 0);
 
             if ($p['has_route']) {
@@ -2526,7 +2537,7 @@ final class TransferController extends Controller
         foreach ($manifestsQuery->get() as $manifest) {
             $firstShipment = $manifest->items->first()?->shipment;
             if ($firstShipment) {
-                $p = $this->progress->resolveForShipment($firstShipment, (int) $manifest->from_branch_id);
+                $p = $this->progress->resolveForShipment($firstShipment, (int) $manifest->from_branch_id, true);
                 $computedHop = (int) ($p['next_hop_branch_id'] ?? 0);
 
                 if ($computedHop > 0 && $computedHop !== (int) $manifest->to_branch_id) {

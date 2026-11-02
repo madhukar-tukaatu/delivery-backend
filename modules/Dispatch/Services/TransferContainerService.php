@@ -1169,7 +1169,7 @@ final class TransferContainerService
             'receiver_phone' => $shipment?->receiver_phone,
             'destination_branch_id' => $shipment?->destination_branch_id,
             'destination_name' => $shipment?->destinationBranch?->name,
-            'weight' => (float) ($shipment?->chargeable_weight ?: $shipment?->weight ?: 0),
+            'weight' => (float) ($shipment?->chargeable_weight ?: $shipment?->actual_weight ?: $shipment?->weight ?: 0),
             'payment_type' => $shipment?->payment_type,
             'shipment_status' => $shipment?->status,
             'is_final_here' => $shipment && $hereBranchId ? $this->isFinalHere($shipment, $hereBranchId) : null,

@@ -22,6 +22,7 @@ final class ReconcileTransferNextHops extends Command
 {
     protected $signature = 'transfers:reconcile-next-hops
                             {--tracking= : Limit to a tracking number}
+                            {--tr= : Limit to a specific TR number, e.g. TR-KATHM-000001}
                             {--branch= : Limit to current_branch_id}
                             {--dry-run : Show changes without persisting}';
 
@@ -84,7 +85,69 @@ final class ReconcileTransferNextHops extends Command
             }
         });
 
-        $this->info(($dry ? 'Would fix' : 'Fixed') . " {$fixed} / {$checked} shipments");
+        // Also reconcile in-flight TR runs (dispatch manifests)
+        $manifestQuery = \Modules\Dispatch\Models\DispatchManifest::query()
+            ->whereIn('status', ['open', 'dispatched', 'in_transit'])
+            ->with(['items.shipment']);
+
+        if ($trOption = $this->option('tr')) {
+            $manifestQuery->where(function ($q) use ($trOption) {
+                $q->where('transfer_number', $trOption)
+                    ->orWhere('manifest_number', $trOption);
+            });
+        }
+        $manifests = $manifestQuery->get();
+
+        $fixedTrs = 0;
+        foreach ($manifests as $manifest) {
+            $firstShipment = $manifest->items->first()?->shipment;
+            if (!$firstShipment) {
+                continue;
+            }
+            $p = $progress->resolveForShipment($firstShipment, (int) $manifest->from_branch_id);
+            $computedHop = (int) ($p['next_hop_branch_id'] ?? 0);
+
+            if ($computedHop > 0 && $computedHop !== (int) $manifest->to_branch_id) {
+                $this->line(sprintf(
+                    'TR %s (%s)  dest %s → %s%s',
+                    $manifest->manifest_number ?? $manifest->transfer_number,
+                    $manifest->status,
+                    $manifest->to_branch_id,
+                    $computedHop,
+                    $dry ? '  [dry-run]' : ''
+                ));
+
+                if (!$dry) {
+                    $manifest->update([
+                        'to_branch_id' => $computedHop,
+                        'transfer_route_id' => $p['transfer_route_id'] ?? $manifest->transfer_route_id,
+                    ]);
+
+                    foreach ($manifest->items as $item) {
+                        if ($item->shipment) {
+                            $item->shipment->update([
+                                'next_hop_branch_id' => $computedHop,
+                                'transfer_route_id' => $p['transfer_route_id'] ?? $item->shipment->transfer_route_id,
+                                'path_text' => $p['path_text'] ?? $item->shipment->path_text,
+                                'route_code' => $p['route_code'] ?? $item->shipment->route_code,
+                                'route_name' => $p['route_name'] ?? $item->shipment->route_name,
+                            ]);
+                        }
+                    }
+
+                    if (\Illuminate\Support\Facades\Schema::hasTable('shipment_route_steps')) {
+                        \Illuminate\Support\Facades\DB::table('shipment_route_steps')
+                            ->where('dispatch_manifest_id', $manifest->id)
+                            ->update(['to_branch_id' => $computedHop]);
+                    }
+
+                    app(\Modules\Dispatch\Services\ManifestHopService::class)->refreshCounts((int) $manifest->id);
+                }
+                $fixedTrs++;
+            }
+        }
+
+        $this->info(($dry ? 'Would fix' : 'Fixed') . " {$fixed} / {$checked} shipments, {$fixedTrs} TRs");
 
         return self::SUCCESS;
     }

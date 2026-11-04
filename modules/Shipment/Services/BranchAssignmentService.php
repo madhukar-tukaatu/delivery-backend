@@ -438,8 +438,8 @@ final class BranchAssignmentService
         $originBranch = DB::table('branches')->where('id', $originBranchId)->first();
         $destBranch = DB::table('branches')->where('id', $destinationBranchId)->first();
 
-        $fromCoverage = $originBranch?->coverage_location_id ?? $originBranchId;
-        $toCoverage = $destBranch?->coverage_location_id ?? $destinationBranchId;
+        $fromCoverage = app(\Modules\Shipment\Services\TransferRouteProgressService::class)->coverageIdForBranch($originBranchId) ?? ($originBranch?->coverage_location_id ?? $originBranchId);
+        $toCoverage = app(\Modules\Shipment\Services\TransferRouteProgressService::class)->coverageIdForBranch($destinationBranchId) ?? ($destBranch?->coverage_location_id ?? $destinationBranchId);
 
         $candidates = BranchTransferRoute::query()
             ->where('is_active', true)
@@ -468,8 +468,8 @@ final class BranchAssignmentService
             $pathStart = (int) $path[0];
             $pathEnd = (int) end($path);
 
-            if (($pathStart === (int) $fromCoverage || $pathStart === $originBranchId)
-                && ($pathEnd === (int) $toCoverage || $pathEnd === $destinationBranchId)) {
+            if (($pathStart === (int) $fromCoverage || $pathStart === $originBranchId || app(\Modules\Shipment\Services\TransferRouteProgressService::class)->sameOperationalLocation($pathStart, $originBranchId))
+                && ($pathEnd === (int) $toCoverage || $pathEnd === $destinationBranchId || app(\Modules\Shipment\Services\TransferRouteProgressService::class)->sameOperationalLocation($pathEnd, $destinationBranchId))) {
                 $exact = $route;
                 break;
             }

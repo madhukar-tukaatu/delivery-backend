@@ -598,22 +598,30 @@ final class TransferController extends Controller
         $this->applyCompletedOutScope($completedQuery, $branchId);
         $completed = $completedQuery->count();
 
+        $branchScopeIds = [];
+        if ($branchId !== 0) {
+            $covId = $this->coverageIdForBranch($branchId);
+            $physId = $this->branchIdForCoverage($branchId);
+            $branchScopeIds = array_values(array_unique(array_filter([(int) $branchId, (int) $covId, (int) $physId])));
+        }
+
         // Today's TR activity (TRs + parcels) for the HQ / branch summary strip.
         $today = now()->toDateString();
         $trs = fn () => DB::table('dispatch_manifests');
         $receivedToday = $trs()->whereDate('received_at', $today)
-            ->when($branchId !== 0, fn ($q) => $q->where('to_branch_id', $branchId));
+            ->when($branchId !== 0, fn ($q) => $q->whereIn('to_branch_id', $branchScopeIds));
         $dispatchedToday = $trs()->whereDate('dispatched_at', $today)
-            ->when($branchId !== 0, fn ($q) => $q->where('from_branch_id', $branchId));
+            ->when($branchId !== 0, fn ($q) => $q->whereIn('from_branch_id', $branchScopeIds));
         $openTrs = $trs()->where('status', 'open')
-            ->when($branchId !== 0, fn ($q) => $q->where('from_branch_id', $branchId));
+            ->when($branchId !== 0, fn ($q) => $q->whereIn('from_branch_id', $branchScopeIds));
 
         // TR counts that match each tab's default "By TR" list exactly
         // (same filters as GET transfers/containers).
-        $trCount = function (string $direction, array $statuses) use ($branchId): int {
+        $trCount = function (string $direction, array $statuses) use ($branchId, $branchScopeIds): int {
             $q = DB::table('dispatch_manifests')->whereIn('status', $statuses);
             if ($branchId !== 0) {
-                $q->where($direction === 'inbound' ? 'to_branch_id' : 'from_branch_id', $branchId);
+                $col = $direction === 'inbound' ? 'to_branch_id' : 'from_branch_id';
+                $q->whereIn($col, $branchScopeIds);
             }
 
             return $q->count();
@@ -629,6 +637,7 @@ final class TransferController extends Controller
             'completed_parcels' => $completed,
             // TR counts (badges): Transfer Ins > Process / Received, Transfer Outs > Completed.
             'in_transit_trs' => $trCount('inbound', self::TR_ARRIVING_STATUSES),
+            'outbound_in_transit_trs' => $trCount('outbound', self::TR_ARRIVING_STATUSES),
             'received_trs' => $trCount('inbound', self::TR_CLOSED_STATUSES),
             'completed_trs' => $trCount('outbound', self::TR_CLOSED_STATUSES),
             'received_today' => (clone $receivedToday)->count(),
@@ -2001,13 +2010,16 @@ final class TransferController extends Controller
         $direction = $request->string('direction')->toString() ?: 'outbound';
 
         $query = \Modules\Dispatch\Models\DispatchManifest::query()
-            ->with(['items.shipment:id,tracking_number,destination_branch_id,status,weight,chargeable_weight', 'fromBranch:id,name', 'toBranch:id,name', 'rider:id,name,phone']);
+            ->with(['items.shipment:id,tracking_number,destination_branch_id,status,weight,chargeable_weight,actual_weight', 'fromBranch:id,name', 'toBranch:id,name', 'rider:id,name,phone']);
 
         if ($branchId !== 0) {
+            $covId = $this->coverageIdForBranch($branchId);
+            $physId = $this->branchIdForCoverage($branchId);
+            $branchScopeIds = array_values(array_unique(array_filter([(int) $branchId, (int) $covId, (int) $physId])));
             match ($direction) {
-                'inbound' => $query->where('to_branch_id', $branchId),
-                'all' => $query->where(fn ($q) => $q->where('from_branch_id', $branchId)->orWhere('to_branch_id', $branchId)),
-                default => $query->where('from_branch_id', $branchId),
+                'inbound' => $query->whereIn('to_branch_id', $branchScopeIds),
+                'all' => $query->where(fn ($q) => $q->whereIn('from_branch_id', $branchScopeIds)->orWhereIn('to_branch_id', $branchScopeIds)),
+                default => $query->whereIn('from_branch_id', $branchScopeIds),
             };
         }
 
@@ -2156,7 +2168,7 @@ final class TransferController extends Controller
                 'destination_branch_id' => $s->destination_branch_id,
                 'destination_name' => $s->destinationBranch?->name,
                 'is_final_here' => (int) $s->destination_branch_id === $hop || $this->progress->sameOperationalLocation((int) $s->destination_branch_id, $hop),
-                'weight' => (float) ($s->chargeable_weight ?: $s->weight ?: 0),
+                'weight' => (float) ($s->chargeable_weight ?: $s->actual_weight ?: $s->weight ?: 0),
                 'status' => $s->status,
             ];
         }
@@ -2451,6 +2463,126 @@ final class TransferController extends Controller
             403,
             'This TR belongs to other branches.'
         );
+    }
+
+    /**
+     * Reconcile shipment next hops and in-flight TR destinations against configured routes.
+     */
+    public function reconcile(Request $request)
+    {
+        $branchId = $this->resolveReceivingBranchId($request->user(), $request);
+        $tracking = $request->string('tracking')->toString();
+
+        $shipmentsQuery = Shipment::query()
+            ->whereIn('status', [
+                CourierStatus::SORTED_FOR_TRANSFER,
+                CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+                CourierStatus::RECEIVED_AT_TRANSIT_HUB,
+                CourierStatus::IN_TRANSIT,
+                CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
+            ]);
+
+        if ($tracking !== '') {
+            $shipmentsQuery->where('tracking_number', $tracking);
+        } elseif ($branchId !== 0) {
+            $shipmentsQuery->where(function ($q) use ($branchId) {
+                $q->where('origin_branch_id', $branchId)
+                    ->orWhere('current_branch_id', $branchId)
+                    ->orWhere('next_hop_branch_id', $branchId);
+            });
+        }
+
+        $reconciledShipments = [];
+        $shipments = $shipmentsQuery->get();
+
+        foreach ($shipments as $shipment) {
+            $at = (int) ($shipment->current_branch_id ?? $shipment->origin_branch_id ?? 0) ?: null;
+            $beforeHop = (int) ($shipment->next_hop_branch_id ?? 0);
+            $p = $this->progress->resolveForShipment($shipment, $at, true);
+            $afterHop = (int) ($p['next_hop_branch_id'] ?? 0);
+
+            if ($p['has_route']) {
+                $this->progress->applyProgressToShipment($shipment, $at);
+                $reconciledShipments[] = [
+                    'tracking' => $shipment->tracking_number,
+                    'before_next_hop' => $beforeHop,
+                    'after_next_hop' => $afterHop,
+                    'route_name' => $p['route_name'] ?? null,
+                    'path' => $p['path_text'] ?? null,
+                ];
+            }
+        }
+
+        // Reconcile open/dispatched TRs
+        $manifestsQuery = \Modules\Dispatch\Models\DispatchManifest::query()
+            ->whereIn('status', ['open', 'dispatched', 'in_transit'])
+            ->with(['items.shipment']);
+
+        if ($branchId !== 0) {
+            $manifestsQuery->where(function ($q) use ($branchId) {
+                $q->where('from_branch_id', $branchId)
+                    ->orWhere('to_branch_id', $branchId);
+            });
+        }
+
+        if ($request->filled('tr')) {
+            $trNumber = $request->string('tr')->toString();
+            $manifestsQuery->where(function ($q) use ($trNumber) {
+                $q->where('transfer_number', $trNumber)
+                    ->orWhere('manifest_number', $trNumber);
+            });
+        }
+
+        $reconciledManifests = [];
+        foreach ($manifestsQuery->get() as $manifest) {
+            $firstShipment = $manifest->items->first()?->shipment;
+            if ($firstShipment) {
+                $p = $this->progress->resolveForShipment($firstShipment, (int) $manifest->from_branch_id, true);
+                $computedHop = (int) ($p['next_hop_branch_id'] ?? 0);
+
+                if ($computedHop > 0 && $computedHop !== (int) $manifest->to_branch_id) {
+                    $oldTo = (int) $manifest->to_branch_id;
+                    $manifest->update([
+                        'to_branch_id' => $computedHop,
+                        'transfer_route_id' => $p['transfer_route_id'] ?? $manifest->transfer_route_id,
+                    ]);
+
+                    foreach ($manifest->items as $item) {
+                        if ($item->shipment) {
+                            $item->shipment->update([
+                                'next_hop_branch_id' => $computedHop,
+                                'transfer_route_id' => $p['transfer_route_id'] ?? $item->shipment->transfer_route_id,
+                                'path_text' => $p['path_text'] ?? $item->shipment->path_text,
+                                'route_code' => $p['route_code'] ?? $item->shipment->route_code,
+                                'route_name' => $p['route_name'] ?? $item->shipment->route_name,
+                            ]);
+                        }
+                    }
+
+                    if (\Illuminate\Support\Facades\Schema::hasTable('shipment_route_steps')) {
+                        \Illuminate\Support\Facades\DB::table('shipment_route_steps')
+                            ->where('dispatch_manifest_id', $manifest->id)
+                            ->update(['to_branch_id' => $computedHop]);
+                    }
+
+                    app(\Modules\Dispatch\Services\ManifestHopService::class)->refreshCounts((int) $manifest->id);
+
+                    $reconciledManifests[] = [
+                        'manifest_number' => $manifest->manifest_number ?? $manifest->transfer_number,
+                        'from_branch_id' => $manifest->from_branch_id,
+                        'old_to_branch_id' => $oldTo,
+                        'new_to_branch_id' => $computedHop,
+                    ];
+                }
+            }
+        }
+
+        return ApiResponse::success([
+            'reconciled_shipments_count' => count($reconciledShipments),
+            'reconciled_manifests_count' => count($reconciledManifests),
+            'shipments' => $reconciledShipments,
+            'manifests' => $reconciledManifests,
+        ]);
     }
 
     private function getBranchScope($user): int

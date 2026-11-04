@@ -63,7 +63,7 @@ final class TransferRouteProgressService
      *   has_route: bool,
      * }
      */
-    public function resolveForShipment(Shipment $shipment, ?int $atBranchId = null): array
+    public function resolveForShipment(Shipment $shipment, ?int $atBranchId = null, bool $ignoreAssigned = false): array
     {
         $serviceType = strtolower((string) ($shipment->service_type ?? 'standard')) ?: 'standard';
         $destinationBranchId = (int) ($shipment->destination_sub_branch_id
@@ -76,7 +76,7 @@ final class TransferRouteProgressService
                 ?? $shipment->origin_branch_id
                 ?? 0) ?: null;
 
-        $route = $this->resolveRouteModel($shipment, $currentBranchId, $destinationBranchId, $serviceType);
+        $route = $this->resolveRouteModel($shipment, $currentBranchId, $destinationBranchId, $serviceType, $ignoreAssigned);
 
         if (!$route) {
             // Thin decision: at-final uses operational/coverage equality only.
@@ -186,9 +186,9 @@ final class TransferRouteProgressService
     /**
      * Persist next_hop / leg / path onto the shipment without touching destination.
      */
-    public function applyProgressToShipment(Shipment $shipment, ?int $atBranchId = null): Shipment
+    public function applyProgressToShipment(Shipment $shipment, ?int $atBranchId = null, bool $ignoreAssigned = false): Shipment
     {
-        $progress = $this->resolveForShipment($shipment, $atBranchId);
+        $progress = $this->resolveForShipment($shipment, $atBranchId, $ignoreAssigned);
         $columns = Schema::getColumnListing('shipments');
         $updates = [];
 
@@ -308,27 +308,44 @@ final class TransferRouteProgressService
         Shipment $shipment,
         ?int $currentBranchId,
         ?int $destinationBranchId,
-        string $serviceType
+        string $serviceType,
+        bool $ignoreAssigned = false
     ): ?BranchTransferRoute {
-        $assignedId = (int) ($shipment->transfer_route_id ?? 0);
-        if ($assignedId > 0) {
-            $assigned = BranchTransferRoute::query()
-                ->with(['routeLanes.lane.fromBranch', 'routeLanes.lane.toBranch', 'lane.fromBranch', 'lane.toBranch'])
-                ->find($assignedId);
-            if ($assigned && $assigned->is_active) {
-                return $assigned;
-            }
-        }
-
-        if (!$destinationBranchId) {
-            return null;
-        }
-
         $originBranchId = (int) ($currentBranchId
             ?? $shipment->origin_sub_branch_id
             ?? $shipment->origin_branch_id
             ?? 0);
-        if ($originBranchId <= 0) {
+
+        if (!$ignoreAssigned) {
+            $assignedId = (int) ($shipment->transfer_route_id ?? 0);
+            if ($assignedId > 0) {
+                $assigned = BranchTransferRoute::query()
+                    ->with(['routeLanes.lane.fromBranch', 'routeLanes.lane.toBranch', 'lane.fromBranch', 'lane.toBranch'])
+                    ->find($assignedId);
+                if ($assigned && $assigned->is_active) {
+                    $path = array_map('intval', $assigned->getPathBranchIds());
+                    $fromCoverage = $originBranchId > 0 ? ($this->coverageIdForBranch($originBranchId) ?? $originBranchId) : null;
+                    $toCoverage = $destinationBranchId ? ($this->coverageIdForBranch($destinationBranchId) ?? $destinationBranchId) : null;
+
+                    // Verify that origin and destination are actually on this assigned route
+                    $hasOrigin = false;
+                    $hasDest = false;
+                    foreach ($path as $stop) {
+                        if ($originBranchId > 0 && ($this->sameOperationalLocation($stop, $originBranchId) || ($fromCoverage && $stop === (int) $fromCoverage))) {
+                            $hasOrigin = true;
+                        }
+                        if ($destinationBranchId && ($this->sameOperationalLocation($stop, $destinationBranchId) || ($toCoverage && $stop === (int) $toCoverage))) {
+                            $hasDest = true;
+                        }
+                    }
+                    if ($hasOrigin && $hasDest) {
+                        return $assigned;
+                    }
+                }
+            }
+        }
+
+        if (!$destinationBranchId || $originBranchId <= 0) {
             return null;
         }
 
@@ -337,9 +354,14 @@ final class TransferRouteProgressService
         $toCoverage = $this->coverageIdForBranch($destinationBranchId) ?? $destinationBranchId;
 
         $candidates = BranchTransferRoute::query()
-            ->where('service_type', $serviceType)
+            ->where(function ($q) use ($serviceType) {
+                $q->where('service_type', $serviceType)
+                    ->orWhere('service_type', 'standard')
+                    ->orWhereNull('service_type');
+            })
             ->where('is_active', true)
             ->with(['routeLanes.lane.fromBranch', 'routeLanes.lane.toBranch', 'lane.fromBranch', 'lane.toBranch'])
+            ->orderByRaw("CASE WHEN service_type = ? THEN 0 ELSE 1 END", [$serviceType])
             ->orderByDesc('is_default')
             ->orderBy('priority')
             ->orderBy('id')
@@ -361,16 +383,32 @@ final class TransferRouteProgressService
             $pathStart = (int) $path[0];
             $pathEnd = (int) end($path);
 
-            if ($pathStart === (int) $fromCoverage && $pathEnd === (int) $toCoverage) {
+            $startMatches = ($fromCoverage !== null && $pathStart === (int) $fromCoverage)
+                || ($pathStart === (int) $originBranchId)
+                || $this->sameOperationalLocation($pathStart, $originBranchId);
+
+            $endMatches = ($toCoverage !== null && $pathEnd === (int) $toCoverage)
+                || ($pathEnd === (int) $destinationBranchId)
+                || $this->sameOperationalLocation($pathEnd, $destinationBranchId);
+
+            if ($startMatches && $endMatches) {
                 $exact = $route;
                 break;
             }
 
-            $idx = array_search((int) $fromCoverage, $path, true);
+            $idx = false;
+            foreach ($path as $i => $stopCov) {
+                if ($this->sameOperationalLocation($stopCov, $originBranchId)
+                    || ($fromCoverage !== null && $stopCov === (int) $fromCoverage)) {
+                    $idx = $i;
+                    break;
+                }
+            }
+
             if ($partial === null
                 && $idx !== false
                 && $idx < count($path) - 1
-                && $pathEnd === (int) $toCoverage) {
+                && $endMatches) {
                 $partial = $route;
             }
         }
@@ -476,10 +514,55 @@ final class TransferRouteProgressService
         if (array_key_exists($branchId, $this->coverageByBranch)) {
             return $this->coverageByBranch[$branchId];
         }
-        $cov = Branch::query()->whereKey($branchId)->value('coverage_location_id');
-        $this->coverageByBranch[$branchId] = $cov !== null ? (int) $cov : null;
 
-        return $this->coverageByBranch[$branchId];
+        $branch = Branch::query()->whereKey($branchId)->first(['id', 'coverage_location_id', 'name', 'city', 'district']);
+        $cov = $branch?->coverage_location_id;
+
+        // 1. Direct coverage_location_id on Branch
+        if ($cov && \Modules\Branch\Models\CoverageLocation::query()->whereKey($cov)->exists()) {
+            $this->coverageByBranch[$branchId] = (int) $cov;
+            return $this->coverageByBranch[$branchId];
+        }
+
+        // 2. Check if CoverageLocation has branch_id pointing to this branch
+        $fromCov = \Modules\Branch\Models\CoverageLocation::query()
+            ->where('branch_id', $branchId)
+            ->value('id');
+        if ($fromCov) {
+            $this->coverageByBranch[$branchId] = (int) $fromCov;
+            return $this->coverageByBranch[$branchId];
+        }
+
+        // 3. Match by name or city (e.g. Kathmandu Franchise -> Kathmandu coverage location)
+        if ($branch) {
+            $matchedCov = \Modules\Branch\Models\CoverageLocation::query()
+                ->where('status', 'active')
+                ->where(function ($q) use ($branch) {
+                    $q->where('name', $branch->name);
+                    if ($branch->city) {
+                        $q->orWhere('name', 'like', "%{$branch->city}%")
+                          ->orWhere('city', 'like', "%{$branch->city}%");
+                    }
+                    if ($branch->district) {
+                        $q->orWhere('name', 'like', "%{$branch->district}%");
+                    }
+                })
+                ->orderBy('id')
+                ->value('id');
+
+            if ($matchedCov) {
+                // Persist onto branch to permanently fix the mapping
+                try {
+                    Branch::query()->whereKey($branchId)->update(['coverage_location_id' => $matchedCov]);
+                } catch (\Throwable) {}
+
+                $this->coverageByBranch[$branchId] = (int) $matchedCov;
+                return $this->coverageByBranch[$branchId];
+            }
+        }
+
+        $this->coverageByBranch[$branchId] = null;
+        return null;
     }
 
     /**
@@ -519,6 +602,15 @@ final class TransferRouteProgressService
         if (array_key_exists($coverageId, $this->branchByCoverage)) {
             return $this->branchByCoverage[$coverageId];
         }
+
+        // 1. Direct coverage_locations.branch_id pointer
+        $direct = \Modules\Branch\Models\CoverageLocation::query()->whereKey($coverageId)->value('branch_id');
+        if ($direct && Branch::query()->whereKey($direct)->exists()) {
+            $this->branchByCoverage[$coverageId] = (int) $direct;
+            return $this->branchByCoverage[$coverageId];
+        }
+
+        // 2. Branch assigned to this coverage_location (prefer franchise_branch)
         $query = Branch::query()->where('coverage_location_id', $coverageId);
         $franchise = (clone $query)->where('type', 'franchise_branch')->orderBy('id')->value('id');
         if ($franchise) {
@@ -527,9 +619,38 @@ final class TransferRouteProgressService
             return $this->branchByCoverage[$coverageId];
         }
         $any = $query->orderBy('id')->value('id');
-        $this->branchByCoverage[$coverageId] = $any !== null ? (int) $any : null;
+        if ($any) {
+            $this->branchByCoverage[$coverageId] = (int) $any;
 
-        return $this->branchByCoverage[$coverageId];
+            return $this->branchByCoverage[$coverageId];
+        }
+
+        // 3. Name/city fallback matching
+        $cov = \Modules\Branch\Models\CoverageLocation::query()->whereKey($coverageId)->first(['name', 'city', 'district']);
+        if ($cov) {
+            $matchedBranch = Branch::query()
+                ->where('type', 'franchise_branch')
+                ->where(function ($q) use ($cov) {
+                    $q->where('name', 'like', "%{$cov->name}%");
+                    if ($cov->city) $q->orWhere('city', 'like', "%{$cov->city}%");
+                    if ($cov->district) $q->orWhere('district', 'like', "%{$cov->district}%");
+                })
+                ->orderBy('id')
+                ->value('id');
+
+            if ($matchedBranch) {
+                // Link them
+                try {
+                    Branch::query()->whereKey($matchedBranch)->update(['coverage_location_id' => $coverageId]);
+                } catch (\Throwable) {}
+
+                $this->branchByCoverage[$coverageId] = (int) $matchedBranch;
+                return $this->branchByCoverage[$coverageId];
+            }
+        }
+
+        $this->branchByCoverage[$coverageId] = null;
+        return null;
     }
 
     public function resolveOperationalBranchId(?int $id): ?int

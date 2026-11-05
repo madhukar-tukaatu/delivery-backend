@@ -383,13 +383,8 @@ final class TransferRouteProgressService
             $pathStart = (int) $path[0];
             $pathEnd = (int) end($path);
 
-            $startMatches = ($fromCoverage !== null && $pathStart === (int) $fromCoverage)
-                || ($pathStart === (int) $originBranchId)
-                || $this->sameOperationalLocation($pathStart, $originBranchId);
-
-            $endMatches = ($toCoverage !== null && $pathEnd === (int) $toCoverage)
-                || ($pathEnd === (int) $destinationBranchId)
-                || $this->sameOperationalLocation($pathEnd, $destinationBranchId);
+            $startMatches = $fromCoverage !== null && $pathStart === (int) $fromCoverage;
+            $endMatches = $toCoverage !== null && $pathEnd === (int) $toCoverage;
 
             if ($startMatches && $endMatches) {
                 $exact = $route;
@@ -398,8 +393,7 @@ final class TransferRouteProgressService
 
             $idx = false;
             foreach ($path as $i => $stopCov) {
-                if ($this->sameOperationalLocation($stopCov, $originBranchId)
-                    || ($fromCoverage !== null && $stopCov === (int) $fromCoverage)) {
+                if ($fromCoverage !== null && (int) $stopCov === (int) $fromCoverage) {
                     $idx = $i;
                     break;
                 }
@@ -518,10 +512,22 @@ final class TransferRouteProgressService
         $branch = Branch::query()->whereKey($branchId)->first(['id', 'coverage_location_id', 'name', 'city', 'district']);
         $cov = $branch?->coverage_location_id;
 
-        // 1. Direct coverage_location_id on Branch
-        if ($cov && \Modules\Branch\Models\CoverageLocation::query()->whereKey($cov)->exists()) {
-            $this->coverageByBranch[$branchId] = (int) $cov;
-            return $this->coverageByBranch[$branchId];
+        // 1. Direct coverage_location_id on Branch - verify it actually matches this branch
+        if ($cov) {
+            $directCov = \Modules\Branch\Models\CoverageLocation::query()->whereKey($cov)->first(['id', 'branch_id', 'name', 'city', 'district']);
+            if ($directCov) {
+                $matches = (int) ($directCov->branch_id ?? 0) === (int) $branchId
+                    || ($branch && (
+                        stripos((string) $directCov->name, (string) ($branch->city ?: $branch->name)) !== false
+                        || stripos((string) $branch->name, (string) ($directCov->city ?: $directCov->name)) !== false
+                        || ($branch->city && $directCov->city && stripos((string) $directCov->city, (string) $branch->city) !== false)
+                    ));
+
+                if ($matches) {
+                    $this->coverageByBranch[$branchId] = (int) $directCov->id;
+                    return $this->coverageByBranch[$branchId];
+                }
+            }
         }
 
         // 2. Check if CoverageLocation has branch_id pointing to this branch
@@ -529,6 +535,11 @@ final class TransferRouteProgressService
             ->where('branch_id', $branchId)
             ->value('id');
         if ($fromCov) {
+            // Update the branch to maintain consistency
+            try {
+                Branch::query()->whereKey($branchId)->update(['coverage_location_id' => $fromCov]);
+            } catch (\Throwable) {}
+
             $this->coverageByBranch[$branchId] = (int) $fromCov;
             return $this->coverageByBranch[$branchId];
         }
@@ -610,19 +621,20 @@ final class TransferRouteProgressService
             return $this->branchByCoverage[$coverageId];
         }
 
-        // 2. Branch assigned to this coverage_location (prefer franchise_branch)
+        // 2. Branch assigned to this coverage_location (prefer franchise_branch with city/name match)
+        $cov = \Modules\Branch\Models\CoverageLocation::query()->whereKey($coverageId)->first(['name', 'city', 'district']);
         $query = Branch::query()->where('coverage_location_id', $coverageId);
-        $franchise = (clone $query)->where('type', 'franchise_branch')->orderBy('id')->value('id');
-        if ($franchise) {
-            $this->branchByCoverage[$coverageId] = (int) $franchise;
-
-            return $this->branchByCoverage[$coverageId];
-        }
-        $any = $query->orderBy('id')->value('id');
-        if ($any) {
-            $this->branchByCoverage[$coverageId] = (int) $any;
-
-            return $this->branchByCoverage[$coverageId];
+        $branches = (clone $query)->orderByRaw("CASE WHEN type = 'franchise_branch' THEN 0 ELSE 1 END")->get(['id', 'name', 'city', 'district']);
+        foreach ($branches as $candidateBranch) {
+            $matches = $cov && (
+                stripos((string) $candidateBranch->name, (string) ($cov->city ?: $cov->name)) !== false
+                || stripos((string) $cov->name, (string) ($candidateBranch->city ?: $candidateBranch->name)) !== false
+                || ($candidateBranch->city && $cov->city && stripos((string) $candidateBranch->city, (string) $cov->city) !== false)
+            );
+            if ($matches) {
+                $this->branchByCoverage[$coverageId] = (int) $candidateBranch->id;
+                return $this->branchByCoverage[$coverageId];
+            }
         }
 
         // 3. Name/city fallback matching

@@ -1510,22 +1510,7 @@ final class TransferController extends Controller
      */
     private function coverageIdForBranch(?int $branchId): ?int
     {
-        if (!$branchId) {
-            return null;
-        }
-
-        static $cache = [];
-        if (array_key_exists($branchId, $cache)) {
-            return $cache[$branchId];
-        }
-
-        $cov = \Modules\Branch\Models\Branch::query()
-            ->whereKey($branchId)
-            ->value('coverage_location_id');
-
-        $cache[$branchId] = $cov !== null ? (int) $cov : null;
-
-        return $cache[$branchId];
+        return $this->progress->coverageIdForBranch($branchId);
     }
 
     /**
@@ -1539,41 +1524,12 @@ final class TransferController extends Controller
      */
     private function resolveOperationalBranchId(?int $id): ?int
     {
-        if (!$id) {
-            return null;
-        }
-
-        if (\Modules\Branch\Models\Branch::query()->whereKey($id)->exists()) {
-            return $id;
-        }
-
-        return $this->branchIdForCoverage($id);
+        return $this->progress->resolveOperationalBranchId($id);
     }
 
     private function branchIdForCoverage(?int $coverageId): ?int
     {
-        if (!$coverageId) {
-            return null;
-        }
-
-        static $cache = [];
-        if (array_key_exists($coverageId, $cache)) {
-            return $cache[$coverageId];
-        }
-
-        $query = \Modules\Branch\Models\Branch::query()
-            ->where('coverage_location_id', $coverageId);
-
-        $franchise = (clone $query)->where('type', 'franchise_branch')->orderBy('id')->value('id');
-        if ($franchise) {
-            $cache[$coverageId] = (int) $franchise;
-            return $cache[$coverageId];
-        }
-
-        $any = $query->orderBy('id')->value('id');
-        $cache[$coverageId] = $any !== null ? (int) $any : null;
-
-        return $cache[$coverageId];
+        return $this->progress->branchIdForCoverage($coverageId);
     }
 
     /**

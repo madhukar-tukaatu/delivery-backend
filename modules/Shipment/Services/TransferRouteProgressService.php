@@ -316,6 +316,9 @@ final class TransferRouteProgressService
             ?? $shipment->origin_branch_id
             ?? 0);
 
+        $fromCoverage = $originBranchId > 0 ? $this->coverageIdForBranch($originBranchId) : null;
+        $toCoverage = $destinationBranchId ? $this->coverageIdForBranch($destinationBranchId) : null;
+
         if (!$ignoreAssigned) {
             $assignedId = (int) ($shipment->transfer_route_id ?? 0);
             if ($assignedId > 0) {
@@ -324,21 +327,26 @@ final class TransferRouteProgressService
                     ->find($assignedId);
                 if ($assigned && $assigned->is_active) {
                     $path = array_map('intval', $assigned->getPathBranchIds());
-                    $fromCoverage = $originBranchId > 0 ? ($this->coverageIdForBranch($originBranchId) ?? $originBranchId) : null;
-                    $toCoverage = $destinationBranchId ? ($this->coverageIdForBranch($destinationBranchId) ?? $destinationBranchId) : null;
 
-                    // Verify that origin and destination are actually on this assigned route
-                    $hasOrigin = false;
-                    $hasDest = false;
-                    foreach ($path as $stop) {
-                        if ($originBranchId > 0 && ($this->sameOperationalLocation($stop, $originBranchId) || ($fromCoverage && $stop === (int) $fromCoverage))) {
-                            $hasOrigin = true;
+                    // Verify that origin and destination are actually on this assigned route in sequential order
+                    $idxFrom = false;
+                    $idxTo = false;
+                    foreach ($path as $idx => $stop) {
+                        $stopBranch = $this->branchIdForCoverage($stop);
+                        if ($idxFrom === false) {
+                            if ($fromCoverage !== null && $stop === (int) $fromCoverage) {
+                                $idxFrom = $idx;
+                            } elseif ($stopBranch !== null && $originBranchId > 0 && (int) $stopBranch === (int) $originBranchId) {
+                                $idxFrom = $idx;
+                            }
                         }
-                        if ($destinationBranchId && ($this->sameOperationalLocation($stop, $destinationBranchId) || ($toCoverage && $stop === (int) $toCoverage))) {
-                            $hasDest = true;
+                        if ($toCoverage !== null && $stop === (int) $toCoverage) {
+                            $idxTo = $idx;
+                        } elseif ($stopBranch !== null && $destinationBranchId && (int) $stopBranch === (int) $destinationBranchId) {
+                            $idxTo = $idx;
                         }
                     }
-                    if ($hasOrigin && $hasDest) {
+                    if ($idxFrom !== false && $idxTo !== false && $idxFrom < $idxTo) {
                         return $assigned;
                     }
                 }
@@ -348,10 +356,6 @@ final class TransferRouteProgressService
         if (!$destinationBranchId || $originBranchId <= 0) {
             return null;
         }
-
-        // Match using coverage ids on the lane path (same as TransferController).
-        $fromCoverage = $this->coverageIdForBranch($originBranchId) ?? $originBranchId;
-        $toCoverage = $this->coverageIdForBranch($destinationBranchId) ?? $destinationBranchId;
 
         $candidates = BranchTransferRoute::query()
             ->where(function ($q) use ($serviceType) {
@@ -467,10 +471,6 @@ final class TransferRouteProgressService
                 if ($op !== null && (int) $op === (int) $currentBranchId) {
                     return (int) $i;
                 }
-            }
-            $idx = array_search((int) $currentBranchId, array_map('intval', $pathCoverage), true);
-            if ($idx !== false) {
-                return (int) $idx;
             }
         }
 

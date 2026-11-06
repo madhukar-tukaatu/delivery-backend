@@ -59,6 +59,8 @@ return Application::configure(
         \Modules\Billing\Console\Commands\SendMerchantBillDigests::class,
         \Modules\Billing\Console\Commands\GenerateBranchSettlements::class,
         \App\Console\Commands\ReconcileSingleShipmentCommand::class,
+        \App\Console\Commands\SeedMillionShipmentsCommand::class,
+        \App\Console\Commands\ImportSqlDumpCommand::class,
     ])
     ->withSchedule(function (\Illuminate\Console\Scheduling\Schedule $schedule): void {
         // 06:17 Asia/Kathmandu via config app.timezone (APP_TIMEZONE, default Asia/Kathmandu). Do not change app timezone.

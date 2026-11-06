@@ -52,6 +52,21 @@ Route::prefix('v1/admin')
 
                 Route::get('staff', [ReportController::class, 'staff'])
                     ->name('staff');
+
+                Route::get('expenses', [ReportController::class, 'expenses'])
+                    ->name('expenses');
+
+                Route::get('profit-loss', [ReportController::class, 'profitLoss'])
+                    ->name('profit-loss');
+
+                Route::get('branch-shares', [ReportController::class, 'branchShares'])
+                    ->name('branch-shares');
+
+                Route::get('cash-flow', [ReportController::class, 'cashFlow'])
+                    ->name('cash-flow');
+
+                Route::get('transactions', [ReportController::class, 'transactions'])
+                    ->name('transactions');
             });
         });
     });

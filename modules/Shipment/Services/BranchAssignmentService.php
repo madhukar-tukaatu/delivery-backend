@@ -438,8 +438,9 @@ final class BranchAssignmentService
         $originBranch = DB::table('branches')->where('id', $originBranchId)->first();
         $destBranch = DB::table('branches')->where('id', $destinationBranchId)->first();
 
-        $fromCoverage = app(\Modules\Shipment\Services\TransferRouteProgressService::class)->coverageIdForBranch($originBranchId) ?? ($originBranch?->coverage_location_id ?? $originBranchId);
-        $toCoverage = app(\Modules\Shipment\Services\TransferRouteProgressService::class)->coverageIdForBranch($destinationBranchId) ?? ($destBranch?->coverage_location_id ?? $destinationBranchId);
+        $progressService = app(\Modules\Shipment\Services\TransferRouteProgressService::class);
+        $fromCoverage = $progressService->coverageIdForBranch($originBranchId);
+        $toCoverage = $progressService->coverageIdForBranch($destinationBranchId);
 
         $candidates = BranchTransferRoute::query()
             ->where('is_active', true)
@@ -468,24 +469,21 @@ final class BranchAssignmentService
             $pathStart = (int) $path[0];
             $pathEnd = (int) end($path);
 
-            if (($pathStart === (int) $fromCoverage || $pathStart === $originBranchId || app(\Modules\Shipment\Services\TransferRouteProgressService::class)->sameOperationalLocation($pathStart, $originBranchId))
-                && ($pathEnd === (int) $toCoverage || $pathEnd === $destinationBranchId || app(\Modules\Shipment\Services\TransferRouteProgressService::class)->sameOperationalLocation($pathEnd, $destinationBranchId))) {
+            $startMatches = $fromCoverage !== null && $pathStart === (int) $fromCoverage;
+            $endMatches = $toCoverage !== null && $pathEnd === (int) $toCoverage;
+
+            if ($startMatches && $endMatches) {
                 $exact = $route;
                 break;
             }
 
-            $idxFrom = array_search((int) $fromCoverage, $path, true);
-            if ($idxFrom === false) {
-                $idxFrom = array_search($originBranchId, $path, true);
-            }
+            if ($fromCoverage !== null && $toCoverage !== null) {
+                $idxFrom = array_search((int) $fromCoverage, $path, true);
+                $idxTo = array_search((int) $toCoverage, $path, true);
 
-            $idxTo = array_search((int) $toCoverage, $path, true);
-            if ($idxTo === false) {
-                $idxTo = array_search($destinationBranchId, $path, true);
-            }
-
-            if ($idxFrom !== false && $idxTo !== false && $idxFrom < $idxTo && $partial === null) {
-                $partial = $route;
+                if ($idxFrom !== false && $idxTo !== false && $idxFrom < $idxTo && $partial === null) {
+                    $partial = $route;
+                }
             }
         }
 

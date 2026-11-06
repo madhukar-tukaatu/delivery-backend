@@ -41,6 +41,11 @@ final class ReconcileTransferNextHops extends Command
         $checked = 0;
         $fixedTrs = 0;
 
+        // Ensure all branches are mapped to their correct coverage locations
+        if (!$dry) {
+            $this->syncBranchCoverageLocations();
+        }
+
         // If a specific TR is specified, reconcile that TR and its manifest items directly
         if ($trOption) {
             $manifests = \Modules\Dispatch\Models\DispatchManifest::query()
@@ -139,17 +144,24 @@ final class ReconcileTransferNextHops extends Command
             return self::SUCCESS;
         }
 
-        $query = Shipment::query()
-            ->whereIn('status', [
-                CourierStatus::SORTED_FOR_TRANSFER,
-                CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
-                CourierStatus::RECEIVED_AT_TRANSIT_HUB,
-                CourierStatus::IN_TRANSIT,
-            ]);
+        $query = Shipment::query();
 
         if ($tracking) {
             $query->where('tracking_number', $tracking);
+        } else {
+            $query->whereIn('status', [
+                CourierStatus::BOOKED,
+                CourierStatus::AWAITING_PICKUP,
+                CourierStatus::PICKUP_ASSIGNED,
+                CourierStatus::PICKED_UP,
+                CourierStatus::RECEIVED_AT_ORIGIN_SUB_BRANCH,
+                CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+                CourierStatus::SORTED_FOR_TRANSFER,
+                CourierStatus::RECEIVED_AT_TRANSIT_HUB,
+                CourierStatus::IN_TRANSIT,
+            ]);
         }
+
         if ($branch) {
             $query->where('current_branch_id', (int) $branch);
         }
@@ -248,5 +260,46 @@ final class ReconcileTransferNextHops extends Command
         $this->info(($dry ? 'Would fix' : 'Fixed') . " {$fixed} / {$checked} shipments, {$fixedTrs} TRs");
 
         return self::SUCCESS;
+    }
+
+    private function syncBranchCoverageLocations(): void
+    {
+        $branches = \Modules\Branch\Models\Branch::query()->get(['id', 'coverage_location_id', 'name', 'city', 'district']);
+        foreach ($branches as $branch) {
+            $covId = (int) ($branch->coverage_location_id ?? 0);
+            $cov = $covId > 0 ? \Modules\Branch\Models\CoverageLocation::find($covId) : null;
+
+            $isMismatched = false;
+            if (!$cov) {
+                $isMismatched = true;
+            } elseif ($branch->city && $cov->city && stripos((string) $cov->city, (string) $branch->city) === false && stripos((string) $cov->name, (string) $branch->city) === false) {
+                $isMismatched = true;
+            }
+
+            if ($isMismatched) {
+                $matched = \Modules\Branch\Models\CoverageLocation::query()
+                    ->where('status', 'active')
+                    ->where(function ($q) use ($branch) {
+                        $q->where('name', $branch->name);
+                        if ($branch->city) {
+                            $q->orWhere('name', 'like', "%{$branch->city}%")
+                              ->orWhere('city', 'like', "%{$branch->city}%");
+                        }
+                        if ($branch->district) {
+                            $q->orWhere('district', 'like', "%{$branch->district}%");
+                        }
+                    })
+                    ->orderBy('id')
+                    ->first();
+
+                if ($matched && (int) $matched->id !== $covId) {
+                    $this->info("Fixing {$branch->name} (Branch #{$branch->id}): updating coverage_location_id from " . ($cov ? "{$cov->id} ({$cov->name})" : 'null') . " to {$matched->id} ({$matched->name})");
+                    \Modules\Branch\Models\Branch::query()->whereKey($branch->id)->update(['coverage_location_id' => $matched->id]);
+                    if (!$matched->branch_id) {
+                        $matched->update(['branch_id' => $branch->id]);
+                    }
+                }
+            }
+        }
     }
 }

@@ -1,0 +1,8 @@
+{
+  "name": "Transport",
+  "alias": "transport",
+  "description": "Transport & Fleet Management Module for Line-haul Highway Logistics",
+  "keywords": ["transport", "fleet", "vehicles", "drivers", "line-haul", "trips"],
+  "active": true
+}
+

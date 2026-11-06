@@ -4,6 +4,7 @@ namespace Modules\Access\Services;
 
 use App\Models\User;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -31,20 +32,23 @@ class MenuBadgeService
      */
     public function forUser(User $user, string $section): array
     {
-        $badges = $section === 'staff'
-            ? $this->staffBadges($user)
-            : ($section === 'admin' ? $this->adminBadges($user) : []);
+        $cacheKey = "menu_badges_{$user->id}_{$section}";
+        return Cache::remember($cacheKey, 30, function () use ($user, $section) {
+            $badges = $section === 'staff'
+                ? $this->staffBadges($user)
+                : ($section === 'admin' ? $this->adminBadges($user) : []);
 
-        // Drop empty badges so the client only renders real work.
-        $out = [];
-        foreach ($badges as $path => $list) {
-            $list = array_values(array_filter($list, fn ($b) => (int) $b['count'] > 0));
-            if ($list) {
-                $out[$path] = $list;
+            // Drop empty badges so the client only renders real work.
+            $out = [];
+            foreach ($badges as $path => $list) {
+                $list = array_values(array_filter($list, fn ($b) => (int) $b['count'] > 0));
+                if ($list) {
+                    $out[$path] = $list;
+                }
             }
-        }
 
-        return $out;
+            return $out;
+        });
     }
 
     /* ------------------------------ admin ------------------------------ */

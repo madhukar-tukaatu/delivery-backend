@@ -307,23 +307,26 @@ class BranchShareService
     /**
      * Who collected the fare and how.
      *
+     * Delivery charges are paid by the merchant (or marketplace) to the origin branch.
+     * The origin/billing branch collects the delivery fare and owes other branches their shares.
+     *
      * @return array{collecting_branch_id:?int, collection_mode:string}
      */
     public function collection(Shipment $shipment, array $chain): array
     {
         $split = $this->settlements->deliveryChargeSplit($shipment);
 
+        $origin = $this->billingBranchId($shipment)
+            ?? $shipment->origin_branch_id
+            ?? ($chain ? $chain[0] : null)
+            ?? $this->deliveryBranchId($shipment);
+
         if ((float) $split['marketplace_share'] > 0) {
-            return ['collecting_branch_id' => $this->billingBranchId($shipment), 'collection_mode' => 'company_invoice'];
-        }
-        if ((float) $split['store_share'] > 0) {
-            return ['collecting_branch_id' => $this->billingBranchId($shipment), 'collection_mode' => 'merchant_invoice'];
+            return ['collecting_branch_id' => $origin, 'collection_mode' => 'company_invoice'];
         }
 
-        // Customer paid the fare at the door: the delivering branch holds it.
-        $last = $chain ? $chain[count($chain) - 1] : null;
-
-        return ['collecting_branch_id' => $this->deliveryBranchId($shipment) ?? $last, 'collection_mode' => 'customer'];
+        // The origin branch bills the merchant and collects the delivery charge
+        return ['collecting_branch_id' => $origin, 'collection_mode' => 'merchant_invoice'];
     }
 
     /*
@@ -1022,7 +1025,10 @@ class BranchShareService
                 $q->where('shipment_branch_shares.collection_mode', 'customer')
                     ->orWhere(function ($inv) {
                         $inv->where('shipment_branch_shares.collection_mode', 'merchant_invoice')
-                            ->whereExists(fn ($s) => $this->paidInvoice($s, 'merchant'));
+                            ->where(function ($w) {
+                                $w->whereExists(fn ($s) => $this->paidInvoice($s, 'merchant'))
+                                  ->orWhere('shipments.payment_type', 'prepaid');
+                            });
                     })
                     ->orWhere(function ($inv) {
                         $inv->where('shipment_branch_shares.collection_mode', 'company_invoice')

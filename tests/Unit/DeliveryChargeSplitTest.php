@@ -14,7 +14,7 @@ class DeliveryChargeSplitTest extends TestCase
     public function test_free_delivery_only_for_fare_200(): void
     {
         $cases = [
-            ['free' => 'none', 'paid' => 'customer', 'store_share' => 0, 'market_share' => 0, 'customer' => 200],
+            ['free' => 'none', 'paid' => 'customer', 'store_share' => 200, 'market_share' => 0, 'customer' => 200],
             ['free' => 'none', 'paid' => 'merchant', 'store_share' => 200, 'market_share' => 0, 'customer' => 0],
             ['free' => 'none', 'paid' => 'store', 'store_share' => 200, 'market_share' => 0, 'customer' => 0],
             ['free' => 'none', 'paid' => 'seller', 'store_share' => 200, 'market_share' => 0, 'customer' => 0],

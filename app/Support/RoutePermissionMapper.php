@@ -114,15 +114,16 @@ class RoutePermissionMapper
             'failed',
             'dispatch_next_step',
             'receive_current_step',
-            'receive_origin_sub_branch' => 'status',
+            'receive_origin_sub_branch',
+            'initiate_return',
+            'returned_to_origin',
+            'returned_to_merchant',
+            'return' => 'status',
 
             'approve' => 'approve',
             'reject' => 'reject',
 
-            // Rider cancels a pickup (missing shipment, cutoff passed, service
-            // not fulfillable) or a pickup is failed. Both map to the existing
-            // "failed" permission.
-            'cancel',
+            'cancel' => 'cancel',
             'fail' => 'failed',
             'assign',
             'bulk_assign',

@@ -9,6 +9,7 @@ use App\Support\ApiResponse;
 use App\Support\CourierStatus;
 use Illuminate\Http\Request;
 use Modules\Shipment\Models\Shipment;
+use Modules\Shipment\Services\ShipmentReturnService;
 use Modules\Shipment\Services\ShipmentService;
 
 final class ShipmentController extends Controller
@@ -953,19 +954,94 @@ final class ShipmentController extends Controller
             $shipment
         );
 
-        $shipment = $service->updateStatus(
-            $shipment,
-            CourierStatus::CANCELLED,
-            $request->user()->id,
-            $request->get(
-                'remarks',
-                'Shipment cancelled.'
-            )
+        $reason = (string) ($request->input('remarks') ?? $request->input('reason') ?? 'Shipment cancelled by admin.');
+
+        $shipment = $service->cancelByAdmin(
+            shipment: $shipment,
+            userId: $request->user()?->id,
+            reason: $reason
         );
 
         return ApiResponse::success(
             $shipment,
             'Shipment cancelled.'
+        );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | RETURN LIFECYCLE
+    |--------------------------------------------------------------------------
+    */
+
+    public function initiateReturn(
+        Request $request,
+        Shipment $shipment,
+        ShipmentReturnService $service
+    ) {
+        $this->authorizeShipment(
+            $request,
+            $shipment
+        );
+
+        $reason = (string) ($request->input('reason') ?? $request->input('remarks') ?? 'Return requested by admin.');
+
+        $shipment = $service->initiateReturn(
+            shipment: $shipment,
+            reason: $reason,
+            actor: $request->user(),
+            source: 'admin'
+        );
+
+        return ApiResponse::success(
+            $shipment,
+            'Return initiated successfully.'
+        );
+    }
+
+    public function returnedToOrigin(
+        Request $request,
+        Shipment $shipment,
+        ShipmentReturnService $service
+    ) {
+        $this->authorizeShipment(
+            $request,
+            $shipment
+        );
+
+        $remarks = $request->input('remarks');
+
+        $shipment = $service->markReturnedToOrigin(
+            shipment: $shipment,
+            actor: $request->user(),
+            remarks: $remarks
+        );
+
+        return ApiResponse::success(
+            $shipment,
+            'Shipment marked as received at origin branch for return.'
+        );
+    }
+
+    public function returnedToMerchant(
+        Request $request,
+        Shipment $shipment,
+        ShipmentReturnService $service
+    ) {
+        $this->authorizeShipment(
+            $request,
+            $shipment
+        );
+
+        $shipment = $service->markReturnedToMerchant(
+            shipment: $shipment,
+            actor: $request->user(),
+            data: $request->all()
+        );
+
+        return ApiResponse::success(
+            $shipment,
+            'Shipment marked as returned to merchant.'
         );
     }
 

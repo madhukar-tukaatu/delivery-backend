@@ -22,9 +22,14 @@ class RouteWorkflowService
         return DB::transaction(function () use ($shipment, $user, $remarks) {
             abort_unless(in_array($shipment->status, [CourierStatus::PICKED_UP, CourierStatus::PICKUP_ASSIGNED], true), 422, 'Shipment must be picked up first.');
 
+            $isSubBranch = !empty($shipment->origin_sub_branch_id);
+            $newStatus = $isSubBranch
+                ? CourierStatus::RECEIVED_AT_ORIGIN_SUB_BRANCH
+                : CourierStatus::RECEIVED_AT_ORIGIN_BRANCH;
+
             $shipment->update([
-                'status' => CourierStatus::RECEIVED_AT_ORIGIN_SUB_BRANCH,
-                'merchant_status' => CourierStatus::merchantStatus(CourierStatus::RECEIVED_AT_ORIGIN_SUB_BRANCH),
+                'status' => $newStatus,
+                'merchant_status' => CourierStatus::merchantStatus($newStatus),
                 'current_branch_id' => $shipment->origin_branch_id,
                 'current_sub_branch_id' => $shipment->origin_sub_branch_id,
             ]);
@@ -34,8 +39,14 @@ class RouteWorkflowService
                 $firstStep->update(['status' => 'ready']);
             }
 
-            $this->trackingService->record($shipment->fresh(), CourierStatus::RECEIVED_AT_ORIGIN_SUB_BRANCH, $remarks ?: 'Received at origin sub-branch.', $user->id);
-            $this->webhookService->queueShipmentEvent($shipment->fresh(), 'origin.sub_branch_received');
+            $note = $isSubBranch ? 'Received at origin sub-branch.' : 'Received at origin branch.';
+            $this->trackingService->record($shipment->fresh(), $newStatus, $remarks ?: $note, $user->id);
+            $this->webhookService->queueShipmentEvent($shipment->fresh(), $isSubBranch ? 'origin.sub_branch_received' : 'origin.branch_received');
+
+            // Automatically sort the received parcel for next leg (transfer or delivery)
+            try {
+                app(\Modules\Shipment\Services\ShipmentSortingService::class)->sort($shipment->fresh(), $user->id);
+            } catch (\Throwable $e) {}
 
             return $shipment->fresh(['routeSteps']);
         });

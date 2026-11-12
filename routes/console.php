@@ -956,3 +956,301 @@ Artisan::command('pickups:sync-run-status {--run= : Run number (e.g. RPR-01) or 
 
     return 0;
 })->purpose('Accept and start pickups that lag behind their in-progress pickup run');
+
+/**
+ * Reconcile inter-branch settlements, shares, and delivery charge invoices.
+ *
+ * Usage:
+ *   php artisan billing:reconcile-inter-branch
+ *   php artisan billing:reconcile-inter-branch --dry-run
+ */
+Artisan::command('billing:reconcile-inter-branch {--dry-run : Report changes without persisting}', function () {
+    $dry = (bool) $this->option('dry-run');
+    $this->info($dry ? '[DRY RUN] Simulating Inter-Branch Reconciliation...' : 'Reconciling Inter-Branch Settlements...');
+
+    DB::transaction(function () use ($dry) {
+        // 1. Mark merchant delivery charge invoices as paid
+        $invIds = [9, 10, 11, 12, 14];
+        $invoices = \Modules\Billing\Models\Invoice::whereIn('id', $invIds)
+            ->where('type', 'delivery_charges')
+            ->get();
+        foreach ($invoices as $inv) {
+            $this->line("Invoice {$inv->invoice_number} (#{$inv->id}): status {$inv->status} -> paid");
+            if (! $dry) {
+                $inv->status = 'paid';
+                $inv->paid_at = $inv->paid_at ?? now();
+                $inv->save();
+            }
+        }
+
+        // 2. Shares
+        $sharesData = [
+            102 => ['collecting_branch_id' => 19, 'mode' => 'merchant_invoice', 'statement_id' => null, 'status' => 'settled'],
+            103 => ['collecting_branch_id' => 19, 'mode' => 'merchant_invoice', 'statement_id' => 1, 'status' => 'on_statement'],
+            109 => ['collecting_branch_id' => 19, 'mode' => 'merchant_invoice', 'statement_id' => null, 'status' => 'settled'],
+            110 => ['collecting_branch_id' => 19, 'mode' => 'merchant_invoice', 'statement_id' => 3, 'status' => 'on_statement'],
+            111 => ['collecting_branch_id' => 19, 'mode' => 'merchant_invoice', 'statement_id' => 2, 'status' => 'on_statement'],
+            114 => ['collecting_branch_id' => 24, 'mode' => 'merchant_invoice', 'statement_id' => null, 'status' => 'settled'],
+            115 => ['collecting_branch_id' => 24, 'mode' => 'merchant_invoice', 'statement_id' => 4, 'status' => 'on_statement'],
+            118 => ['collecting_branch_id' => 24, 'mode' => 'merchant_invoice', 'statement_id' => null, 'status' => 'settled'],
+            119 => ['collecting_branch_id' => 24, 'mode' => 'merchant_invoice', 'statement_id' => 4, 'status' => 'on_statement'],
+            122 => ['collecting_branch_id' => 24, 'mode' => 'merchant_invoice', 'statement_id' => null, 'status' => 'settled'],
+            123 => ['collecting_branch_id' => 24, 'mode' => 'merchant_invoice', 'statement_id' => 4, 'status' => 'on_statement'],
+            136 => ['collecting_branch_id' => 19, 'mode' => 'merchant_invoice', 'statement_id' => null, 'status' => 'settled'],
+            137 => ['collecting_branch_id' => 19, 'mode' => 'merchant_invoice', 'statement_id' => 5, 'status' => 'on_statement'],
+        ];
+
+        foreach ($sharesData as $id => $d) {
+            $sh = \Modules\Billing\Models\ShipmentBranchShare::find($id);
+            if ($sh) {
+                $stmtStr = $d['statement_id'] ?? 'null';
+                $this->line("Share #{$id} (Shipment {$sh->shipment_id}): collector {$sh->collecting_branch_id} -> {$d['collecting_branch_id']} | status {$sh->status} -> {$d['status']} | stmt {$sh->statement_id} -> {$stmtStr}");
+                if (! $dry) {
+                    $sh->collecting_branch_id = $d['collecting_branch_id'];
+                    $sh->collection_mode = $d['mode'];
+                    $sh->statement_id = $d['statement_id'];
+                    $sh->status = $d['status'];
+                    $sh->save();
+                }
+            }
+        }
+
+        // 3. Statements
+        $stmtsData = [
+            1 => ['from' => 19, 'to' => 20, 'amount' => 239.39, 'lines' => 1],
+            2 => ['from' => 19, 'to' => 21, 'amount' => 63.40, 'lines' => 1],
+            3 => ['from' => 19, 'to' => 26, 'amount' => 33.80, 'lines' => 1],
+            4 => ['from' => 24, 'to' => 19, 'amount' => 134.34, 'lines' => 3],
+            5 => ['from' => 19, 'to' => 18, 'amount' => 88.00, 'lines' => 1],
+        ];
+
+        foreach ($stmtsData as $id => $d) {
+            $stmt = \Modules\Billing\Models\InterBranchStatement::find($id);
+            if ($stmt) {
+                $this->line("Statement {$stmt->statement_number} (#{$id}): from {$stmt->from_branch_id} -> {$d['from']}, to {$stmt->to_branch_id} -> {$d['to']}, amount {$stmt->total_amount} -> {$d['amount']}");
+                if (! $dry) {
+                    $stmt->from_branch_id = $d['from'];
+                    $stmt->to_branch_id = $d['to'];
+                    $stmt->total_amount = $d['amount'];
+                    $stmt->line_count = $d['lines'];
+                    $stmt->save();
+                }
+            }
+        }
+
+        // 4. Statement Lines
+        $lines = [
+            ['id' => 1, 'statement_id' => 1, 'shipment_branch_share_id' => 103, 'shipment_id' => 231, 'role' => 'delivery', 'share_amount' => 4.49, 'transport_amount' => 0.00, 'extra_distance_amount' => 234.90, 'amount' => 239.39],
+            ['id' => 2, 'statement_id' => 2, 'shipment_branch_share_id' => 111, 'shipment_id' => 233, 'role' => 'delivery', 'share_amount' => 59.14, 'transport_amount' => 0.00, 'extra_distance_amount' => 4.26, 'amount' => 63.40],
+            ['id' => 3, 'statement_id' => 3, 'shipment_branch_share_id' => 110, 'shipment_id' => 233, 'role' => 'transit', 'share_amount' => 33.80, 'transport_amount' => 0.00, 'extra_distance_amount' => 0.00, 'amount' => 33.80],
+            ['id' => 4, 'statement_id' => 4, 'shipment_branch_share_id' => 115, 'shipment_id' => 234, 'role' => 'delivery', 'share_amount' => 28.15, 'transport_amount' => 0.00, 'extra_distance_amount' => 7.92, 'amount' => 36.07],
+            ['id' => 5, 'statement_id' => 4, 'shipment_branch_share_id' => 119, 'shipment_id' => 235, 'role' => 'delivery', 'share_amount' => 28.15, 'transport_amount' => 0.00, 'extra_distance_amount' => 7.92, 'amount' => 36.07],
+            ['id' => 6, 'statement_id' => 4, 'shipment_branch_share_id' => 123, 'shipment_id' => 242, 'role' => 'delivery', 'share_amount' => 42.40, 'transport_amount' => 0.00, 'extra_distance_amount' => 19.80, 'amount' => 62.20],
+            ['id' => 7, 'statement_id' => 5, 'shipment_branch_share_id' => 137, 'shipment_id' => 253, 'role' => 'delivery', 'share_amount' => 88.00, 'transport_amount' => 0.00, 'extra_distance_amount' => 0.00, 'amount' => 88.00],
+        ];
+
+        if (! $dry) {
+            \Modules\Billing\Models\InterBranchStatementLine::whereIn('statement_id', [1, 2, 3, 4, 5])->delete();
+            foreach ($lines as $l) {
+                \Modules\Billing\Models\InterBranchStatementLine::create($l);
+            }
+        }
+
+        // 5. Reconcile any delivered shipments (e.g. TEX-20261107-782642) where collecting_branch_id was inverted to destination
+        $invertedShares = \Modules\Billing\Models\ShipmentBranchShare::query()
+            ->join('shipments', 'shipments.id', '=', 'shipment_branch_shares.shipment_id')
+            ->whereNull('shipment_branch_shares.statement_id')
+            ->whereColumn('shipment_branch_shares.collecting_branch_id', '!=', 'shipments.origin_branch_id')
+            ->select('shipment_branch_shares.*', 'shipments.origin_branch_id', 'shipments.tracking_number')
+            ->get();
+
+        foreach ($invertedShares as $sh) {
+            $isCollector = (int) $sh->branch_id === (int) $sh->origin_branch_id;
+            $newStatus = $isCollector ? 'settled' : 'pending';
+            $this->line("Reconciling Share #{$sh->id} ({$sh->tracking_number}): collector {$sh->collecting_branch_id} -> {$sh->origin_branch_id} | status {$sh->status} -> {$newStatus}");
+            if (! $dry) {
+                $sh->collecting_branch_id = $sh->origin_branch_id;
+                $sh->collection_mode = 'merchant_invoice';
+                $sh->status = $newStatus;
+                $sh->save();
+            }
+        }
+    });
+
+    $this->info($dry ? '[DRY RUN] Complete.' : '[SUCCESS] Reconciled inter-branch settlements, shares, and invoices.');
+})->purpose('Reconcile inter-branch statements, shares, and merchant delivery charge bills');
+
+/**
+ * Force recompute branch shares, HQ commissions, and collector direction for a shipment.
+ *
+ * Usage:
+ *   php artisan billing:recompute-shipment TEX-20261107-782642
+ */
+Artisan::command('billing:recompute-shipment {tracking : Tracking number or Shipment ID}', function () {
+    $tracking = (string) $this->argument('tracking');
+    $shipment = \Modules\Shipment\Models\Shipment::where('tracking_number', $tracking)
+        ->orWhere('id', is_numeric($tracking) ? (int) $tracking : 0)
+        ->first();
+
+    if (! $shipment) {
+        $this->error("Shipment {$tracking} not found.");
+        return 1;
+    }
+
+    $this->info("Recomputing shares for Shipment {$shipment->tracking_number} (#{$shipment->id})...");
+
+    DB::transaction(function () use ($shipment) {
+        \Modules\Billing\Models\ShipmentBranchShare::where('shipment_id', $shipment->id)
+            ->whereNull('statement_id')
+            ->delete();
+
+        app(\Modules\Billing\Services\BranchCommissionService::class)->autoEnsureForShipment($shipment);
+    });
+
+    $shares = \Modules\Billing\Models\ShipmentBranchShare::where('shipment_id', $shipment->id)
+        ->orderBy('position')
+        ->get();
+
+    foreach ($shares as $s) {
+        $this->line("Branch #{$s->branch_id} ({$s->role}): allocation Rs {$s->allocation_amount}, HQ comm Rs {$s->hq_commission_amount}, net Rs {$s->net_amount}, collector: #{$s->collecting_branch_id}, status: {$s->status}");
+    }
+
+    $this->info("Recomputed successfully.");
+    return 0;
+})->purpose('Force recompute branch shares and HQ commissions for a shipment');
+
+
+/**
+ * Universal reconciliation for ALL shipments, shares, invoices, and statements.
+ *
+ * Usage:
+ *   php artisan billing:reconcile-all
+ *   php artisan billing:reconcile-all --dry-run
+ */
+Artisan::command('billing:reconcile-all {--dry-run : Report changes without persisting}', function () {
+    $dry = (bool) $this->option('dry-run');
+    $this->info($dry ? '[DRY RUN] Simulating Universal Reconciliation...' : 'Reconciling ALL Shipments, Shares, Invoices, and Statements...');
+
+    $stats = DB::transaction(function () use ($dry) {
+        // 1. Update shipments payer
+        $shipmentsQuery = \Modules\Shipment\Models\Shipment::query()
+            ->where(function ($q) {
+                $q->where('delivery_charge_paid_by', 'customer')
+                  ->orWhereNull('delivery_charge_paid_by');
+            });
+        $shipmentCount = $shipmentsQuery->count();
+        if (! $dry && $shipmentCount > 0) {
+            $shipmentsQuery->update(['delivery_charge_paid_by' => 'merchant']);
+        }
+        $this->line("1. Shipments updated to merchant payer: {$shipmentCount}");
+
+        // 2. Mark merchant delivery charge invoices as paid
+        $invQuery = \Modules\Billing\Models\Invoice::query()
+            ->where('type', 'delivery_charges')
+            ->where('status', 'unpaid');
+        $invCount = $invQuery->count();
+        if (! $dry && $invCount > 0) {
+            $invQuery->update(['status' => 'paid', 'paid_at' => now()]);
+        }
+        $this->line("2. Merchant delivery charge invoices marked paid: {$invCount}");
+
+        // 3. Update collecting_branch_id and collection_mode on ALL shipment_branch_shares
+        $shares = \Modules\Billing\Models\ShipmentBranchShare::query()
+            ->join('shipments', 'shipments.id', '=', 'shipment_branch_shares.shipment_id')
+            ->select('shipment_branch_shares.*', 'shipments.origin_branch_id', 'shipments.delivery_free_by')
+            ->get();
+
+        $sharesUpdated = 0;
+        foreach ($shares as $s) {
+            $originId = (int) $s->origin_branch_id;
+            $mode = ($s->delivery_free_by === 'marketplace') ? 'company_invoice' : 'merchant_invoice';
+            $isCollector = (int) $s->branch_id === $originId;
+            $newStatus = $isCollector ? 'settled' : ($s->statement_id ? 'on_statement' : 'pending');
+
+            $needsUpdate = (int) $s->collecting_branch_id !== $originId 
+                || $s->collection_mode !== $mode 
+                || ($isCollector && $s->status !== 'settled')
+                || (! $isCollector && ! $s->statement_id && $s->status === 'settled');
+
+            if ($needsUpdate) {
+                $sharesUpdated++;
+                if (! $dry) {
+                    $s->collecting_branch_id = $originId;
+                    $s->collection_mode = $mode;
+                    $s->status = $newStatus;
+                    if ($isCollector) {
+                        $s->statement_id = null;
+                    }
+                    $s->save();
+                }
+            }
+        }
+        $this->line("3. Branch shares updated with origin collector: {$sharesUpdated}");
+
+        // 4. Historical statements reconciliation (1 to 5)
+        $stmtsData = [
+            1 => ['from' => 19, 'to' => 20, 'amount' => 239.39, 'lines' => 1],
+            2 => ['from' => 19, 'to' => 21, 'amount' => 63.40, 'lines' => 1],
+            3 => ['from' => 19, 'to' => 26, 'amount' => 33.80, 'lines' => 1],
+            4 => ['from' => 24, 'to' => 19, 'amount' => 134.34, 'lines' => 3],
+            5 => ['from' => 19, 'to' => 18, 'amount' => 88.00, 'lines' => 1],
+        ];
+
+        foreach ($stmtsData as $id => $d) {
+            $stmt = \Modules\Billing\Models\InterBranchStatement::find($id);
+            if ($stmt) {
+                if (! $dry) {
+                    $stmt->from_branch_id = $d['from'];
+                    $stmt->to_branch_id = $d['to'];
+                    $stmt->total_amount = $d['amount'];
+                    $stmt->line_count = $d['lines'];
+                    $stmt->save();
+                }
+            }
+        }
+
+        $lines = [
+            ['id' => 1, 'statement_id' => 1, 'shipment_branch_share_id' => 103, 'shipment_id' => 231, 'role' => 'delivery', 'share_amount' => 4.49, 'transport_amount' => 0.00, 'extra_distance_amount' => 234.90, 'amount' => 239.39],
+            ['id' => 2, 'statement_id' => 2, 'shipment_branch_share_id' => 111, 'shipment_id' => 233, 'role' => 'delivery', 'share_amount' => 59.14, 'transport_amount' => 0.00, 'extra_distance_amount' => 4.26, 'amount' => 63.40],
+            ['id' => 3, 'statement_id' => 3, 'shipment_branch_share_id' => 110, 'shipment_id' => 233, 'role' => 'transit', 'share_amount' => 33.80, 'transport_amount' => 0.00, 'extra_distance_amount' => 0.00, 'amount' => 33.80],
+            ['id' => 4, 'statement_id' => 4, 'shipment_branch_share_id' => 115, 'shipment_id' => 234, 'role' => 'delivery', 'share_amount' => 28.15, 'transport_amount' => 0.00, 'extra_distance_amount' => 7.92, 'amount' => 36.07],
+            ['id' => 5, 'statement_id' => 4, 'shipment_branch_share_id' => 119, 'shipment_id' => 235, 'role' => 'delivery', 'share_amount' => 28.15, 'transport_amount' => 0.00, 'extra_distance_amount' => 7.92, 'amount' => 36.07],
+            ['id' => 6, 'statement_id' => 4, 'shipment_branch_share_id' => 123, 'shipment_id' => 242, 'role' => 'delivery', 'share_amount' => 42.40, 'transport_amount' => 0.00, 'extra_distance_amount' => 19.80, 'amount' => 62.20],
+            ['id' => 7, 'statement_id' => 5, 'shipment_branch_share_id' => 137, 'shipment_id' => 253, 'role' => 'delivery', 'share_amount' => 88.00, 'transport_amount' => 0.00, 'extra_distance_amount' => 0.00, 'amount' => 88.00],
+        ];
+
+        if (! $dry) {
+            \Modules\Billing\Models\InterBranchStatementLine::whereIn('statement_id', [1, 2, 3, 4, 5])->delete();
+            foreach ($lines as $l) {
+                \Modules\Billing\Models\InterBranchStatementLine::create($l);
+            }
+        }
+        $this->line("4. Statements 1-5 and lines reconciled.");
+
+        // 5. Ensure shares for any delivered shipments that lack shares
+        $deliveredWithoutShares = \Modules\Shipment\Models\Shipment::query()
+            ->where('status', 'delivered')
+            ->whereNotExists(function ($q) {
+                $q->selectRaw('1')
+                  ->from('shipment_branch_shares')
+                  ->whereColumn('shipment_branch_shares.shipment_id', 'shipments.id');
+            })
+            ->get();
+        $generated = 0;
+        if (! $dry) {
+            foreach ($deliveredWithoutShares as $delShip) {
+                app(\Modules\Billing\Services\BranchCommissionService::class)->autoEnsureForShipment($delShip);
+                $generated++;
+            }
+        }
+        $this->line("5. Generated missing shares for delivered shipments: " . ($dry ? $deliveredWithoutShares->count() : $generated));
+
+        return [
+            'shipments' => $shipmentCount,
+            'invoices' => $invCount,
+            'shares' => $sharesUpdated,
+        ];
+    });
+
+    $this->info($dry ? '[DRY RUN] Complete.' : '[SUCCESS] Universal reconciliation completed successfully for all shipments.');
+})->purpose('Universal reconciliation for all shipments, branch shares, invoices, and statements');

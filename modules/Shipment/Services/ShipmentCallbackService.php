@@ -28,6 +28,10 @@ final class ShipmentCallbackService
         'shipment.sorted_for_transfer',
         'shipment.in_transit',
         'shipment.received_at_destination',
+        'shipment.cancelled',
+        'shipment.return_initiated',
+        'shipment.returned_to_origin',
+        'shipment.returned_to_merchant',
         'delivery.assigned',
         'delivery.accepted',
         'delivery.out_for_delivery',
@@ -90,6 +94,38 @@ final class ShipmentCallbackService
     public function deliveryFailed(Shipment $shipment, array $data = []): void
     {
         $this->dispatch($shipment, 'delivery.failed', $data);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function cancelled(Shipment $shipment, array $data = []): void
+    {
+        $this->dispatch($shipment, 'shipment.cancelled', $data);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function returnInitiated(Shipment $shipment, array $data = []): void
+    {
+        $this->dispatch($shipment, 'shipment.return_initiated', $data);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function returnedToOrigin(Shipment $shipment, array $data = []): void
+    {
+        $this->dispatch($shipment, 'shipment.returned_to_origin', $data);
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    public function returnedToMerchant(Shipment $shipment, array $data = []): void
+    {
+        $this->dispatch($shipment, 'shipment.returned_to_merchant', $data);
     }
 
     /**

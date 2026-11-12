@@ -444,7 +444,7 @@ final class ShipmentService
                         $charges['total_collectable_amount'],
 
                     'delivery_charge_paid_by' =>
-                        $charges['paid_by'] ?? ($data['delivery_charge_paid_by'] ?? 'customer'),
+                        $charges['paid_by'] ?? ($data['delivery_charge_paid_by'] ?? 'merchant'),
 
                     'delivery_free_by' =>
                         $charges['free_by'] ?? \Modules\Settlement\Services\SettlementWorkflowService::resolveFreeBy($data, true),
@@ -936,7 +936,7 @@ final class ShipmentService
 
         $defaultPaidBy = in_array($freeBy, ['marketplace', 'admin'], true)
             ? 'admin'
-            : (in_array($freeBy, ['store', 'merchant'], true) ? 'merchant' : 'customer');
+            : 'merchant';
 
         $paidBy = strtolower((string) ($data['delivery_charge_paid_by'] ?? $defaultPaidBy));
 
@@ -1075,6 +1075,199 @@ final class ShipmentService
                 return $shipment->fresh();
             }
         );
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | CANCEL SHIPMENT (Gateway / Store API)
+    |--------------------------------------------------------------------------
+    */
+    public function cancelFromGateway(
+        Shipment $shipment,
+        ?string $reason = 'Shipment cancelled by store.'
+    ): Shipment {
+        return DB::transaction(function () use ($shipment, $reason) {
+            $shipment = Shipment::query()->lockForUpdate()->findOrFail($shipment->id);
+
+            $cancellableStatuses = [
+                CourierStatus::BOOKED,
+                CourierStatus::AWAITING_PICKUP,
+                CourierStatus::PICKUP_ASSIGNED,
+            ];
+
+            if (! in_array($shipment->status, $cancellableStatuses, true)) {
+                throw ValidationException::withMessages([
+                    'status' => ['Shipment cannot be cancelled after pickup or dispatch.'],
+                ]);
+            }
+
+            // Detach from open pickup request if attached
+            $this->detachFromPickupRequests($shipment->id, $reason);
+
+            $oldStatus = $shipment->status;
+            $shipment->status = CourierStatus::CANCELLED;
+            $shipment->merchant_status = CourierStatus::merchantStatus(CourierStatus::CANCELLED);
+            $shipment->cancelled_at = now();
+            if ($reason) {
+                $shipment->remarks = $reason;
+            }
+            $shipment->save();
+
+            $description = "Shipment cancelled by store. Reason: {$reason}";
+            $this->createTrackingEvent(
+                shipment: $shipment,
+                oldStatus: $oldStatus,
+                newStatus: CourierStatus::CANCELLED,
+                description: $description
+            );
+
+            $fresh = $shipment->fresh();
+
+            // Notify store
+            try {
+                app(\Modules\Webhook\Services\WebhookService::class)->queueShipmentEvent($fresh, 'shipment.cancelled');
+            } catch (\Throwable $e) {
+                report($e);
+            }
+
+            try {
+                app(ShipmentCallbackService::class)->cancelled($fresh, ['reason' => $reason]);
+            } catch (\Throwable $e) {
+                report($e);
+            }
+
+            try {
+                if (class_exists(\App\Events\ShipmentStatusUpdated::class)) {
+                    event(new \App\Events\ShipmentStatusUpdated($fresh));
+                }
+            } catch (\Throwable $e) {}
+
+            return $fresh;
+        });
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | CANCEL SHIPMENT (Admin)
+    |--------------------------------------------------------------------------
+    */
+    public function cancelByAdmin(
+        Shipment $shipment,
+        ?int $userId = null,
+        ?string $reason = 'Shipment cancelled by admin.'
+    ): Shipment {
+        return DB::transaction(function () use ($shipment, $userId, $reason) {
+            $shipment = Shipment::query()->lockForUpdate()->findOrFail($shipment->id);
+
+            if (in_array($shipment->status, [CourierStatus::DELIVERED, CourierStatus::CANCELLED], true)) {
+                throw ValidationException::withMessages([
+                    'status' => ["Cannot cancel a {$shipment->status} shipment."],
+                ]);
+            }
+
+            // Cancel any active delivery assignment
+            if (DB::getSchemaBuilder()->hasTable('delivery_assignments')) {
+                DB::table('delivery_assignments')
+                    ->where('shipment_id', $shipment->id)
+                    ->whereIn('status', ['pending', 'assigned', 'accepted', 'out_for_delivery'])
+                    ->update([
+                        'status' => 'cancelled',
+                        'updated_at' => now(),
+                    ]);
+            }
+
+            if (DB::getSchemaBuilder()->hasTable('delivery_run_items')) {
+                DB::table('delivery_run_items')
+                    ->where('shipment_id', $shipment->id)
+                    ->where('status', '!=', 'removed')
+                    ->update([
+                        'status' => 'removed',
+                        'updated_at' => now(),
+                    ]);
+            }
+
+            // Detach from open pickup request if attached
+            $this->detachFromPickupRequests($shipment->id, $reason, $userId);
+
+            $oldStatus = $shipment->status;
+            $shipment->status = CourierStatus::CANCELLED;
+            $shipment->merchant_status = CourierStatus::merchantStatus(CourierStatus::CANCELLED);
+            $shipment->cancelled_at = now();
+            if ($reason) {
+                $shipment->remarks = $reason;
+            }
+            $shipment->save();
+
+            $description = "Shipment cancelled by admin. Reason: {$reason}";
+            $this->createTrackingEvent(
+                shipment: $shipment,
+                oldStatus: $oldStatus,
+                newStatus: CourierStatus::CANCELLED,
+                description: $description
+            );
+
+            $fresh = $shipment->fresh();
+
+            // Notify store
+            try {
+                app(\Modules\Webhook\Services\WebhookService::class)->queueShipmentEvent($fresh, 'shipment.cancelled');
+            } catch (\Throwable $e) {
+                report($e);
+            }
+
+            try {
+                app(ShipmentCallbackService::class)->cancelled($fresh, ['reason' => $reason]);
+            } catch (\Throwable $e) {
+                report($e);
+            }
+
+            try {
+                if (class_exists(\App\Events\ShipmentStatusUpdated::class)) {
+                    event(new \App\Events\ShipmentStatusUpdated($fresh));
+                }
+            } catch (\Throwable $e) {}
+
+            return $fresh;
+        });
+    }
+
+    private function detachFromPickupRequests(int $shipmentId, ?string $reason = null, ?int $userId = null): void
+    {
+        if (! DB::getSchemaBuilder()->hasTable('pickup_request_shipments')) {
+            return;
+        }
+
+        $pivots = DB::table('pickup_request_shipments')
+            ->where('shipment_id', $shipmentId)
+            ->whereNull('removed_at')
+            ->get();
+
+        foreach ($pivots as $pivot) {
+            DB::table('pickup_request_shipments')
+                ->where('id', $pivot->id)
+                ->update([
+                    'removed_at' => now(),
+                    'removed_by' => $userId,
+                    'status' => 'cancelled',
+                    'remarks' => $reason ?? 'Shipment cancelled',
+                    'updated_at' => now(),
+                ]);
+
+            if (! empty($pivot->pickup_request_id) && DB::getSchemaBuilder()->hasTable('pickup_requests')) {
+                $count = DB::table('pickup_request_shipments')
+                    ->where('pickup_request_id', $pivot->pickup_request_id)
+                    ->whereNull('removed_at')
+                    ->whereNotIn('status', ['cancelled', 'rejected', 'removed'])
+                    ->count();
+
+                DB::table('pickup_requests')
+                    ->where('id', $pivot->pickup_request_id)
+                    ->update([
+                        'parcel_quantity' => $count,
+                        'updated_at' => now(),
+                    ]);
+            }
+        }
     }
 
     /*

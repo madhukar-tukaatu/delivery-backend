@@ -211,6 +211,47 @@ Route::prefix('v1/admin')
                 ]
             )->name('shipments.cancel');
 
+            Route::post(
+                'shipments/{shipment}/initiate-return',
+                [
+                    ShipmentController::class,
+                    'initiateReturn',
+                ]
+            )->name('shipments.initiate-return');
+
+            Route::post(
+                'shipments/{shipment}/returned-to-origin',
+                [
+                    ShipmentController::class,
+                    'returnedToOrigin',
+                ]
+            )->name('shipments.returned-to-origin');
+
+            Route::post(
+                'shipments/{shipment}/returned-to-merchant',
+                [
+                    ShipmentController::class,
+                    'returnedToMerchant',
+                ]
+            )->name('shipments.returned-to-merchant');
+
+            Route::post(
+                'shipments/{shipment}/delivery-location/preview',
+                [
+                    ShipmentController::class,
+                    'previewDeliveryLocation',
+                ]
+            )->name('shipments.delivery-location.preview');
+
+            Route::match(
+                ['PUT', 'POST'],
+                'shipments/{shipment}/delivery-location',
+                [
+                    ShipmentController::class,
+                    'updateDeliveryLocation',
+                ]
+            )->name('shipments.delivery-location');
+
             /*
             |--------------------------------------------------------------------------
             | SHIPMENT TASKS
@@ -362,6 +403,14 @@ Route::prefix('v1/gateway')
                 'cancel',
             ]
         )->name('shipments.cancel');
+
+        Route::post(
+            'shipments/{trackingNumber}/initiate-return',
+            [
+                GatewayShipmentController::class,
+                'initiateReturn',
+            ]
+        )->name('shipments.initiate-return');
 
         /*
         |--------------------------------------------------------------------------

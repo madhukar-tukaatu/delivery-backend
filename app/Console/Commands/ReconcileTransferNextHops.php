@@ -169,7 +169,7 @@ final class ReconcileTransferNextHops extends Command
         $query->orderBy('id')->chunkById(100, function ($shipments) use ($progress, $dry, $force, &$fixed, &$checked) {
             foreach ($shipments as $shipment) {
                 $checked++;
-                $at = (int) ($shipment->current_branch_id ?? 0) ?: null;
+                $at = (int) ($shipment->current_branch_id ?? $shipment->origin_branch_id ?? 0) ?: null;
                 $before = (int) ($shipment->next_hop_branch_id ?? 0);
                 $p = $progress->resolveForShipment($shipment, $at, $force);
                 $after = (int) ($p['next_hop_branch_id'] ?? 0);
@@ -181,22 +181,38 @@ final class ReconcileTransferNextHops extends Command
 
                 $routeChanged = $routeId > 0 && $routeId !== (int) ($shipment->transfer_route_id ?? 0);
                 $hopChanged = $before !== $after;
-                if (!$hopChanged && !$routeChanged) {
+                $needsStatusFix = in_array($shipment->status, [
+                    CourierStatus::RECEIVED_AT_ORIGIN_SUB_BRANCH,
+                    CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+                ], true) && (int) ($shipment->origin_branch_id ?? 0) !== (int) ($shipment->destination_branch_id ?? 0);
+
+                if (!$hopChanged && !$routeChanged && !$needsStatusFix) {
                     continue;
                 }
 
                 $this->line(sprintf(
-                    '%s  next %s → %s  route=%s  path=%s%s',
+                    '%s  next %s → %s  route=%s  path=%s%s%s',
                     $shipment->tracking_number,
                     $before ?: 'null',
                     $after,
                     $p['route_code'] ?? $routeId,
                     $p['path_text'] ?? '-',
+                    $needsStatusFix ? ' [status -> sorted_for_transfer]' : '',
                     $dry ? '  [dry-run]' : ''
                 ));
 
                 if (!$dry) {
                     $progress->applyProgressToShipment($shipment, $at, $force);
+                    if ($needsStatusFix) {
+                        $shipment->update([
+                            'status' => CourierStatus::SORTED_FOR_TRANSFER,
+                            'merchant_status' => CourierStatus::merchantStatus(CourierStatus::SORTED_FOR_TRANSFER),
+                            'sort_mode' => 'transfer',
+                            'sorted_at' => now(),
+                            'current_branch_id' => $at ?: $shipment->origin_branch_id,
+                            'current_sub_branch_id' => $shipment->origin_sub_branch_id ?: null,
+                        ]);
+                    }
                 }
                 $fixed++;
             }

@@ -73,6 +73,12 @@ final class CourierStatus
     public const RETURN_INITIATED =
         'return_initiated';
 
+    public const RETURNED_TO_ORIGIN =
+        'returned_to_origin';
+
+    public const RETURNED_TO_MERCHANT =
+        'returned_to_merchant';
+
     public const CANCELLED =
         'cancelled';
 
@@ -110,8 +116,12 @@ final class CourierStatus
             self::DELIVERY_FAILED
                 => 'failed',
 
-            self::RETURN_INITIATED
+            self::RETURN_INITIATED,
+            self::RETURNED_TO_ORIGIN
                 => 'returning',
+
+            self::RETURNED_TO_MERCHANT
+                => 'returned',
 
             self::CANCELLED
                 => 'cancelled',

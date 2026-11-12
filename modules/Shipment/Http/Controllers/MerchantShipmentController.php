@@ -227,7 +227,7 @@ class MerchantShipmentController extends Controller
 
         $paymentType = $data['payment_type'] ?? 'prepaid';
         $codAmount   = (float) ($data['pod_amount'] ?? 0);
-        $paidBy      = $data['delivery_charge_paid_by'] ?? 'customer';
+        $paidBy      = $data['delivery_charge_paid_by'] ?? 'merchant';
 
         $totalCollectable = $paymentType === 'pod'
             ? $codAmount + ($paidBy === 'customer' ? $deliveryCharge : 0)

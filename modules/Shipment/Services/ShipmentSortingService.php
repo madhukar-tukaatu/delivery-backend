@@ -236,6 +236,7 @@ final class ShipmentSortingService
 
         $allowed = [
             CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+            CourierStatus::RECEIVED_AT_ORIGIN_SUB_BRANCH,
             CourierStatus::RECEIVED_AT_TRANSIT_HUB,
         ];
 

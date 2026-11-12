@@ -11,6 +11,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 use Modules\Shipment\Models\Shipment;
+use Modules\Shipment\Services\ShipmentReturnService;
 use Modules\Shipment\Services\ShipmentService;
 use Throwable;
 
@@ -427,6 +428,7 @@ final class GatewayShipmentController extends Controller
         try {
             $updated = $this->shipmentService->cancelFromGateway(
                 shipment: $shipment,
+                reason: $request->input('reason', 'Shipment cancelled by store.')
             );
 
             return ApiResponse::success(
@@ -439,6 +441,52 @@ final class GatewayShipmentController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'Shipment cancellation failed.',
+                'errors' => $e->errors(),
+            ], 422);
+        }
+    }
+
+    /**
+     * POST /api/v1/gateway/shipments/{trackingNumber}/initiate-return
+     */
+    public function initiateReturn(
+        Request $request,
+        string $trackingNumber,
+        ShipmentReturnService $returnService
+    ): JsonResponse {
+        $merchantId = (int) $request
+            ->attributes
+            ->get('merchant_id');
+
+        abort_unless(
+            $merchantId > 0,
+            401,
+            'Invalid merchant authentication.'
+        );
+
+        $shipment = Shipment::query()
+            ->where('merchant_id', $merchantId)
+            ->where('tracking_number', $trackingNumber)
+            ->firstOrFail();
+
+        $reason = (string) ($request->input('reason', 'Return requested by store.'));
+
+        try {
+            $updated = $returnService->initiateReturn(
+                shipment: $shipment,
+                reason: $reason,
+                source: 'store_api'
+            );
+
+            return ApiResponse::success(
+                $updated,
+                'Return initiated successfully.'
+            );
+
+        } catch (ValidationException $e) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Return initiation failed.',
                 'errors' => $e->errors(),
             ], 422);
         }

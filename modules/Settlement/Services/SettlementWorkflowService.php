@@ -27,11 +27,13 @@ class SettlementWorkflowService
 
     public function merchantOwesDeliveryCharge(Shipment $shipment): bool
     {
-        $payer = strtolower(trim((string) ($shipment->delivery_charge_paid_by ?? 'customer')));
+        $payer = strtolower(trim((string) ($shipment->delivery_charge_paid_by ?? 'merchant')));
+        $freeBy = self::normalizeFreeBy($shipment->delivery_free_by ?? 'none');
 
-        // Remittance is unchanged by coupons. Only the original payer flag
-        // decides whether the merchant covers delivery for settlement status.
-        return in_array($payer, ['merchant', 'store', 'seller', 'free', 'free_delivery'], true)
+        // Remittance is unchanged by coupons. Delivery charge is paid by merchant to origin branch
+        // unless marketplace free delivery applies.
+        return $freeBy !== 'marketplace'
+            && $payer !== 'admin'
             && $this->checkoutDeliveryCharge($shipment) > 0;
     }
 
@@ -66,7 +68,7 @@ class SettlementWorkflowService
     {
         $fare = round(max(0, $fare), 2);
         $freeBy = self::normalizeFreeBy($freeBy);
-        $payer = strtolower(trim((string) ($paidBy ?? 'customer')));
+        $payer = strtolower(trim((string) ($paidBy ?? 'merchant')));
 
         $storeShare = 0.0;
         $marketplaceShare = 0.0;
@@ -74,10 +76,12 @@ class SettlementWorkflowService
 
         if ($freeBy === 'marketplace' || $payer === 'admin') {
             $marketplaceShare = $fare;
-        } elseif ($freeBy === 'store' || in_array($payer, ['merchant', 'store', 'seller', 'free', 'free_delivery'], true)) {
-            $storeShare = $fare;
         } else {
-            $customerShare = $fare;
+            // Delivery charges are billed to / paid by the merchant to the origin branch
+            $storeShare = $fare;
+            if ($payer === 'customer') {
+                $customerShare = $fare;
+            }
         }
 
         return [

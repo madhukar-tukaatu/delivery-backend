@@ -401,6 +401,14 @@ class Shipment extends Model
         )->latest();
     }
 
+    public function branchShares(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(
+            \Modules\Billing\Models\ShipmentBranchShare::class,
+            'shipment_id'
+        );
+    }
+
     public function originBranch(): BelongsTo
     {
         return $this->belongsTo(

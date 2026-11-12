@@ -1564,6 +1564,7 @@ final class TransferController extends Controller
                 $q->whereIn('status', [
                     CourierStatus::SORTED_FOR_TRANSFER,
                     CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+                    CourierStatus::RECEIVED_AT_ORIGIN_SUB_BRANCH,
                     CourierStatus::RECEIVED_AT_TRANSIT_HUB,
                     CourierStatus::PICKED_UP,
                 ])->orWhere(function ($q2) {
@@ -2531,6 +2532,7 @@ final class TransferController extends Controller
             ->whereIn('status', [
                 CourierStatus::SORTED_FOR_TRANSFER,
                 CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+                CourierStatus::RECEIVED_AT_ORIGIN_SUB_BRANCH,
                 CourierStatus::RECEIVED_AT_TRANSIT_HUB,
                 CourierStatus::IN_TRANSIT,
                 CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
@@ -2556,11 +2558,45 @@ final class TransferController extends Controller
             $afterHop = (int) ($p['next_hop_branch_id'] ?? 0);
 
             if ($p['has_route']) {
-                $this->progress->applyProgressToShipment($shipment, $at);
+                $this->progress->applyProgressToShipment($shipment, $at, true);
+
+                $statusBefore = $shipment->status;
+                if (in_array($shipment->status, [
+                    CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+                    CourierStatus::RECEIVED_AT_ORIGIN_SUB_BRANCH,
+                ], true) && (int) ($shipment->origin_branch_id ?? 0) !== (int) ($shipment->destination_branch_id ?? 0)) {
+                    $shipment->update([
+                        'status' => CourierStatus::SORTED_FOR_TRANSFER,
+                        'merchant_status' => CourierStatus::merchantStatus(CourierStatus::SORTED_FOR_TRANSFER),
+                        'sort_mode' => 'transfer',
+                        'sorted_at' => now(),
+                        'current_branch_id' => $at ?: $shipment->origin_branch_id,
+                        'current_sub_branch_id' => $shipment->origin_sub_branch_id ?: null,
+                    ]);
+
+                    app(\Modules\Tracking\Services\TrackingService::class)->record(
+                        $shipment->fresh(),
+                        CourierStatus::SORTED_FOR_TRANSFER,
+                        'Reconciled as per active route and sorted for transfer.',
+                        $request->user()?->id
+                    );
+
+                    app(\Modules\Webhook\Services\WebhookService::class)->queueShipmentEvent(
+                        $shipment->fresh(),
+                        'shipment.sorted_for_transfer'
+                    );
+
+                    try {
+                        app(\Modules\Dispatch\Services\TransferContainerService::class)->autoAppend($shipment->fresh(), $request->user()?->id);
+                    } catch (\Throwable $e) {}
+                }
+
                 $reconciledShipments[] = [
                     'tracking' => $shipment->tracking_number,
                     'before_next_hop' => $beforeHop,
                     'after_next_hop' => $afterHop,
+                    'status_before' => $statusBefore,
+                    'status_after' => $shipment->fresh()->status,
                     'route_name' => $p['route_name'] ?? null,
                     'path' => $p['path_text'] ?? null,
                 ];

@@ -6,10 +6,7 @@
 
 START TRANSACTION;
 
--- 1. Mark merchant delivery charge invoices as paid (origin branch collected)
-UPDATE `invoices` 
-SET `status` = 'paid', `paid_at` = COALESCE(`paid_at`, NOW()), `updated_at` = NOW()
-WHERE `id` IN (9, 10, 11, 12, 14) AND `type` = 'delivery_charges';
+-- 1. Delivery charge invoices should reflect actual collection status from merchants
 
 -- 2. Fix collecting_branch_id and collection_mode on shipment_branch_shares
 -- Origin branch is ALWAYS the collecting branch when merchant pays delivery charges.

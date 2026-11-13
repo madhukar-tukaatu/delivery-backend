@@ -969,19 +969,8 @@ Artisan::command('billing:reconcile-inter-branch {--dry-run : Report changes wit
     $this->info($dry ? '[DRY RUN] Simulating Inter-Branch Reconciliation...' : 'Reconciling Inter-Branch Settlements...');
 
     DB::transaction(function () use ($dry) {
-        // 1. Mark merchant delivery charge invoices as paid
-        $invIds = [9, 10, 11, 12, 14];
-        $invoices = \Modules\Billing\Models\Invoice::whereIn('id', $invIds)
-            ->where('type', 'delivery_charges')
-            ->get();
-        foreach ($invoices as $inv) {
-            $this->line("Invoice {$inv->invoice_number} (#{$inv->id}): status {$inv->status} -> paid");
-            if (! $dry) {
-                $inv->status = 'paid';
-                $inv->paid_at = $inv->paid_at ?? now();
-                $inv->save();
-            }
-        }
+        // 1. Merchant delivery charge invoices stay unpaid until branches collect payment
+        $this->line("1. Keeping merchant delivery charge invoice statuses authentic (no force-paid).");
 
         // 2. Shares
         $sharesData = [
@@ -1144,15 +1133,8 @@ Artisan::command('billing:reconcile-all {--dry-run : Report changes without pers
         }
         $this->line("1. Shipments updated to merchant payer: {$shipmentCount}");
 
-        // 2. Mark merchant delivery charge invoices as paid
-        $invQuery = \Modules\Billing\Models\Invoice::query()
-            ->where('type', 'delivery_charges')
-            ->where('status', 'unpaid');
-        $invCount = $invQuery->count();
-        if (! $dry && $invCount > 0) {
-            $invQuery->update(['status' => 'paid', 'paid_at' => now()]);
-        }
-        $this->line("2. Merchant delivery charge invoices marked paid: {$invCount}");
+        // 2. Merchant delivery charge invoices stay authentic (remain unpaid until branch receives payment)
+        $this->line("2. Preserving authentic merchant delivery charge invoice statuses (no force-paid).");
 
         // 3. Update collecting_branch_id and collection_mode on ALL shipment_branch_shares
         $shares = \Modules\Billing\Models\ShipmentBranchShare::query()
@@ -1254,3 +1236,44 @@ Artisan::command('billing:reconcile-all {--dry-run : Report changes without pers
 
     $this->info($dry ? '[DRY RUN] Complete.' : '[SUCCESS] Universal reconciliation completed successfully for all shipments.');
 })->purpose('Universal reconciliation for all shipments, branch shares, invoices, and statements');
+
+/**
+ * Revert delivery charge invoices that were falsely marked paid without recorded payments.
+ *
+ * Usage:
+ *   php artisan billing:restore-unpaid-delivery-charges
+ *   php artisan billing:restore-unpaid-delivery-charges --dry-run
+ */
+Artisan::command('billing:restore-unpaid-delivery-charges {--dry-run : Report only}', function () {
+    $dry = (bool) $this->option('dry-run');
+    $this->info($dry ? '[DRY RUN] Simulating Restoring Unpaid Delivery Charge Invoices...' : 'Restoring Unpaid Delivery Charge Invoices...');
+
+    $query = \Modules\Billing\Models\Invoice::query()
+        ->where('type', 'delivery_charges')
+        ->where('status', 'paid')
+        ->whereNotExists(function ($q) {
+            $q->selectRaw('1')
+              ->from('merchant_invoice_payments')
+              ->whereColumn('merchant_invoice_payments.invoice_id', 'invoices.id')
+              ->where('merchant_invoice_payments.status', 'recorded');
+        });
+
+    $count = $query->count();
+    $this->line("Found {$count} delivery charge invoices marked paid without recorded payments.");
+
+    $reverted = 0;
+    foreach ($query->get() as $inv) {
+        $this->line("Reverting {$inv->invoice_number} (#{$inv->id}) for merchant #{$inv->merchant_id} (Rs {$inv->total_amount}) -> unpaid");
+        if (! $dry) {
+            $inv->status = 'unpaid';
+            $inv->paid_at = null;
+            $inv->outstanding_amount = $inv->total_amount;
+            $inv->save();
+            $reverted++;
+        }
+    }
+
+    $this->info($dry ? '[DRY RUN] Complete.' : "[SUCCESS] Restored {$reverted} delivery charge invoices back to unpaid.");
+    return 0;
+})->purpose('Restore delivery charge invoices that were falsely marked paid without recorded payments');
+

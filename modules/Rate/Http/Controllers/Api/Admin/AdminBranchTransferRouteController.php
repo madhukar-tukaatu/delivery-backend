@@ -65,6 +65,29 @@ final class AdminBranchTransferRouteController extends Controller
             });
         }
 
+        if ($request->filled('origin_branch_id') || $request->filled('destination_branch_id')) {
+            $originId = $request->filled('origin_branch_id') ? (int) $request->input('origin_branch_id') : null;
+            $destId = $request->filled('destination_branch_id') ? (int) $request->input('destination_branch_id') : null;
+
+            if ($originId !== null) {
+                $query->where(function ($q) use ($originId): void {
+                    $q->where('origin_branch_id', $originId)
+                      ->orWhereHas('routeLanes.lane', function ($lq) use ($originId): void {
+                          $lq->where('from_branch_id', $originId);
+                      });
+                });
+            }
+
+            if ($destId !== null) {
+                $query->where(function ($q) use ($destId): void {
+                    $q->where('destination_branch_id', $destId)
+                      ->orWhereHas('routeLanes.lane', function ($lq) use ($destId): void {
+                          $lq->where('to_branch_id', $destId);
+                      });
+                });
+            }
+        }
+
         if ($request->has('is_active')) {
             $query->where('is_active', $request->boolean('is_active'));
         }
@@ -89,6 +112,40 @@ final class AdminBranchTransferRouteController extends Controller
         );
 
         return response()->json(['success' => true, 'data' => $paginator]);
+    }
+
+        public function candidates(Request $request): JsonResponse
+    {
+        $originId = (int) $request->input('origin_branch_id');
+        $destId = (int) $request->input('destination_branch_id');
+        $serviceType = $request->input('service_type');
+
+        if (!$originId || !$destId) {
+            return response()->json([
+                'success' => true,
+                'data' => [
+                    'routes' => [],
+                    'default_route' => null,
+                    'count' => 0,
+                    'has_routes' => false,
+                ],
+            ]);
+        }
+
+        $routes = $this->resolver->candidateRoutes($originId, $destId, $serviceType);
+        $defaultRoute = !empty($routes)
+            ? (collect($routes)->firstWhere('is_default', true) ?? $routes[0])
+            : null;
+
+        return response()->json([
+            'success' => true,
+            'data' => [
+                'routes' => $routes,
+                'default_route' => $defaultRoute,
+                'count' => count($routes),
+                'has_routes' => count($routes) > 0,
+            ],
+        ]);
     }
 
     public function store(StoreBranchTransferRouteRequest $request): JsonResponse

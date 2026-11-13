@@ -67,6 +67,72 @@ final class ConfiguredTransferRouteService
         ]);
     }
 
+    /**
+     * Return all active routes matching origin and destination, sorted with default first.
+     * Supports matching either direct branch IDs or coverage location IDs.
+     *
+     * @param int $originBranchId
+     * @param int $destinationBranchId
+     * @param string|null $serviceType
+     * @param int[] $originCandidateIds
+     * @param int[] $destCandidateIds
+     * @return array[] Formatted route structures
+     */
+    public function candidateRoutes(
+        int $originBranchId,
+        int $destinationBranchId,
+        ?string $serviceType = null,
+        array $originCandidateIds = [],
+        array $destCandidateIds = []
+    ): array {
+        $originCandidates = array_values(array_unique(array_filter([$originBranchId, ...$originCandidateIds])));
+        $destCandidates = array_values(array_unique(array_filter([$destinationBranchId, ...$destCandidateIds])));
+
+        $query = BranchTransferRoute::query()
+            ->where('is_active', true)
+            ->with([
+                'routeLanes.lane.fromBranch',
+                'routeLanes.lane.toBranch',
+                'lane.fromBranch',
+                'lane.toBranch',
+            ])
+            ->orderByDesc('is_default')
+            ->orderBy('priority')
+            ->orderBy('id');
+
+        if ($serviceType !== null && $serviceType !== '' && $serviceType !== 'all') {
+            try {
+                $query->where('service_type', $this->normalizeServiceType($serviceType));
+            } catch (\Throwable $e) {
+                // Ignore service type error, return all active
+            }
+        }
+
+        $candidates = $query->get();
+        $matches = [];
+
+        foreach ($candidates as $route) {
+            $path = $route->getPathBranchIds();
+            if ($path === []) {
+                if (in_array((int) $route->origin_branch_id, $originCandidates, true)
+                    && in_array((int) $route->destination_branch_id, $destCandidates, true)) {
+                    $matches[] = $this->formatRoute($route);
+                }
+                continue;
+            }
+
+            $routeOrigin = (int) $path[0];
+            $routeDest = (int) end($path);
+
+            if (in_array($routeOrigin, $originCandidates, true)
+                && in_array($routeDest, $destCandidates, true)) {
+                $matches[] = $this->formatRoute($route);
+            }
+        }
+
+        return $matches;
+    }
+
     public function formatRoute(BranchTransferRoute $route): array
     {
         $route->loadMissing(

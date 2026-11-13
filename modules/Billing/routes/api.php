@@ -159,6 +159,8 @@ Route::prefix('v1/admin')
                 ->name('branch-shares.reports');
             Route::get('branch-shares/config', [BranchShareController::class, 'config'])
                 ->name('branch-shares.config');
+            Route::get('branch-shares/routes', [BranchShareController::class, 'candidateRoutes'])
+                ->name('branch-shares.routes');
             Route::post('branch-shares/config', [BranchShareController::class, 'saveConfig'])
                 ->name('branch-shares.config.update');
             Route::post('branch-shares/simulate', [BranchShareController::class, 'simulate'])

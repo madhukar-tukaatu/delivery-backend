@@ -13,12 +13,8 @@ SET `delivery_charge_paid_by` = 'merchant',
     `updated_at` = NOW()
 WHERE `delivery_charge_paid_by` = 'customer' OR `delivery_charge_paid_by` IS NULL;
 
--- 2. Mark all merchant delivery charge invoices as paid (collected by origin branch)
-UPDATE `invoices`
-SET `status` = 'paid',
-    `paid_at` = COALESCE(`paid_at`, NOW()),
-    `updated_at` = NOW()
-WHERE `type` = 'delivery_charges' AND `status` = 'unpaid';
+-- 2. Delivery charge invoices should reflect actual collection status:
+-- (Do NOT force mark as paid; invoices remain unpaid until the branch collects payment)
 
 -- 3. Universal fix for ALL shipment branch shares across the entire database:
 -- Set collecting_branch_id to the shipment's origin branch.

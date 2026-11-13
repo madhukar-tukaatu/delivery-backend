@@ -54,6 +54,16 @@ final class TransferContainerService
     public const SEAL_MISMATCH = 'mismatch';
     public const SEAL_TAMPERED = 'tampered';
 
+    public const VEHICLE_CAPACITIES = [
+        'bike'      => ['max_parcels' => 10, 'max_kg' => 25.0],
+        'van'       => ['max_parcels' => 50, 'max_kg' => 250.0],
+        'pickup'    => ['max_parcels' => 150, 'max_kg' => 600.0],
+        'truck'     => ['max_parcels' => 800, 'max_kg' => 8000.0],
+        'bus_cargo' => ['max_parcels' => 40, 'max_kg' => 150.0],
+        'flight'    => ['max_parcels' => 60, 'max_kg' => 200.0],
+        'other'     => ['max_parcels' => 9999, 'max_kg' => 99999.0],
+    ];
+
     private const IN_TRANSIT_SHIPMENT_STATUSES = [
         CourierStatus::IN_TRANSIT,
         CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
@@ -302,9 +312,18 @@ final class TransferContainerService
             $from = (int) $container->from_branch_id;
             $hop = (int) $container->to_branch_id;
 
+            $vehicleType = (string) ($container->vehicle_type ?: 'van');
+            $maxParcels = (int) ($container->max_parcels ?: (self::VEHICLE_CAPACITIES[$vehicleType]['max_parcels'] ?? 50));
+            $currentItemsCount = (int) $container->items()->whereNotIn('status', ['cancelled', 'moved'])->count();
+
             $added = [];
             $skipped = [];
             foreach ($shipments as $shipment) {
+                if ($currentItemsCount + count($added) >= $maxParcels) {
+                    $skipped[(int) ($shipment instanceof Shipment ? $shipment->id : $shipment)] = sprintf('Vehicle capacity limit reached (%d parcels for %s). Additional items locked.', $maxParcels, strtoupper($vehicleType));
+                    continue;
+                }
+
                 $shipment = $shipment instanceof Shipment ? Shipment::query()->find($shipment->id) : Shipment::query()->find((int) $shipment);
                 if (! $shipment) {
                     continue;
@@ -1483,6 +1502,21 @@ final class TransferContainerService
                     $fill['driver_phone'] = $fill['driver_phone'] ?? $rider->phone;
                 }
             }
+        }
+
+        // Apply capacity limits based on vehicle type if not explicitly passed
+        $vType = $fill['vehicle_type'] ?? $container->vehicle_type ?? 'truck';
+        if (empty($fill['max_parcels']) && isset(self::VEHICLE_CAPACITIES[$vType])) {
+            $fill['max_parcels'] = self::VEHICLE_CAPACITIES[$vType]['max_parcels'];
+        }
+        if (empty($fill['max_weight_kg']) && isset(self::VEHICLE_CAPACITIES[$vType])) {
+            $fill['max_weight_kg'] = self::VEHICLE_CAPACITIES[$vType]['max_kg'];
+        }
+        if (empty($fill['estimated_hours'])) {
+            $fill['estimated_hours'] = 4.0;
+        }
+        if (empty($fill['estimated_arrival_at'])) {
+            $fill['estimated_arrival_at'] = now()->addMinutes((int) (($fill['estimated_hours'] ?? 4.0) * 60));
         }
 
         $schema = Schema::getColumnListing('dispatch_manifests');

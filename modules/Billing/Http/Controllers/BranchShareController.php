@@ -201,6 +201,50 @@ class BranchShareController extends Controller
         return ApiResponse::success($response, 'Branch share configuration saved successfully.');
     }
 
+    /** GET admin/branch-shares/routes */
+    public function candidateRoutes(Request $request)
+    {
+        $user = $request->user();
+        abort_if(FinanceBranchScope::isMerchant($user), 403);
+
+        $originId = (int) $request->input('origin_branch_id');
+        $destId = (int) $request->input('destination_branch_id');
+        $serviceType = $request->input('service_type');
+
+        if (!$originId || !$destId) {
+            return ApiResponse::success([
+                'routes' => [],
+                'default_route' => null,
+                'count' => 0,
+                'has_routes' => false,
+            ]);
+        }
+
+        $originCov = $this->shares->resolveCoverageLocationId($originId);
+        $destCov = $this->shares->resolveCoverageLocationId($destId);
+
+        /** @var \Modules\Rate\Services\ConfiguredTransferRouteService $configuredService */
+        $configuredService = app(\Modules\Rate\Services\ConfiguredTransferRouteService::class);
+        $routes = $configuredService->candidateRoutes(
+            $originId,
+            $destId,
+            $serviceType,
+            $originCov ? [$originCov] : [],
+            $destCov ? [$destCov] : []
+        );
+
+        $defaultRoute = !empty($routes)
+            ? (collect($routes)->firstWhere('is_default', true) ?? $routes[0])
+            : null;
+
+        return ApiResponse::success([
+            'routes' => $routes,
+            'default_route' => $defaultRoute,
+            'count' => count($routes),
+            'has_routes' => count($routes) > 0,
+        ]);
+    }
+
     /** POST admin/branch-shares/simulate */
     public function simulate(Request $request)
     {

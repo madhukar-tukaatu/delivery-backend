@@ -102,6 +102,19 @@ Route::prefix('v1/admin')
             Route::post('transfers/dispatch', [TransferController::class, 'dispatch'])
                 ->name('transfers.dispatch');
 
+            // Live Transport Control Tower & Nepal network overview
+            Route::get('transfers/network-overview', [TransferController::class, 'networkOverview'])
+                ->name('transfers.network-overview');
+
+            // Branch Transfer Requests (Vehicle request & transport manager queue)
+            Route::get('transfers/requests', [TransferController::class, 'transferRequests'])
+                ->name('transfers.requests.index');
+            Route::post('transfers/requests', [TransferController::class, 'createTransferRequest'])
+                ->name('transfers.requests.store');
+            Route::post('transfers/requests/{transferRequest}/dispatch', [TransferController::class, 'dispatchTransferRequest'])
+                ->whereNumber('transferRequest')
+                ->name('transfers.requests.dispatch');
+
             // TR transfer containers (one per branch -> next hop trip).
             Route::get('transfers/containers', [TransferController::class, 'containers'])
                 ->name('transfers.containers.index');

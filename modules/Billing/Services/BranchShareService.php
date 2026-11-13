@@ -572,6 +572,19 @@ class BranchShareService
         $originId = (int) ($input['origin_branch_id'] ?? 0);
         $destId = (int) ($input['destination_branch_id'] ?? 0);
         $transitIds = array_values(array_filter(array_map('intval', (array) ($input['transit_branch_ids'] ?? []))));
+        $routeId = !empty($input['transfer_route_id']) ? (int) $input['transfer_route_id'] : null;
+
+        $selectedRoute = null;
+        if ($routeId && class_exists(\Modules\Rate\Models\BranchTransferRoute::class)) {
+            $routeRecord = \Modules\Rate\Models\BranchTransferRoute::query()->find($routeId);
+            if ($routeRecord && class_exists(\Modules\Rate\Services\ConfiguredTransferRouteService::class)) {
+                $formatted = app(\Modules\Rate\Services\ConfiguredTransferRouteService::class)->formatRoute($routeRecord);
+                $selectedRoute = $formatted;
+                if (empty($transitIds) && !empty($formatted['transit_branch_ids'])) {
+                    $transitIds = $formatted['transit_branch_ids'];
+                }
+            }
+        }
 
         $weightKg = max(0.1, (float) ($input['weight_kg'] ?? 1.0));
         $isFragile = filter_var($input['is_fragile'] ?? false, FILTER_VALIDATE_BOOLEAN);

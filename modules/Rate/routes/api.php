@@ -44,6 +44,13 @@ Route::middleware('auth:sanctum')
                 sortOrder: 96
             );
 
+        Route::get(
+            '/branch-transfer-routes/candidates',
+            [AdminBranchTransferRouteController::class, 'candidates']
+        )
+            ->middleware('permission:pricing.transfer_routes.view')
+            ->name('admin.pricing.transfer-routes.candidates');
+
         Route::post(
             '/branch-transfer-routes/preview',
             [AdminBranchTransferRouteController::class, 'preview']

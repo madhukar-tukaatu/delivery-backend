@@ -649,103 +649,7 @@ final class TransferController extends Controller
         ]);
     }
 
-    /**
-     * Live network overview & transport control tower
-     */
-    public function networkOverview(Request $request)
-    {
-        $user = $request->user();
-        $branchId = $this->resolveReceivingBranchId($user, $request);
 
-        $branchScopeIds = [];
-        if ($branchId !== 0) {
-            $covId = $this->coverageIdForBranch($branchId);
-            $physId = $this->branchIdForCoverage($branchId);
-            $branchScopeIds = array_values(array_unique(array_filter([(int) $branchId, (int) $covId, (int) $physId])));
-        }
-
-        // 1. Active In-Transit TRs (Line-Haul Fleet on the road)
-        $trQuery = DB::table('dispatch_manifests')
-            ->whereIn('dispatch_manifests.status', ['dispatched', 'in_transit'])
-            ->leftJoin('branches as from_b', 'dispatch_manifests.from_branch_id', '=', 'from_b.id')
-            ->leftJoin('branches as to_b', 'dispatch_manifests.to_branch_id', '=', 'to_b.id')
-            ->leftJoin('users as rider', 'dispatch_manifests.rider_user_id', '=', 'rider.id')
-            ->select([
-                'dispatch_manifests.id',
-                'dispatch_manifests.manifest_number',
-                'dispatch_manifests.transfer_number',
-                'dispatch_manifests.status',
-                'dispatch_manifests.from_branch_id',
-                'dispatch_manifests.to_branch_id',
-                'dispatch_manifests.vehicle_number',
-                'dispatch_manifests.vehicle_type',
-                'dispatch_manifests.driver_name',
-                'dispatch_manifests.driver_phone',
-                'dispatch_manifests.seal_number',
-                'dispatch_manifests.seal_status',
-                'dispatch_manifests.expected_count',
-                'dispatch_manifests.received_count',
-                'dispatch_manifests.transport_cost',
-                'dispatch_manifests.dispatched_at',
-                'from_b.name as from_branch_name',
-                'to_b.name as to_branch_name',
-                'rider.name as rider_name',
-                'rider.phone as rider_phone',
-            ])
-            ->orderByDesc('dispatch_manifests.dispatched_at');
-
-        if ($branchId !== 0) {
-            $trQuery->where(function ($q) use ($branchScopeIds) {
-                $q->whereIn('dispatch_manifests.from_branch_id', $branchScopeIds)
-                  ->orWhereIn('dispatch_manifests.to_branch_id', $branchScopeIds);
-            });
-        }
-
-        $inTransitTrs = $trQuery->limit(25)->get();
-
-        // 2. Hub Staging Volumes (parcels sorted for transfer waiting for next TR)
-        $stagingQuery = DB::table('shipments')
-            ->whereIn('shipments.status', [
-                \App\Support\CourierStatus::SORTED_FOR_TRANSFER,
-                \App\Support\CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
-                \App\Support\CourierStatus::RECEIVED_AT_TRANSIT_HUB,
-            ])
-            ->leftJoin('branches', 'shipments.current_branch_id', '=', 'branches.id')
-            ->select('branches.id as branch_id', 'branches.name as branch_name', DB::raw('count(*) as count'))
-            ->groupBy('branches.id', 'branches.name')
-            ->orderByDesc('count');
-
-        if ($branchId !== 0) {
-            $stagingQuery->whereIn('shipments.current_branch_id', $branchScopeIds);
-        }
-
-        $stagedByHub = $stagingQuery->limit(8)->get();
-
-        // 3. Efficiency & Cost Metrics
-        $totalMovingParcels = (int) $inTransitTrs->sum('expected_count');
-        $totalTrucks = $inTransitTrs->count();
-        $totalCost = (float) $inTransitTrs->sum('transport_cost');
-        $avgCostPerParcel = $totalMovingParcels > 0 ? round($totalCost / $totalMovingParcels, 2) : 0;
-        
-        $singleTripCostEstimate = $totalMovingParcels * 650;
-        $consolidationSavingsPercent = $singleTripCostEstimate > 0 
-            ? round((($singleTripCostEstimate - $totalCost) / $singleTripCostEstimate) * 100, 1)
-            : 74.2;
-
-        return ApiResponse::success([
-            'in_transit_trs' => $inTransitTrs,
-            'staged_by_hub' => $stagedByHub,
-            'metrics' => [
-                'total_moving_trucks' => $totalTrucks,
-                'total_moving_parcels' => $totalMovingParcels,
-                'total_manifest_cost' => $totalCost,
-                'avg_cost_per_parcel' => $avgCostPerParcel,
-                'consolidation_savings_percent' => max(10, min(95, $consolidationSavingsPercent)),
-                'avg_parcels_per_truck' => $totalTrucks > 0 ? round($totalMovingParcels / $totalTrucks, 1) : 0,
-            ],
-            'branch_id' => $branchId ?: null,
-        ]);
-    }
 
     /**
      * Summary for transfer tabs
@@ -2749,108 +2653,68 @@ final class TransferController extends Controller
                 ];
             });
 
-        // All active branches from real database
+        // 50 Branches across Nepal with live pending parcel counts, weight & lat/lng for map
         $allBranches = \Modules\Branch\Models\Branch::query()
             ->where('status', 'active')
             ->select('id', 'name', 'code', 'city', 'district', 'province', 'latitude', 'longitude')
             ->get();
 
-        // Real cross-branch outbound pending parcels by branch
-        $outboundQuery = Shipment::query()
-            ->whereColumn('origin_branch_id', '!=', 'destination_branch_id')
-            ->whereIn('status', [
-                CourierStatus::SORTED_FOR_TRANSFER,
-                CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
-                CourierStatus::RECEIVED_AT_ORIGIN_SUB_BRANCH,
-                CourierStatus::RECEIVED_AT_TRANSIT_HUB,
-            ]);
-
-        $outboundCounts = (clone $outboundQuery)
-            ->selectRaw('COALESCE(current_branch_id, origin_branch_id) as br_id, COUNT(*) as cnt')
-            ->groupBy('br_id')
-            ->pluck('cnt', 'br_id');
-
-        $outboundWeights = (clone $outboundQuery)
-            ->selectRaw('COALESCE(current_branch_id, origin_branch_id) as br_id, SUM(COALESCE(weight, chargeable_weight, 1.0)) as total_wt')
-            ->groupBy('br_id')
-            ->pluck('total_wt', 'br_id');
-
-        // Real incoming shipments in transit to each branch
-        $inboundCounts = Shipment::query()
-            ->whereIn('status', [
-                CourierStatus::IN_TRANSIT,
-                CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
+        // Real active transfer lanes from database with coordinates
+        $realLanes = \Illuminate\Support\Facades\DB::table('branch_transfer_lanes')
+            ->join('coverage_locations as from_cov', 'branch_transfer_lanes.from_branch_id', '=', 'from_cov.id')
+            ->join('coverage_locations as to_cov', 'branch_transfer_lanes.to_branch_id', '=', 'to_cov.id')
+            ->where('branch_transfer_lanes.is_active', 1)
+            ->whereNotNull('from_cov.latitude')
+            ->whereNotNull('from_cov.longitude')
+            ->whereNotNull('to_cov.latitude')
+            ->whereNotNull('to_cov.longitude')
+            ->select([
+                'branch_transfer_lanes.id',
+                'branch_transfer_lanes.service_type',
+                'branch_transfer_lanes.transport_mode',
+                'branch_transfer_lanes.distance_km',
+                'branch_transfer_lanes.estimated_hours',
+                'from_cov.name as from_name',
+                'from_cov.latitude as from_lat',
+                'from_cov.longitude as from_lng',
+                'to_cov.name as to_name',
+                'to_cov.latitude as to_lat',
+                'to_cov.longitude as to_lng',
             ])
-            ->selectRaw('COALESCE(next_hop_branch_id, destination_branch_id) as br_id, COUNT(*) as cnt')
-            ->groupBy('br_id')
-            ->pluck('cnt', 'br_id');
+            ->get();
 
-        // Real dispatched / in-transit TR containers count by origin branch
-        $dispatchedTrCounts = \Modules\Dispatch\Models\DispatchManifest::query()
-            ->whereIn('status', ['dispatched', 'in_transit'])
-            ->selectRaw('from_branch_id, COUNT(*) as cnt')
-            ->groupBy('from_branch_id')
-            ->pluck('cnt', 'from_branch_id');
+        // Aggregate pending parcels by current_branch_id
+        $outboundCounts = Shipment::query()
+            ->where('status', CourierStatus::SORTED_FOR_TRANSFER)
+            ->selectRaw('current_branch_id, COUNT(*) as cnt')
+            ->groupBy('current_branch_id')
+            ->pluck('cnt', 'current_branch_id');
 
-        // District coordinate fallback map so every real branch in DB renders on the map
-        $districtCoords = [
-            'kathmandu' => [27.7172, 85.3240],
-            'lalitpur' => [27.6710, 85.3206],
-            'bhaktapur' => [27.6710, 85.4298],
-            'kaski' => [28.2096, 83.9856],
-            'pokhara' => [28.2096, 83.9856],
-            'chitwan' => [27.6833, 84.4333],
-            'bharatpur' => [27.6833, 84.4333],
-            'rupandehi' => [27.7006, 83.4484],
-            'butwal' => [27.7006, 83.4484],
-            'morang' => [26.4525, 87.2718],
-            'biratnagar' => [26.4525, 87.2718],
-            'sunsari' => [26.6636, 87.2747],
-            'itahari' => [26.6636, 87.2747],
-            'dharan' => [26.8124, 87.2834],
-            'jhapa' => [26.6416, 87.9904],
-            'birtamod' => [26.6416, 87.9904],
-            'damak' => [26.6588, 87.7006],
-            'makwanpur' => [27.4285, 85.0322],
-            'hetauda' => [27.4285, 85.0322],
-            'dhanusha' => [26.7288, 85.9244],
-            'janakpur' => [26.7288, 85.9244],
-            'mahottari' => [26.9833, 85.9000],
-            'bardibas' => [26.9833, 85.9000],
-            'parsa' => [27.0135, 84.8774],
-            'birgunj' => [27.0135, 84.8774],
-            'banke' => [28.0500, 81.6167],
-            'nepalgunj' => [28.0500, 81.6167],
-            'kailali' => [28.6833, 80.6000],
-            'dhangadhi' => [28.6833, 80.6000],
-            'kanchanpur' => [28.9667, 80.1833],
-            'mahendranagar' => [28.9667, 80.1833],
-            'dang' => [28.0417, 82.4833],
-            'ghorahi' => [28.0417, 82.4833],
-            'tulsipur' => [28.1306, 82.2961],
-            'tanahun' => [27.9711, 84.2833],
-            'damauli' => [27.9711, 84.2833],
-            'arghakhanchi' => [27.9772, 83.1367],
-            'sandhikharka' => [27.9772, 83.1367],
-            'mustang' => [28.7817, 83.7381],
-            'jomsom' => [28.7817, 83.7381],
-            'palpa' => [27.8672, 83.5469],
-            'tansen' => [27.8672, 83.5469],
-            'surkhet' => [28.5983, 81.6339],
-            'birendranagar' => [28.5983, 81.6339],
-            'sindhuli' => [27.2500, 85.9167],
-            'kamalamai' => [27.2500, 85.9167],
-            'dhading' => [27.8767, 84.9083],
-            'kavre' => [27.6298, 85.5214],
-            'banepa' => [27.6298, 85.5214],
-            'gorkha' => [28.0000, 84.6333],
-            'myagdi' => [28.3439, 83.5647],
-            'beni' => [28.3439, 83.5647],
-            'baglung' => [28.2717, 83.5939],
-            'ilam' => [26.9100, 87.9275],
-            'siraha' => [26.7296, 86.4950],
-            'saptari' => [26.5414, 86.7533],
-        ];
+        $outboundWeights = Shipment::query()
+            ->where('status', CourierStatus::SORTED_FOR_TRANSFER)
+            ->selectRaw('current_branch_id, SUM(COALESCE(weight, chargeable_weight, 1)) as total_wt')
+            ->groupBy('current_branch_id')
+            ->pluck('total_wt', 'current_branch_id');
+
+        // Incoming parcels heading towards each branch
+        $inboundExpected = Shipment::query()
+            ->whereIn('status', [CourierStatus::IN_TRANSIT, CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH])
+            ->selectRaw('COALESCE(next_hop_branch_id, destination_branch_id) as target_branch_id, COUNT(*) as cnt')
+            ->groupBy('target_branch_id')
+            ->pluck('cnt', 'target_branch_id');
+
+        // Real overall database transfer metrics
+        $totalSortedForTransfer = Shipment::query()->where('status', CourierStatus::SORTED_FOR_TRANSFER)->count();
+        $totalInTransitShipments = Shipment::query()->whereIn('status', [CourierStatus::IN_TRANSIT, CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH])->count();
+        $totalTransitHubShipments = Shipment::query()->where('status', CourierStatus::RECEIVED_AT_TRANSIT_HUB)->count();
+        $totalDestinationReceived = Shipment::query()->where('status', CourierStatus::RECEIVED_AT_DESTINATION_BRANCH)->count();
+        $totalDeliveredTransfers = Shipment::query()
+            ->where('status', CourierStatus::DELIVERED)
+            ->whereColumn('origin_branch_id', '!=', 'destination_branch_id')
+            ->count();
+        $totalTransferFreightKg = (float) Shipment::query()
+            ->whereIn('status', [CourierStatus::SORTED_FOR_TRANSFER, CourierStatus::IN_TRANSIT, CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH])
+            ->sum(DB::raw('COALESCE(weight, chargeable_weight, 1)'));
 
         // Pending transfer requests count by branch
         $requestCounts = \Illuminate\Support\Facades\Schema::hasTable('transfer_requests')
@@ -2861,11 +2725,10 @@ final class TransferController extends Controller
                 ->pluck('cnt', 'origin_branch_id')
             : collect([]);
 
-        $branchesPayload = $allBranches->map(function ($b) use ($outboundCounts, $outboundWeights, $inboundCounts, $dispatchedTrCounts, $requestCounts, $districtCoords) {
+        $branchesPayload = $allBranches->map(function ($b) use ($outboundCounts, $outboundWeights, $inboundExpected, $requestCounts) {
             $pkgs = (int) ($outboundCounts[$b->id] ?? 0);
             $wt = (float) ($outboundWeights[$b->id] ?? 0);
-            $inboundPkgs = (int) ($inboundCounts[$b->id] ?? 0);
-            $dispatchedTrs = (int) ($dispatchedTrCounts[$b->id] ?? 0);
+            $inbound = (int) ($inboundExpected[$b->id] ?? 0);
             $reqCount = (int) ($requestCounts[$b->id] ?? 0);
 
             $urgency = 'normal';
@@ -2875,25 +2738,6 @@ final class TransferController extends Controller
                 $urgency = 'high';
             }
 
-            // Coordinate resolution
-            $lat = (float) ($b->latitude ?? 0);
-            $lng = (float) ($b->longitude ?? 0);
-
-            if ($lat <= 0 || $lng <= 0) {
-                $key = strtolower(trim((string) ($b->city ?: $b->district ?: '')));
-                if (isset($districtCoords[$key])) {
-                    [$lat, $lng] = $districtCoords[$key];
-                } else {
-                    $key2 = strtolower(trim((string) ($b->district ?: '')));
-                    if (isset($districtCoords[$key2])) {
-                        [$lat, $lng] = $districtCoords[$key2];
-                    } else {
-                        $lat = 27.7172;
-                        $lng = 85.3240;
-                    }
-                }
-            }
-
             return [
                 'id' => $b->id,
                 'name' => $b->name,
@@ -2901,20 +2745,11 @@ final class TransferController extends Controller
                 'city' => $b->city,
                 'district' => $b->district,
                 'province' => $b->province,
-                'latitude' => $lat,
-                'longitude' => $lng,
-                'pending_parcels' => $pkgs,
-                'pending_weight_kg' => round($wt, 1),
-                'inbound_parcels' => $inboundPkgs,
-                'dispatched_trs' => $dispatchedTrs,
-                'transfer_requests_count' => $reqCount,
-                'urgency' => $urgency,
-            ];
-        });
                 'latitude' => (float) ($b->latitude ?? 27.7172),
                 'longitude' => (float) ($b->longitude ?? 85.3240),
                 'pending_parcels' => $pkgs,
                 'pending_weight_kg' => round($wt, 1),
+                'inbound_expected_parcels' => $inbound,
                 'transfer_requests_count' => $reqCount,
                 'urgency' => $urgency,
             ];
@@ -2937,6 +2772,7 @@ final class TransferController extends Controller
             'in_transit_trs' => $inTransitTrs,
             'staged_by_hub' => $stagedByHub,
             'branches' => $branchesPayload,
+            'real_lanes' => $realLanes,
             'pending_requests' => $pendingRequests,
             'metrics' => [
                 'total_moving_trucks' => $totalMovingTrucks,
@@ -2945,6 +2781,16 @@ final class TransferController extends Controller
                 'total_branches_active' => $allBranches->count(),
                 'consolidation_savings_percent' => 74.2,
                 'avg_cost_per_parcel' => $totalMovingParcels > 0 ? round(12000 / max(1, $totalMovingParcels), 2) : 0,
+            ],
+            'reporting' => [
+                'total_sorted_for_transfer' => $totalSortedForTransfer,
+                'total_in_transit_shipments' => $totalInTransitShipments,
+                'total_transit_hub_shipments' => $totalTransitHubShipments,
+                'total_destination_received' => $totalDestinationReceived,
+                'total_delivered_transfers' => $totalDeliveredTransfers,
+                'total_transfer_freight_kg' => round($totalTransferFreightKg, 1),
+                'total_active_containers' => $totalMovingTrucks,
+                'total_staged_containers' => $stagedByHub->count(),
             ],
         ]);
     }

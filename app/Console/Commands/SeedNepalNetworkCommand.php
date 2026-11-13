@@ -182,11 +182,16 @@ final class SeedNepalNetworkCommand extends Command
                 continue;
             }
 
+            $fromCovId = (int) ($from->coverage_location_id ?: $from->id);
+            $toCovId = (int) ($to->coverage_location_id ?: $to->id);
+            $sig = BranchTransferLane::checkpointSignature([]);
+
             $laneRecord = BranchTransferLane::firstOrCreate(
                 [
-                    'from_branch_id' => $from->id,
-                    'to_branch_id'   => $to->id,
+                    'from_branch_id' => $fromCovId,
+                    'to_branch_id'   => $toCovId,
                     'service_type'   => 'standard',
+                    'path_signature' => $sig,
                 ],
                 [
                     'transport_mode'  => $mode,
@@ -196,10 +201,10 @@ final class SeedNepalNetworkCommand extends Command
                 ]
             );
 
-            BranchTransferRoute::firstOrCreate(
+            $route = BranchTransferRoute::firstOrCreate(
                 [
-                    'origin_branch_id'      => $from->id,
-                    'destination_branch_id' => $to->id,
+                    'origin_branch_id'      => $fromCovId,
+                    'destination_branch_id' => $toCovId,
                     'service_type'          => 'standard',
                 ],
                 [
@@ -211,6 +216,18 @@ final class SeedNepalNetworkCommand extends Command
                     'is_active'               => true,
                 ]
             );
+
+            if (Schema::hasTable('branch_transfer_route_lanes')) {
+                \Modules\Rate\Models\BranchTransferRouteLane::firstOrCreate(
+                    [
+                        'branch_transfer_route_id' => $route->id,
+                        'branch_transfer_lane_id'  => $laneRecord->id,
+                    ],
+                    [
+                        'sequence_number' => 1,
+                    ]
+                );
+            }
         }
     }
 

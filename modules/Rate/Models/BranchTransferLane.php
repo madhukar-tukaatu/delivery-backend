@@ -36,6 +36,21 @@ final class BranchTransferLane extends Model
         'checkpoints'      => 'array',
     ];
 
+    protected static function booted(): void
+    {
+        static::creating(function (self $lane) {
+            if (empty($lane->path_signature)) {
+                $lane->path_signature = self::checkpointSignature($lane->checkpoints ?? []);
+            }
+        });
+
+        static::updating(function (self $lane) {
+            if (empty($lane->path_signature)) {
+                $lane->path_signature = self::checkpointSignature($lane->checkpoints ?? []);
+            }
+        });
+    }
+
     // Relationships
     public function fromBranch(): BelongsTo
     {

@@ -81,6 +81,9 @@ Route::prefix('v1/admin')
             Route::get('transfers/stats', [TransferController::class, 'stats'])
                 ->name('transfers.stats');
 
+            Route::get('transfers/network-overview', [TransferController::class, 'networkOverview'])
+                ->name('transfers.network-overview');
+
             Route::get('transfers/summary', [TransferController::class, 'summary'])
                 ->name('transfers.summary');
 

@@ -252,6 +252,12 @@ final class BranchTransferRoute extends Model
         // Legacy fallback: single anchor lane + transit metadata.
         $lane = $this->lane;
         if (!$lane) {
+            $origin = (int) ($this->origin_branch_id ?? 0);
+            $dest = (int) ($this->destination_branch_id ?? 0);
+            if ($origin > 0 && $dest > 0) {
+                $transits = is_array($this->transit_branch_ids) ? $this->transit_branch_ids : [];
+                return array_values(array_map('intval', [$origin, ...$transits, $dest]));
+            }
             return [];
         }
 

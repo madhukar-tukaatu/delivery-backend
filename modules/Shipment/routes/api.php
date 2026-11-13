@@ -10,6 +10,7 @@ use Modules\Shipment\Http\Controllers\GatewayShipmentController;
 use Modules\Shipment\Http\Controllers\ShipmentController;
 use Modules\Shipment\Http\Controllers\StaffDeliveryLifecycleController;
 use Modules\Shipment\Http\Controllers\TransferController;
+use Modules\Shipment\Http\Controllers\TransferPlanningController;
 
 /*
 |--------------------------------------------------------------------------
@@ -81,9 +82,6 @@ Route::prefix('v1/admin')
             Route::get('transfers/stats', [TransferController::class, 'stats'])
                 ->name('transfers.stats');
 
-            Route::get('transfers/network-overview', [TransferController::class, 'networkOverview'])
-                ->name('transfers.network-overview');
-
             Route::get('transfers/summary', [TransferController::class, 'summary'])
                 ->name('transfers.summary');
 
@@ -108,6 +106,20 @@ Route::prefix('v1/admin')
             // Live Transport Control Tower & Nepal network overview
             Route::get('transfers/network-overview', [TransferController::class, 'networkOverview'])
                 ->name('transfers.network-overview');
+
+
+Route::get('transfers/planning/demand', [TransferPlanningController::class, 'demand'])->name('transfers.planning.demand.index');
+Route::get('transfers/planning/recommend', [TransferPlanningController::class, 'recommend'])->name('transfers.planning.recommend.index');
+Route::get('transfers/planning/corridors', [TransferPlanningController::class, 'corridors'])->name('transfers.planning.corridors.index');
+Route::get('transfers/planning/analytics', [TransferPlanningController::class, 'analytics'])->name('transfers.planning.analytics.index');
+Route::get('transfers/planning/analytics/export', [TransferPlanningController::class, 'analyticsExport'])->name('transfers.planning.analytics.download');
+Route::post('transfers/planning/runs', [TransferPlanningController::class, 'storeRun'])->name('transfers.planning.runs.store.dispatch');
+Route::post('transfers/planning/accept', [TransferPlanningController::class, 'acceptPlan'])->name('transfers.planning.accept.dispatch');
+Route::get('transfers/planning/runs', [TransferPlanningController::class, 'runs'])->name('transfers.planning.runs.index');
+Route::get('transfers/planning/runs/{run}', [TransferPlanningController::class, 'showRun'])->whereNumber('run')->name('transfers.planning.runs.show');
+Route::post('transfers/planning/runs/{run}/dispatch', [TransferPlanningController::class, 'dispatchRun'])->whereNumber('run')->name('transfers.planning.runs.dispatch');
+Route::post('transfers/planning/runs/{run}/cancel', [TransferPlanningController::class, 'cancelRun'])->whereNumber('run')->name('transfers.planning.runs.cancel.dispatch');
+Route::post('transfers/planning/runs/{run}/continue', [TransferPlanningController::class, 'continueRun'])->whereNumber('run')->name('transfers.planning.runs.continue.dispatch');
 
             // Branch Transfer Requests (Vehicle request & transport manager queue)
             Route::get('transfers/requests', [TransferController::class, 'transferRequests'])

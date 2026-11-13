@@ -454,7 +454,7 @@ final class SeedNepalNetworkCommand extends Command
                 }
                 $destBranch = $branchMap[$targetCode];
 
-                Shipment::create([
+                $shipmentData = [
                     'tracking_number'       => 'TUK' . strtoupper(Str::random(9)),
                     'status'                => 'sorted_for_transfer',
                     'service_type'          => (rand(1, 10) > 7) ? 'express' : 'standard',
@@ -464,10 +464,17 @@ final class SeedNepalNetworkCommand extends Command
                     'weight'                => rand(5, 50) / 10.0,
                     'chargeable_weight'     => rand(5, 50) / 10.0,
                     'sender_name'           => 'Nepal Trader ' . rand(100, 999),
-                    'recipient_name'        => 'Customer ' . rand(100, 999),
-                    'recipient_phone'       => '98' . rand(10000000, 99999999),
-                    'delivery_address'      => $destBranch->city . ', Nepal',
-                ]);
+                    'receiver_name'         => 'Customer ' . rand(100, 999),
+                    'receiver_phone'        => '98' . rand(10000000, 99999999),
+                ];
+
+                if (Schema::hasColumn('shipments', 'delivery_address')) {
+                    $shipmentData['delivery_address'] = $destBranch->city . ', Nepal';
+                } elseif (Schema::hasColumn('shipments', 'receiver_address')) {
+                    $shipmentData['receiver_address'] = $destBranch->city . ', Nepal';
+                }
+
+                Shipment::create($shipmentData);
             }
         }
     }

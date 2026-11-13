@@ -8,6 +8,7 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
+use Modules\Branch\Enums\BranchType;
 use Modules\Branch\Models\Branch;
 use Modules\Branch\Models\CoverageLocation;
 use Modules\Dispatch\Models\DispatchManifest;
@@ -41,7 +42,7 @@ final class SeedNepalNetworkCommand extends Command
 
             $branch->fill([
                 'name' => $b['name'],
-                'type' => $isMain ? 'head_office' : 'branch',
+                'type' => $isMain ? BranchType::HeadBranch : BranchType::FranchiseBranch,
                 'status' => 'active',
                 'province' => $b['province'],
                 'district' => $b['district'],

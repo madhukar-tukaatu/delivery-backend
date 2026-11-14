@@ -10,13 +10,15 @@ use Modules\Shipment\Services\PaymentWorkflowService;
 
 class AccountsPaymentLifecycleController extends Controller
 {
-    public function codPending(): JsonResponse
+    public function codPending(Request $request): JsonResponse
     {
+        $limit = min(max((int) $request->input('per_page', 50), 1), 200);
         $rows = DB::table('pod_transactions')
             ->join('shipments', 'shipments.id', '=', 'pod_transactions.shipment_id')
             ->whereIn('pod_transactions.status', ['collected_pending_deposit', 'pending_collection'])
             ->select('pod_transactions.*', 'shipments.tracking_number', 'shipments.customer_name')
             ->latest('pod_transactions.id')
+            ->limit($limit)
             ->get();
 
         return response()->json(['data' => $rows]);
@@ -34,9 +36,10 @@ class AccountsPaymentLifecycleController extends Controller
         return response()->json(['message' => 'POD deposit confirmed.', 'data' => $row]);
     }
 
-    public function settlements(): JsonResponse
+    public function settlements(Request $request): JsonResponse
     {
-        $rows = DB::table('merchant_settlements')->latest('id')->get();
+        $limit = min(max((int) $request->input('per_page', 50), 1), 200);
+        $rows = DB::table('merchant_settlements')->latest('id')->limit($limit)->get();
 
         return response()->json(['data' => $rows]);
     }

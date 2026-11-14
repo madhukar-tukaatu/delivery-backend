@@ -38,12 +38,14 @@ class PaymentWorkflowService
     {
         $from = $payload['period_from'] ?? now()->startOfMonth()->toDateString();
         $to = $payload['period_to'] ?? now()->toDateString();
+        $fromTime = \Illuminate\Support\Carbon::parse($from)->startOfDay()->toDateTimeString();
+        $toTime = \Illuminate\Support\Carbon::parse($to)->endOfDay()->toDateTimeString();
 
         $rows = DB::table('pod_transactions')
             ->join('shipments', 'shipments.id', '=', 'pod_transactions.shipment_id')
             ->where('pod_transactions.merchant_id', $merchantId)
             ->where('pod_transactions.status', 'deposited')
-            ->whereBetween(DB::raw('DATE(pod_transactions.deposited_at)'), [$from, $to])
+            ->whereBetween('pod_transactions.deposited_at', [$fromTime, $toTime])
             ->select('pod_transactions.*', 'shipments.delivery_charge')
             ->get();
 

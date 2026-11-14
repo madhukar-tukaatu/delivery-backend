@@ -759,16 +759,32 @@ final class TransferPlanningService
 
     private function waitingShipments(int $scopeBranchId, ?int $originBranchId, ?string $serviceType): Collection
     {
-        $query = Shipment::query();
+        $query = Shipment::query()->select([
+            'id',
+            'origin_branch_id',
+            'origin_sub_branch_id',
+            'destination_branch_id',
+            'destination_sub_branch_id',
+            'current_branch_id',
+            'current_sub_branch_id',
+            'service_type',
+            'weight',
+            'chargeable_weight',
+            'sorted_at',
+            'updated_at',
+            'created_at',
+            'tracking_number',
+        ]);
         $this->applyOutboundScope($query, $originBranchId ?: $scopeBranchId);
         if ($serviceType) {
             $query->where('service_type', $serviceType);
         }
         if (Schema::hasTable('dispatch_manifest_items')) {
-            $query->whereNotIn('id', function ($q) {
-                $q->select('dmi.shipment_id')
+            $query->whereNotExists(function ($q) {
+                $q->selectRaw('1')
                     ->from('dispatch_manifest_items as dmi')
                     ->join('dispatch_manifests as dm', 'dm.id', '=', 'dmi.dispatch_manifest_id')
+                    ->whereColumn('dmi.shipment_id', 'shipments.id')
                     ->whereIn('dmi.status', ['sent', 'dispatched', 'in_transit', 'draft', 'pending', 'added'])
                     ->whereIn('dm.status', ['open', 'draft', 'dispatched', 'in_transit', 'partially_received', 'pending', 'created']);
             });

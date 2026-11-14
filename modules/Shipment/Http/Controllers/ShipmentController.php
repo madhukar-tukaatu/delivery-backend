@@ -121,52 +121,58 @@ final class ShipmentController extends Controller
         |--------------------------------------------------------------------------
         */
 
-        $facetBase = (clone $scopedBase)->setEagerLoads([]);
-        $facetBase->getQuery()->orders = null;
+        $isGlobal = $this->isGlobalAdmin($user);
+        $userBranchId = $isGlobal ? 0 : ($this->resolveUserBranchId($user) ?: 0);
 
-        $merchantIds = (clone $facetBase)
-            ->whereNotNull('merchant_id')
-            ->distinct()
-            ->limit(500)
-            ->pluck('merchant_id')
-            ->all();
+        $branches = \Illuminate\Support\Facades\Cache::remember(
+            "shipments.facets.branches.{$userBranchId}",
+            300,
+            function () use ($isGlobal, $userBranchId) {
+                $bQuery = \Modules\Branch\Models\Branch::query()->where('status', 'active')->orderBy('name');
+                if (! $isGlobal && $userBranchId > 0) {
+                    $bQuery->where(function ($q) use ($userBranchId) {
+                        $q->where('id', $userBranchId)->orWhere('parent_id', $userBranchId);
+                    });
+                }
+                return $bQuery->get(['id', 'name'])->map(fn($b) => [
+                    'id'   => $b->id,
+                    'name' => $b->name,
+                ])->values()->all();
+            }
+        );
 
-        $merchants = $merchantIds
-            ? \Modules\Merchant\Models\Merchant::query()
-                ->whereIn('id', $merchantIds)
-                ->orderBy('name')
-                ->get(['id', 'name', 'code'])
-                ->map(fn($merchant) => [
-                    'id'   => $merchant->id,
-                    'name' => $merchant->name,
-                    'code' => $merchant->code,
-                ])
-                ->values()
-                ->all()
-            : [];
+        $merchants = \Illuminate\Support\Facades\Cache::remember(
+            "shipments.facets.merchants.{$userBranchId}",
+            180,
+            function () use ($isGlobal, $scopedBase) {
+                if ($isGlobal) {
+                    return \Modules\Merchant\Models\Merchant::query()
+                        ->orderBy('name')
+                        ->limit(300)
+                        ->get(['id', 'name', 'code'])
+                        ->map(fn($m) => [
+                            'id'   => $m->id,
+                            'name' => $m->name,
+                            'code' => $m->code,
+                        ])->values()->all();
+                }
 
-        $branchIds = collect(['origin_branch_id', 'destination_branch_id', 'current_branch_id'])
-            ->flatMap(fn($column) => (clone $facetBase)
-                    ->whereNotNull($column)
-                    ->distinct()
-                    ->limit(500)
-                    ->pluck($column))
-            ->unique()
-            ->values()
-            ->all();
-
-        $branches = $branchIds
-            ? \Modules\Branch\Models\Branch::query()
-                ->whereIn('id', $branchIds)
-                ->orderBy('name')
-                ->get(['id', 'name'])
-                ->map(fn($branch) => [
-                    'id'   => $branch->id,
-                    'name' => $branch->name,
-                ])
-                ->values()
-                ->all()
-            : [];
+                $facetBase = (clone $scopedBase)->setEagerLoads([]);
+                $facetBase->getQuery()->orders = null;
+                $merchantIds = $facetBase->whereNotNull('merchant_id')->distinct()->limit(150)->pluck('merchant_id')->all();
+                return $merchantIds
+                    ? \Modules\Merchant\Models\Merchant::query()
+                        ->whereIn('id', $merchantIds)
+                        ->orderBy('name')
+                        ->get(['id', 'name', 'code'])
+                        ->map(fn($m) => [
+                            'id'   => $m->id,
+                            'name' => $m->name,
+                            'code' => $m->code,
+                        ])->values()->all()
+                    : [];
+            }
+        );
 
         return ApiResponse::success(array_merge(
             $shipments->toArray(),

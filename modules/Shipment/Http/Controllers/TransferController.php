@@ -2704,12 +2704,13 @@ final class TransferController extends Controller
             // Parcels waiting to transfer — same scope as the Transfers outbound board
             $waitingQuery = Shipment::query();
             $this->applyOutboundScope($waitingQuery, $scopeBranchId);
-            $totalParcelsWaiting = (int) (clone $waitingQuery)->count();
 
-            $waitingRows = (clone $waitingQuery)
+            $waitingRows = $waitingQuery
                 ->selectRaw('COALESCE(current_branch_id, origin_branch_id) as br_id, COUNT(*) as cnt, SUM(COALESCE(weight, chargeable_weight, 1)) as total_wt')
                 ->groupBy('br_id')
                 ->get();
+
+            $totalParcelsWaiting = (int) $waitingRows->sum('cnt');
 
             $outboundCounts = $this->remapCountsToOperational($waitingRows->pluck('cnt', 'br_id'));
             $outboundWeights = $this->remapCountsToOperational($waitingRows->pluck('total_wt', 'br_id'));
@@ -2854,42 +2855,21 @@ final class TransferController extends Controller
             };
 
             $readyForTransfer = $totalParcelsWaiting;
-            $inTransitShipments = (int) $scopeShipments($crossBranch(Shipment::query()))
-                ->whereIn('status', [
-                    CourierStatus::IN_TRANSIT,
-                    CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
-                ])->count();
-            $atHub = (int) $scopeShipments($crossBranch(Shipment::query()))
-                ->where('status', CourierStatus::RECEIVED_AT_TRANSIT_HUB)
-                ->count();
-            $arrived = (int) $scopeShipments($crossBranch(Shipment::query()))
-                ->whereIn('status', [
-                    CourierStatus::RECEIVED_AT_DESTINATION_BRANCH,
-                    CourierStatus::RECEIVED_AT_DESTINATION_SUB_BRANCH,
-                ])->count();
-            $deliveredTodayQuery = $crossBranch(Shipment::query())
-                ->where('status', CourierStatus::DELIVERED)
-                ->whereDate('delivered_at', now()->toDateString());
-            if ($scopeBranchId !== 0) {
-                $deliveredTodayQuery->where(function ($q) use ($scopeIds) {
-                    $q->whereIn('origin_branch_id', $scopeIds)
-                        ->orWhereIn('destination_branch_id', $scopeIds);
-                });
-            }
-            $deliveredToday = (int) $deliveredTodayQuery->count();
 
-            $freightQuery = Shipment::query()->whereColumn('origin_branch_id', '!=', 'destination_branch_id')
-                ->whereIn('status', [
-                    CourierStatus::SORTED_FOR_TRANSFER,
-                    CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
-                    CourierStatus::RECEIVED_AT_ORIGIN_SUB_BRANCH,
-                    CourierStatus::RECEIVED_AT_TRANSIT_HUB,
-                    CourierStatus::PICKED_UP,
-                    CourierStatus::IN_TRANSIT,
-                    CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
-                ]);
-            $scopeShipments($freightQuery);
-            $totalTransferFreightKg = (float) $freightQuery->sum(DB::raw('COALESCE(weight, chargeable_weight, 1)'));
+            $statsAgg = $scopeShipments($crossBranch(Shipment::query()))
+                ->selectRaw("
+                    COUNT(CASE WHEN status IN ('" . CourierStatus::IN_TRANSIT . "', '" . CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH . "') THEN 1 END) as in_transit_cnt,
+                    COUNT(CASE WHEN status = '" . CourierStatus::RECEIVED_AT_TRANSIT_HUB . "' THEN 1 END) as at_hub_cnt,
+                    COUNT(CASE WHEN status IN ('" . CourierStatus::RECEIVED_AT_DESTINATION_BRANCH . "', '" . CourierStatus::RECEIVED_AT_DESTINATION_SUB_BRANCH . "') THEN 1 END) as arrived_cnt,
+                    COUNT(CASE WHEN status = '" . CourierStatus::DELIVERED . "' AND DATE(delivered_at) = CURRENT_DATE THEN 1 END) as delivered_today_cnt,
+                    SUM(CASE WHEN status IN ('" . CourierStatus::SORTED_FOR_TRANSFER . "', '" . CourierStatus::RECEIVED_AT_ORIGIN_BRANCH . "', '" . CourierStatus::RECEIVED_AT_ORIGIN_SUB_BRANCH . "', '" . CourierStatus::RECEIVED_AT_TRANSIT_HUB . "', '" . CourierStatus::PICKED_UP . "', '" . CourierStatus::IN_TRANSIT . "', '" . CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH . "') THEN COALESCE(weight, chargeable_weight, 1) ELSE 0 END) as total_freight
+                ")->first();
+
+            $inTransitShipments = (int) ($statsAgg->in_transit_cnt ?? 0);
+            $atHub = (int) ($statsAgg->at_hub_cnt ?? 0);
+            $arrived = (int) ($statsAgg->arrived_cnt ?? 0);
+            $deliveredToday = (int) ($statsAgg->delivered_today_cnt ?? 0);
+            $totalTransferFreightKg = (float) ($statsAgg->total_freight ?? 0.0);
 
             $totalMovingTrucks = $inTransitTrs->count();
             $totalMovingParcels = (int) $inTransitTrs->sum('expected_count');

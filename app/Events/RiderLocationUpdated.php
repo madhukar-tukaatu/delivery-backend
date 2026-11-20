@@ -21,6 +21,7 @@ class RiderLocationUpdated implements ShouldBroadcastNow
         public ?float $speed = null,
         public ?string $trackingNumber = null,
         public ?string $riderName = null,
+        public ?int $runId = null,
     ) {}
 
     public function broadcastOn(): array
@@ -29,6 +30,11 @@ class RiderLocationUpdated implements ShouldBroadcastNow
             new PrivateChannel("rider.{$this->riderId}.location"),
             new Channel("rider.{$this->riderId}.public-location"),
         ];
+
+        if ($this->runId) {
+            $channels[] = new Channel("delivery-runs.{$this->runId}.location");
+            $channels[] = new Channel("runs.{$this->runId}");
+        }
 
         if ($this->shipmentId) {
             $channels[] = new PrivateChannel("shipments.{$this->shipmentId}");
@@ -52,6 +58,7 @@ class RiderLocationUpdated implements ShouldBroadcastNow
         return [
             'rider_id' => $this->riderId,
             'rider_name' => $this->riderName,
+            'run_id' => $this->runId,
             'shipment_id' => $this->shipmentId,
             'tracking_number' => $this->trackingNumber,
             'lat' => $this->lat,

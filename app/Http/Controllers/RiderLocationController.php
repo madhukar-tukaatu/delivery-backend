@@ -16,7 +16,17 @@ class RiderLocationController extends Controller
     {
         $user = $request->user();
 
-        if (!$user->hasRole('delivery_rider') && !$user->hasRole('rider')) {
+        $roles = method_exists($user, 'roleNames') ? $user->roleNames() : (array) ($user->role ?? []);
+        $isRider = in_array('rider', $roles)
+            || in_array('delivery_rider', $roles)
+            || in_array('delivery-rider', $roles)
+            || ($user->role === 'rider')
+            || (method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin())
+            || in_array('super_admin', $roles)
+            || in_array('super-admin', $roles)
+            || in_array('admin', $roles);
+
+        if (!$isRider) {
             abort(403, 'Only riders can update live location.');
         }
 
@@ -25,12 +35,14 @@ class RiderLocationController extends Controller
             'lng' => ['required', 'numeric', 'between:-180,180'],
             'shipment_id' => ['nullable', 'integer'],
             'tracking_number' => ['nullable', 'string', 'max:191'],
+            'run_id' => ['nullable', 'integer'],
             'heading' => ['nullable', 'numeric'],
             'speed' => ['nullable', 'numeric'],
         ]);
 
         $shipmentId = $data['shipment_id'] ?? null;
         $trackingNumber = $data['tracking_number'] ?? null;
+        $runId = $data['run_id'] ?? null;
         $shipment = null;
 
         if ($trackingNumber) {
@@ -45,7 +57,35 @@ class RiderLocationController extends Controller
             }
         }
 
-        // If no shipment was explicitly passed, find the active out_for_delivery assignment for this rider
+        // If no explicit run was passed, find rider's active out_for_delivery or in_progress delivery run
+        $activeRun = null;
+        if ($runId) {
+            $activeRun = \Modules\Delivery\Models\DeliveryRun::with(['items.shipment'])->find($runId);
+        } else {
+            $activeRun = \Modules\Delivery\Models\DeliveryRun::query()
+                ->where('rider_user_id', $user->id)
+                ->whereIn('status', ['out_for_delivery', 'in_progress', 'assigned'])
+                ->with(['items.shipment'])
+                ->latest('id')
+                ->first();
+            if ($activeRun) {
+                $runId = $activeRun->id;
+            }
+        }
+
+        // If no shipment was explicitly passed, get it from active run items or legacy assignment
+        if (!$shipment && $activeRun && $activeRun->items) {
+            $activeItem = $activeRun->items->first(function ($it) {
+                return $it->shipment && in_array($it->status, ['out_for_delivery', 'assigned', 'pending']);
+            }) ?? $activeRun->items->first();
+
+            if ($activeItem && $activeItem->shipment) {
+                $shipment = $activeItem->shipment;
+                $shipmentId = $shipment->id;
+                $trackingNumber = $shipment->tracking_number;
+            }
+        }
+
         if (!$shipment) {
             $activeAssignment = DeliveryAssignment::query()
                 ->where('rider_id', $user->id)
@@ -62,11 +102,12 @@ class RiderLocationController extends Controller
         }
 
         $nowIso = now()->toISOString();
-        $ttlSeconds = 600; // 10 minutes
+        $ttlSeconds = 900; // 15 minutes
 
         $riderPayload = [
             'rider_id' => (string) $user->id,
             'rider_name' => (string) $user->name,
+            'run_id' => (string) ($runId ?? ''),
             'lat' => (string) $data['lat'],
             'lng' => (string) $data['lng'],
             'shipment_id' => (string) ($shipmentId ?? ''),
@@ -85,6 +126,16 @@ class RiderLocationController extends Controller
             Redis::expire($riderKey, $ttlSeconds);
         } catch (\Throwable $e) {
             Log::debug('Redis rider location save skipped: ' . $e->getMessage());
+        }
+
+        // 1b. Cache run-level location if runId is known
+        if ($runId) {
+            $runKey = "run:{$runId}:location";
+            Cache::put($runKey, $riderPayload, $ttlSeconds);
+            try {
+                Redis::hmset($runKey, $riderPayload);
+                Redis::expire($runKey, $ttlSeconds);
+            } catch (\Throwable $e) {}
         }
 
         // 2. Cache shipment-level location in Laravel Cache & Redis if shipment exists
@@ -124,6 +175,7 @@ class RiderLocationController extends Controller
             speed: isset($data['speed']) ? (float) $data['speed'] : null,
             trackingNumber: $trackingNumber,
             riderName: $user->name,
+            runId: $runId ? (int) $runId : null,
         ));
 
         return response()->json([

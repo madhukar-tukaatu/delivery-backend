@@ -1244,15 +1244,28 @@ final class DeliveryRunService
         $run->loadMissing(['branch:id,name,code,phone,address,latitude,longitude', 'rider:id,name,phone']);
 
         $riderLocation = null;
-        if ($run->rider_user_id) {
-            $cached = Cache::get("rider:{$run->rider_user_id}:location");
-            if (!$cached) {
+        if ($run->rider_user_id || $run->id) {
+            $cached = $run->rider_user_id ? Cache::get("rider:{$run->rider_user_id}:location") : null;
+            if (!$cached && $run->rider_user_id) {
                 try {
                     $redisLoc = \Illuminate\Support\Facades\Redis::hgetall("rider:{$run->rider_user_id}:location");
                     if (!empty($redisLoc['lat']) && !empty($redisLoc['lng'])) {
                         $cached = $redisLoc;
                     }
                 } catch (\Throwable $e) {}
+            }
+
+            // Fallback: check run location
+            if (!$cached && $run->id) {
+                $cached = Cache::get("run:{$run->id}:location");
+                if (!$cached) {
+                    try {
+                        $runLoc = \Illuminate\Support\Facades\Redis::hgetall("run:{$run->id}:location");
+                        if (!empty($runLoc['lat']) && !empty($runLoc['lng'])) {
+                            $cached = $runLoc;
+                        }
+                    } catch (\Throwable $e) {}
+                }
             }
 
             // Fallback: check active shipment locations in this run

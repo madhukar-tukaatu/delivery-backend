@@ -157,6 +157,8 @@ final class ShipmentCallbackService
                 'pod_amount' => (float) $shipment->pod_amount,
                 'delivery_charge' => (float) $shipment->delivery_charge,
                 'total_collectable_amount' => (float) $shipment->total_collectable_amount,
+                'tracking_url' => url('/track/' . $shipment->tracking_number),
+                'websocket_channel' => 'tracking.' . $shipment->tracking_number,
             ],
             'data' => $data,
             'delivery' => [

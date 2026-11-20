@@ -162,7 +162,8 @@ final class AuthenticateMarketplaceApiKey
         if (
             !empty($scopes) &&
             !in_array('*', $scopes, true) &&
-            !in_array($scope, $scopes, true)
+            !in_array($scope, $scopes, true) &&
+            !($scope === 'tracking' && (in_array('pricing', $scopes, true) || in_array('billing', $scopes, true)))
         ) {
             return $this->error(
                 'This marketplace key cannot access ' . $scope . ' APIs.',

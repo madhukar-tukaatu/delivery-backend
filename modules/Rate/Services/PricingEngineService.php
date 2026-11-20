@@ -224,6 +224,11 @@ final class PricingEngineService
             )
         );
 
+        $this->assertWithinWeightLimit(
+            totalChargeableWeightKg: $totalChargeableWeightKg,
+            settings: $settings
+        );
+
         /*
          * Step 4: The included base weight applies once to the
          * shipment, not separately to every packet.
@@ -496,7 +501,12 @@ final class PricingEngineService
         //     $minimumPacketCharge['total'],
         //     2
         // );
-        $finalPrice = $subtotalAfterSameDay;
+        $deliveryChargeBounds = $this->applyDeliveryChargeBounds(
+            calculatedPrice: $subtotalAfterSameDay,
+            settings: $settings
+        );
+
+        $finalPrice = $deliveryChargeBounds['final_price'];
 
         $estimatedHours = $transferRoute !== null
             ? max(
@@ -644,6 +654,9 @@ final class PricingEngineService
 
             'pricing_setting' =>
                 $this->settingsSummary($settings),
+
+            'pricing_limits' =>
+                $this->limitsFromSettings($settings),
 
             'base_rate_mode' =>
                 $baseRateMode,
@@ -875,6 +888,9 @@ final class PricingEngineService
                         $subtotalAfterSameDay,
                         2
                     ),
+
+                'delivery_charge_bounds' =>
+                    $deliveryChargeBounds,
                 // 'minimum_packet_charge' =>
                 //     $minimumPacketCharge,
 
@@ -885,6 +901,16 @@ final class PricingEngineService
             'final_price' =>
                 $finalPrice,
         ];
+    }
+
+    /**
+     * Expose active dynamic pricing limits for public and marketplace consumers.
+     */
+    public function activePricingLimits(): array
+    {
+        $settings = $this->activeSettings();
+
+        return $this->limitsFromSettings($settings);
     }
 
     /**
@@ -932,6 +958,9 @@ final class PricingEngineService
             'other_branch_sdd_multiplier' => ['transfer_same_day_multiplier', 'other_branch_sdd_multiplier', 'same_day_transfer_branch_multiplier'],
             'minimum_pickup_packets' => ['minimum_free_pickup_packets', 'minimum_pickup_packets', 'minimum_pickup_packet_count'],
             'low_packet_pickup_charge' => ['small_pickup_charge', 'low_packet_pickup_charge'],
+            'max_weight_kg' => ['max_weight_kg'],
+            'min_delivery_charge' => ['min_delivery_charge'],
+            'max_delivery_charge' => ['max_delivery_charge'],
         ];
 
         $settings = clone $row;
@@ -972,6 +1001,123 @@ final class PricingEngineService
     }
 
     /**
+     * Boolean toggle on the active setting; missing column means disabled.
+     */
+    private function optInSettingEnabled(object $settings, string $column): bool
+    {
+        if (! property_exists($settings, $column) || $settings->{$column} === null) {
+            return false;
+        }
+
+        return filter_var($settings->{$column}, FILTER_VALIDATE_BOOLEAN);
+    }
+
+    /**
+     * Normalized pricing limits summary from an active settings row.
+     */
+    private function limitsFromSettings(object $settings): array
+    {
+        $weightLimitEnabled = $this->optInSettingEnabled($settings, 'weight_limit_enabled');
+        $maxWeightKg = ($settings->max_weight_kg !== null && (float) $settings->max_weight_kg > 0)
+            ? round((float) $settings->max_weight_kg, 2)
+            : null;
+
+        $boundsEnabled = $this->optInSettingEnabled($settings, 'delivery_charge_bounds_enabled');
+        $minDeliveryCharge = max(0, round((float) ($settings->min_delivery_charge ?? 0), 2));
+        $maxDeliveryCharge = ($settings->max_delivery_charge !== null && (float) $settings->max_delivery_charge > 0)
+            ? round((float) $settings->max_delivery_charge, 2)
+            : null;
+
+        return [
+            'pricing_setting_id' => isset($settings->id) ? (int) $settings->id : null,
+            'pricing_setting_name' => $settings->name ?? null,
+            'currency' => 'NPR',
+            'base_weight_kg' => round((float) ($settings->included_weight_kg ?? 1.5), 2),
+            'weight_limit_enabled' => $weightLimitEnabled && $maxWeightKg !== null,
+            'max_weight_kg' => $maxWeightKg,
+            'delivery_charge_bounds_enabled' => $boundsEnabled,
+            'min_delivery_charge' => $minDeliveryCharge,
+            'max_delivery_charge' => $maxDeliveryCharge,
+            'updated_at' => isset($settings->updated_at) ? (string) $settings->updated_at : null,
+        ];
+    }
+
+    /**
+     * Enforce the active dynamic maximum chargeable weight limit when enabled.
+     */
+    private function assertWithinWeightLimit(
+        float $totalChargeableWeightKg,
+        object $settings
+    ): void {
+        if (! $this->optInSettingEnabled($settings, 'weight_limit_enabled')) {
+            return;
+        }
+
+        $maxWeightKg = $settings->max_weight_kg !== null
+            ? (float) $settings->max_weight_kg
+            : 0.0;
+
+        if ($maxWeightKg <= 0 || $totalChargeableWeightKg <= $maxWeightKg) {
+            return;
+        }
+
+        $actualFormatted = rtrim(rtrim(number_format($totalChargeableWeightKg, 3, '.', ''), '0'), '.');
+        $limitFormatted = rtrim(rtrim(number_format($maxWeightKg, 2, '.', ''), '0'), '.');
+
+        $message = sprintf(
+            'Total chargeable weight (%s kg) exceeds the maximum allowed weight limit of %s kg.',
+            $actualFormatted,
+            $limitFormatted
+        );
+
+        throw ValidationException::withMessages([
+            'parcel_weight' => [$message],
+            'weight_limit' => [$message],
+        ]);
+    }
+
+    /**
+     * Apply dynamic min/max delivery charge bounds when enabled.
+     */
+    private function applyDeliveryChargeBounds(
+        float $calculatedPrice,
+        object $settings
+    ): array {
+        $originalPrice = round(max(0, $calculatedPrice), 2);
+        $enabled = $this->optInSettingEnabled($settings, 'delivery_charge_bounds_enabled');
+        $minCharge = max(0, round((float) ($settings->min_delivery_charge ?? 0), 2));
+        $maxCharge = ($settings->max_delivery_charge !== null && (float) $settings->max_delivery_charge > 0)
+            ? round((float) $settings->max_delivery_charge, 2)
+            : null;
+
+        $finalPrice = $originalPrice;
+        $adjustmentType = null;
+
+        if ($enabled) {
+            if ($minCharge > 0 && $finalPrice < $minCharge) {
+                $finalPrice = $minCharge;
+                $adjustmentType = 'min_floor';
+            }
+
+            if ($maxCharge !== null && $finalPrice > $maxCharge) {
+                $finalPrice = $maxCharge;
+                $adjustmentType = 'max_cap';
+            }
+        }
+
+        return [
+            'enabled' => $enabled,
+            'applied' => $adjustmentType !== null,
+            'adjustment_type' => $adjustmentType,
+            'min_delivery_charge' => $minCharge,
+            'max_delivery_charge' => $maxCharge,
+            'price_before_bounds' => $originalPrice,
+            'adjustment_amount' => round($finalPrice - $originalPrice, 2),
+            'final_price' => round($finalPrice, 2),
+        ];
+    }
+
+    /**
      * Which active pricing setting (and which values) priced this quote.
      */
     private function settingsSummary(object $settings): array
@@ -982,8 +1128,13 @@ final class PricingEngineService
             'included_delivery_distance_km' => (float) ($settings->included_delivery_distance_km ?? 5),
             'extra_distance_rate_per_km' => (float) ($settings->extra_distance_rate_per_km ?? 6),
             'included_weight_kg' => (float) ($settings->included_weight_kg ?? 1.5),
+            'max_weight_kg' => $settings->max_weight_kg !== null ? (float) $settings->max_weight_kg : null,
+            'weight_limit_enabled' => $this->optInSettingEnabled($settings, 'weight_limit_enabled'),
             'same_branch_weight_rate' => (float) ($settings->same_branch_weight_rate ?? 20),
             'other_branch_weight_rate' => (float) ($settings->other_branch_weight_rate ?? 30),
+            'min_delivery_charge' => (float) ($settings->min_delivery_charge ?? 0),
+            'max_delivery_charge' => $settings->max_delivery_charge !== null ? (float) $settings->max_delivery_charge : null,
+            'delivery_charge_bounds_enabled' => $this->optInSettingEnabled($settings, 'delivery_charge_bounds_enabled'),
             'value_sources' => $settings->_value_sources ?? [],
         ];
     }

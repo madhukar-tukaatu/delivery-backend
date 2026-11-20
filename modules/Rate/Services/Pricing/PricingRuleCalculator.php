@@ -105,6 +105,29 @@ final class PricingRuleCalculator
             (string) ($settings->money_rounding ?? 'round')
         );
 
+        $weightLimitEnabled = filter_var(
+            $settings->weight_limit_enabled ?? false,
+            FILTER_VALIDATE_BOOLEAN
+        );
+        $maxWeightKg = ($settings->max_weight_kg !== null && (float) $settings->max_weight_kg > 0)
+            ? (float) $settings->max_weight_kg
+            : null;
+
+        if ($weightLimitEnabled && $maxWeightKg !== null && $parcelWeight > $maxWeightKg) {
+            $actualFormatted = rtrim(rtrim(number_format($parcelWeight, 3, '.', ''), '0'), '.');
+            $limitFormatted = rtrim(rtrim(number_format($maxWeightKg, 2, '.', ''), '0'), '.');
+            $message = sprintf(
+                'Total chargeable weight (%s kg) exceeds the maximum allowed weight limit of %s kg.',
+                $actualFormatted,
+                $limitFormatted
+            );
+
+            throw ValidationException::withMessages([
+                'parcel_weight' => [$message],
+                'weight_limit' => [$message],
+            ]);
+        }
+
         $excessWeight = max(
             0,
             $parcelWeight - $baseWeightKg
@@ -284,10 +307,36 @@ final class PricingRuleCalculator
                 )
                 : 0.0;
 
-        $finalPrice = $this->applyMoneyRounding(
+        $roundedBeforeBounds = $this->applyMoneyRounding(
             $subtotalBeforeVat,
             $moneyRounding
         );
+
+        $boundsEnabled = filter_var(
+            $settings->delivery_charge_bounds_enabled ?? false,
+            FILTER_VALIDATE_BOOLEAN
+        );
+        $minDeliveryCharge = max(0, round((float) ($settings->min_delivery_charge ?? 0), 2));
+        $maxDeliveryCharge = ($settings->max_delivery_charge !== null && (float) $settings->max_delivery_charge > 0)
+            ? round((float) $settings->max_delivery_charge, 2)
+            : null;
+
+        $finalPrice = $roundedBeforeBounds;
+        $boundsAdjustmentType = null;
+
+        if ($boundsEnabled) {
+            if ($minDeliveryCharge > 0 && $finalPrice < $minDeliveryCharge) {
+                $finalPrice = $minDeliveryCharge;
+                $boundsAdjustmentType = 'min_floor';
+            }
+
+            if ($maxDeliveryCharge !== null && $finalPrice > $maxDeliveryCharge) {
+                $finalPrice = $maxDeliveryCharge;
+                $boundsAdjustmentType = 'max_cap';
+            }
+        }
+
+        $finalPrice = round($finalPrice, 2);
 
         return [
             'settings_id' => (int) $settings->id,
@@ -298,6 +347,16 @@ final class PricingRuleCalculator
             'branch_transfer_route_id' => $branchTransferRouteId,
             'same_branch' => $sameBranch,
             'base_rate' => $this->money($baseRate),
+            'delivery_charge_bounds' => [
+                'enabled' => $boundsEnabled,
+                'applied' => $boundsAdjustmentType !== null,
+                'adjustment_type' => $boundsAdjustmentType,
+                'min_delivery_charge' => $minDeliveryCharge,
+                'max_delivery_charge' => $maxDeliveryCharge,
+                'price_before_bounds' => $roundedBeforeBounds,
+                'adjustment_amount' => round($finalPrice - $roundedBeforeBounds, 2),
+                'final_price' => $finalPrice,
+            ],
             'weight' => [
                 'parcel_weight_kg' => round($parcelWeight, 3),
                 'base_weight_kg' => round($baseWeightKg, 3),

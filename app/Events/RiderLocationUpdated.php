@@ -2,6 +2,7 @@
 
 namespace App\Events;
 
+use Illuminate\Broadcasting\Channel;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
@@ -18,6 +19,8 @@ class RiderLocationUpdated implements ShouldBroadcastNow
         public ?int $shipmentId = null,
         public ?float $heading = null,
         public ?float $speed = null,
+        public ?string $trackingNumber = null,
+        public ?string $riderName = null,
     ) {}
 
     public function broadcastOn(): array
@@ -26,6 +29,11 @@ class RiderLocationUpdated implements ShouldBroadcastNow
 
         if ($this->shipmentId) {
             $channels[] = new PrivateChannel("shipments.{$this->shipmentId}");
+            $channels[] = new Channel("public-shipments.{$this->shipmentId}");
+        }
+
+        if ($this->trackingNumber) {
+            $channels[] = new Channel("tracking.{$this->trackingNumber}");
         }
 
         return $channels;
@@ -40,7 +48,9 @@ class RiderLocationUpdated implements ShouldBroadcastNow
     {
         return [
             'rider_id' => $this->riderId,
+            'rider_name' => $this->riderName,
             'shipment_id' => $this->shipmentId,
+            'tracking_number' => $this->trackingNumber,
             'lat' => $this->lat,
             'lng' => $this->lng,
             'heading' => $this->heading,

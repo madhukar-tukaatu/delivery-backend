@@ -265,6 +265,10 @@ final class PublicPricingEstimateController extends Controller
                         'name' => data_get($result, 'pricing_setting.name'),
                     ],
 
+                    'pricing_limits'           => data_get($result, 'pricing_limits'),
+
+                    'delivery_charge_bounds'   => data_get($result, 'breakdown.delivery_charge_bounds'),
+
                     'route'                    => [
                         'base_rate'         => round(
                             (float) data_get($result, 'route.base_rate', 0),
@@ -343,6 +347,25 @@ final class PublicPricingEstimateController extends Controller
             return response()->json([
                 'success' => false,
                 'message' => 'The delivery price could not be calculated.',
+            ], 500);
+        }
+    }
+
+    public function limits(PricingEngineService $pricingEngine): JsonResponse
+    {
+        try {
+            return response()->json([
+                'success' => true,
+                'data' => $pricingEngine->activePricingLimits(),
+            ]);
+        } catch (ValidationException $exception) {
+            throw $exception;
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Pricing limits could not be loaded.',
             ], 500);
         }
     }

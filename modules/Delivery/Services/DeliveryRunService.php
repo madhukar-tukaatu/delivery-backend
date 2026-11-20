@@ -9,6 +9,7 @@ use App\Support\CourierStatus;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
@@ -1241,6 +1242,22 @@ final class DeliveryRunService
     public function summarize(DeliveryRun $run, bool $withItems = false): array
     {
         $run->loadMissing(['branch:id,name,code,phone,address,latitude,longitude', 'rider:id,name,phone']);
+
+        $riderLocation = null;
+        if ($run->rider_user_id) {
+            $cached = Cache::get("rider:{$run->rider_user_id}:location");
+            if ($cached && is_array($cached) && !empty($cached['lat']) && !empty($cached['lng'])) {
+                $riderLocation = [
+                    'lat' => (float) $cached['lat'],
+                    'lng' => (float) $cached['lng'],
+                    'heading' => isset($cached['heading']) && is_numeric($cached['heading']) ? (float) $cached['heading'] : null,
+                    'speed' => isset($cached['speed']) && is_numeric($cached['speed']) ? (float) $cached['speed'] : null,
+                    'updated_at' => $cached['updated_at'] ?? null,
+                    'is_live' => true,
+                ];
+            }
+        }
+
         $out = [
             'id' => $run->id,
             'run_number' => $run->run_number,
@@ -1255,6 +1272,7 @@ final class DeliveryRunService
                 'longitude' => $run->branch->longitude ? (float) $run->branch->longitude : null,
             ] : null,
             'rider' => $run->rider ? ['id' => $run->rider->id, 'name' => $run->rider->name, 'phone' => $run->rider->phone] : null,
+            'rider_location' => $riderLocation,
             'vehicle_type' => $run->vehicle_type,
             'vehicle_number' => $run->vehicle_number,
             'area_label' => $run->area_label,

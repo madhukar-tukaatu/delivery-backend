@@ -9,8 +9,23 @@ class StorePricingSettingsRequest extends FormRequest
 {
     protected function prepareForValidation(): void
     {
+        $maxWeight = $this->input('max_weight_kg');
+        $minCharge = $this->input('min_delivery_charge');
+        $maxCharge = $this->input('max_delivery_charge');
+
         $this->merge([
             'vat_inclusive' => true,
+            'max_weight_kg' => ($maxWeight === '' || $maxWeight === null) ? null : $maxWeight,
+            'weight_limit_enabled' => filter_var(
+                $this->input('weight_limit_enabled', false),
+                FILTER_VALIDATE_BOOLEAN
+            ),
+            'min_delivery_charge' => ($minCharge === '' || $minCharge === null) ? 0 : $minCharge,
+            'max_delivery_charge' => ($maxCharge === '' || $maxCharge === null) ? null : $maxCharge,
+            'delivery_charge_bounds_enabled' => filter_var(
+                $this->input('delivery_charge_bounds_enabled', false),
+                FILTER_VALIDATE_BOOLEAN
+            ),
         ]);
     }
 
@@ -21,9 +36,18 @@ class StorePricingSettingsRequest extends FormRequest
 
     public function rules(): array
     {
+        $weightLimitEnabled = (bool) $this->input('weight_limit_enabled', false);
+
         return [
             'name' => ['required', 'string', 'max:255'],
             'base_weight_kg' => ['required', 'numeric', 'min:0'],
+            'max_weight_kg' => [
+                $weightLimitEnabled ? 'required' : 'nullable',
+                'numeric',
+                'gt:0',
+                'gte:base_weight_kg',
+            ],
+            'weight_limit_enabled' => ['required', 'boolean'],
             'base_distance_km' => ['required', 'numeric', 'min:0'],
             'local_extra_weight_rate' => ['required', 'numeric', 'min:0'],
             'transfer_extra_weight_rate' => ['required', 'numeric', 'min:0'],
@@ -36,6 +60,9 @@ class StorePricingSettingsRequest extends FormRequest
             'same_day_cutoff_time' => ['required', 'date_format:H:i'],
             'minimum_free_pickup_packets' => ['required', 'integer', 'min:1'],
             'small_pickup_charge' => ['required', 'numeric', 'min:0'],
+            'min_delivery_charge' => ['required', 'numeric', 'min:0'],
+            'max_delivery_charge' => ['nullable', 'numeric', 'gt:0', 'gte:min_delivery_charge'],
+            'delivery_charge_bounds_enabled' => ['required', 'boolean'],
             'vat_percentage' => ['required', 'numeric', 'min:0', 'max:100'],
             'vat_inclusive' => ['required', 'boolean'],
             'weight_rounding' => [

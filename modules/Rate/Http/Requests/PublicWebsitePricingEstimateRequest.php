@@ -114,7 +114,7 @@ final class PublicWebsitePricingEstimateRequest extends FormRequest
                 'nullable',
                 'numeric',
                 'gt:0',
-                'max:5000',
+                'max:100000',
             ],
 
             'parcel_dimensions' => [

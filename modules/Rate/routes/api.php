@@ -246,6 +246,7 @@ Route::prefix('v1/marketplace/pricing')
         'throttle:marketplace-pricing',
     ])
     ->group(function (): void {
+        Route::get('limits', [MarketplacePricingQuoteController::class, 'limits'])->name('limits');
         Route::post('check', [MarketplacePricingQuoteController::class, 'check'])->name('check');
         Route::post('checkout-quotes', [MarketplacePricingQuoteController::class, 'store'])->name('checkout-quotes.store');
         Route::get('checkout-quotes/{quoteNumber}', [MarketplacePricingQuoteController::class, 'show'])->name('checkout-quotes.show');
@@ -258,6 +259,11 @@ Route::prefix('v1/public/pricing')
         'throttle:30,1',
     ])
     ->group(function (): void {
+        Route::match(
+            ['GET', 'OPTIONS'],
+            'limits',
+            [PublicPricingEstimateController::class, 'limits']
+        )->name('limits');
         Route::match(
             ['POST', 'OPTIONS'],
             'estimate',

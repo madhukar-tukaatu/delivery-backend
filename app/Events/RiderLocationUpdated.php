@@ -25,7 +25,10 @@ class RiderLocationUpdated implements ShouldBroadcastNow
 
     public function broadcastOn(): array
     {
-        $channels = [new PrivateChannel("rider.{$this->riderId}.location")];
+        $channels = [
+            new PrivateChannel("rider.{$this->riderId}.location"),
+            new Channel("rider.{$this->riderId}.public-location"),
+        ];
 
         if ($this->shipmentId) {
             $channels[] = new PrivateChannel("shipments.{$this->shipmentId}");

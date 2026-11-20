@@ -1246,6 +1246,29 @@ final class DeliveryRunService
         $riderLocation = null;
         if ($run->rider_user_id) {
             $cached = Cache::get("rider:{$run->rider_user_id}:location");
+            if (!$cached) {
+                try {
+                    $redisLoc = \Illuminate\Support\Facades\Redis::hgetall("rider:{$run->rider_user_id}:location");
+                    if (!empty($redisLoc['lat']) && !empty($redisLoc['lng'])) {
+                        $cached = $redisLoc;
+                    }
+                } catch (\Throwable $e) {}
+            }
+
+            // Fallback: check active shipment locations in this run
+            if (!$cached && $run->relationLoaded('items')) {
+                foreach ($run->items as $item) {
+                    $tNum = $item->shipment?->tracking_number;
+                    if ($tNum) {
+                        $shipLoc = Cache::get("shipment:{$tNum}:location");
+                        if ($shipLoc && !empty($shipLoc['lat']) && !empty($shipLoc['lng'])) {
+                            $cached = $shipLoc;
+                            break;
+                        }
+                    }
+                }
+            }
+
             if ($cached && is_array($cached) && !empty($cached['lat']) && !empty($cached['lng'])) {
                 $riderLocation = [
                     'lat' => (float) $cached['lat'],

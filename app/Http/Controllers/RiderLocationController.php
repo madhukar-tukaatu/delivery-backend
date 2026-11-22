@@ -38,6 +38,7 @@ class RiderLocationController extends Controller
             'run_id' => ['nullable', 'integer'],
             'heading' => ['nullable', 'numeric'],
             'speed' => ['nullable', 'numeric'],
+            'device_id' => ['nullable', 'string', 'max:120'],
         ]);
 
         $shipmentId = $data['shipment_id'] ?? null;
@@ -71,6 +72,26 @@ class RiderLocationController extends Controller
             if ($activeRun) {
                 $runId = $activeRun->id;
             }
+        }
+
+        // Prevent dual-device session conflict if same rider account is logged in on multiple devices
+        $deviceId = $data['device_id'] ?? null;
+        if ($runId && $deviceId) {
+            $lockKey = "run:{$runId}:active_device";
+            $lastSeenKey = "run:{$runId}:active_device_seen";
+            $activeDev = Cache::get($lockKey);
+            $lastSeen = (int) Cache::get($lastSeenKey, 0);
+
+            if ($activeDev && $activeDev !== $deviceId && (time() - $lastSeen) < 40) {
+                return response()->json([
+                    'message' => 'Concurrent session detected: run is already being actively tracked by the rider mobile device.',
+                    'conflict' => true,
+                    'active_device' => $activeDev,
+                ], 409);
+            }
+
+            Cache::put($lockKey, $deviceId, 1800);
+            Cache::put($lastSeenKey, time(), 1800);
         }
 
         // If no shipment was explicitly passed, get it from active run items or legacy assignment

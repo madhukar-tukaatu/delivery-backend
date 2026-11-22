@@ -46,11 +46,34 @@ class PublicTrackingController extends Controller
             ->latest('id')
             ->first();
 
+        // Also resolve rider and run from modern Delivery Run
+        $rider = $activeAssignment?->rider;
+        $riderId = $activeAssignment?->rider_id;
+        $runId = null;
+
+        $runItem = \Modules\Delivery\Models\DeliveryRunItem::query()
+            ->where('shipment_id', $shipment->id)
+            ->where('status', '!=', \Modules\Delivery\Models\DeliveryRunItem::STATUS_REMOVED)
+            ->with(['deliveryRun.rider'])
+            ->latest('id')
+            ->first();
+
+        if ($runItem && $runItem->deliveryRun) {
+            $runId = $runItem->delivery_run_id;
+            if (!$rider && $runItem->deliveryRun->rider) {
+                $rider = $runItem->deliveryRun->rider;
+                $riderId = $runItem->deliveryRun->rider_user_id;
+            }
+        }
+
         $liveLocation = null;
         if ($isOutForDelivery) {
             $cached = Cache::get("shipment:{$cleanNumber}:location");
-            if (!$cached && $activeAssignment?->rider_id) {
-                $cached = Cache::get("rider:{$activeAssignment->rider_id}:location");
+            if (!$cached && $runId) {
+                $cached = Cache::get("run:{$runId}:location");
+            }
+            if (!$cached && $riderId) {
+                $cached = Cache::get("rider:{$riderId}:location");
             }
             if ($cached && is_array($cached) && !empty($cached['lat']) && !empty($cached['lng'])) {
                 $liveLocation = [
@@ -166,27 +189,45 @@ class PublicTrackingController extends Controller
         $isOutForDelivery = in_array($statusLower, ['out_for_delivery', 'arrived'], true);
 
         if ($isOutForDelivery) {
-            $activeAssignment = DeliveryAssignment::query()
+            $runItem = \Modules\Delivery\Models\DeliveryRunItem::query()
                 ->where('shipment_id', $shipment->id)
+                ->where('status', '!=', \Modules\Delivery\Models\DeliveryRunItem::STATUS_REMOVED)
+                ->with(['deliveryRun'])
                 ->latest('id')
                 ->first();
 
-            if ($activeAssignment?->rider_id) {
-                $riderLoc = Cache::get("rider:{$activeAssignment->rider_id}:location");
-                if ($riderLoc && is_array($riderLoc) && !empty($riderLoc['lat']) && !empty($riderLoc['lng'])) {
-                    return ApiResponse::success([
-                        'tracking_number' => $cleanNumber,
-                        'status' => $shipment->status,
-                        'is_live' => true,
-                        'live_location' => [
-                            'lat' => (float) $riderLoc['lat'],
-                            'lng' => (float) $riderLoc['lng'],
-                            'heading' => isset($riderLoc['heading']) && is_numeric($riderLoc['heading']) ? (float) $riderLoc['heading'] : null,
-                            'speed' => isset($riderLoc['speed']) && is_numeric($riderLoc['speed']) ? (float) $riderLoc['speed'] : null,
-                            'updated_at' => $riderLoc['updated_at'] ?? now()->toIso8601String(),
-                        ],
-                    ]);
-                }
+            $runId = $runItem?->delivery_run_id;
+            $riderId = $runItem?->deliveryRun?->rider_user_id;
+
+            if (!$riderId) {
+                $activeAssignment = DeliveryAssignment::query()
+                    ->where('shipment_id', $shipment->id)
+                    ->latest('id')
+                    ->first();
+                $riderId = $activeAssignment?->rider_id;
+            }
+
+            $riderLoc = null;
+            if ($runId) {
+                $riderLoc = Cache::get("run:{$runId}:location");
+            }
+            if (!$riderLoc && $riderId) {
+                $riderLoc = Cache::get("rider:{$riderId}:location");
+            }
+
+            if ($riderLoc && is_array($riderLoc) && !empty($riderLoc['lat']) && !empty($riderLoc['lng'])) {
+                return ApiResponse::success([
+                    'tracking_number' => $cleanNumber,
+                    'status' => $shipment->status,
+                    'is_live' => true,
+                    'live_location' => [
+                        'lat' => (float) $riderLoc['lat'],
+                        'lng' => (float) $riderLoc['lng'],
+                        'heading' => isset($riderLoc['heading']) && is_numeric($riderLoc['heading']) ? (float) $riderLoc['heading'] : null,
+                        'speed' => isset($riderLoc['speed']) && is_numeric($riderLoc['speed']) ? (float) $riderLoc['speed'] : null,
+                        'updated_at' => $riderLoc['updated_at'] ?? now()->toIso8601String(),
+                    ],
+                ]);
             }
         }
 

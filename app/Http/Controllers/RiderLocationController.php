@@ -64,7 +64,7 @@ class RiderLocationController extends Controller
         } else {
             $activeRun = \Modules\Delivery\Models\DeliveryRun::query()
                 ->where('rider_user_id', $user->id)
-                ->whereIn('status', ['out_for_delivery', 'in_progress', 'assigned'])
+                ->whereIn('status', ['out_for_delivery', 'in_progress'])
                 ->with(['items.shipment'])
                 ->latest('id')
                 ->first();

@@ -820,6 +820,45 @@ class PickupRunService
             'rider:id,name,phone',
         ]);
 
+        $riderLocation = null;
+        $isOutForPickup = in_array($run->status, ['out_for_pickup', 'in_progress'], true);
+
+        if ($isOutForPickup && ($run->id || $run->rider_user_id)) {
+            $cached = $run->id ? \Illuminate\Support\Facades\Cache::get("run:pickup:{$run->id}:location") : null;
+            if (!$cached && $run->rider_user_id) {
+                $riderLoc = \Illuminate\Support\Facades\Cache::get("rider:{$run->rider_user_id}:location");
+                if ($riderLoc && is_array($riderLoc)) {
+                    $cachedRunId = (int) ($riderLoc['run_id'] ?? 0);
+                    if ($cachedRunId === 0 || $cachedRunId === (int) $run->id) {
+                        $cached = $riderLoc;
+                    }
+                }
+            }
+
+            if ($cached && is_array($cached) && !empty($cached['lat']) && !empty($cached['lng'])) {
+                $updatedAtStr = $cached['updated_at'] ?? null;
+                $diffSeconds = 99999;
+                if ($updatedAtStr) {
+                    try {
+                        $diffSeconds = abs(\Carbon\Carbon::parse($updatedAtStr)->diffInSeconds(now()));
+                    } catch (\Throwable $e) {}
+                }
+                $isLive = ($diffSeconds <= 120);
+                $isRecent = ($diffSeconds <= 900);
+
+                $riderLocation = [
+                    'lat' => (float) $cached['lat'],
+                    'lng' => (float) $cached['lng'],
+                    'heading' => isset($cached['heading']) && is_numeric($cached['heading']) ? (float) $cached['heading'] : null,
+                    'speed' => isset($cached['speed']) && is_numeric($cached['speed']) ? (float) $cached['speed'] : null,
+                    'updated_at' => $updatedAtStr,
+                    'seconds_ago' => $diffSeconds,
+                    'is_live' => $isLive,
+                    'is_recent' => $isRecent,
+                ];
+            }
+        }
+
         $out = [
             'id' => $run->id,
             'run_number' => $run->run_number,
@@ -838,6 +877,7 @@ class PickupRunService
                 'name' => $run->rider->name,
                 'phone' => $run->rider->phone,
             ] : null,
+            'rider_location' => $riderLocation,
             'vehicle_type' => $run->vehicle_type,
             'vehicle_number' => $run->vehicle_number,
             'area_label' => $run->area_label,

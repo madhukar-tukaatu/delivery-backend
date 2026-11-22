@@ -1002,6 +1002,8 @@ final class DeliveryRunService
                     ['finished_by' => $rider->id]);
             }
             Log::info('delivery_run.finished_by_rider', ['run_id' => $run->id, 'rider_id' => $rider->id]);
+            Cache::forget("run:{$run->id}:location");
+            try { \Illuminate\Support\Facades\Redis::del("run:{$run->id}:location"); } catch (\Throwable $e) {}
 
             return $run->fresh();
         });
@@ -1134,6 +1136,9 @@ final class DeliveryRunService
                 'completed_at' => $run->completed_at ?? now(),
             ]);
 
+            Cache::forget("run:{$run->id}:location");
+            try { \Illuminate\Support\Facades\Redis::del("run:{$run->id}:location"); } catch (\Throwable $e) {}
+
             return $run->fresh();
         });
     }
@@ -1244,31 +1249,42 @@ final class DeliveryRunService
         $run->loadMissing(['branch:id,name,code,phone,address,latitude,longitude', 'rider:id,name,phone']);
 
         $riderLocation = null;
-        if ($run->rider_user_id || $run->id) {
-            $cached = $run->rider_user_id ? Cache::get("rider:{$run->rider_user_id}:location") : null;
-            if (!$cached && $run->rider_user_id) {
+        $isOutForDelivery = in_array($run->status, [DeliveryRun::STATUS_OUT, 'in_progress'], true);
+
+        if ($isOutForDelivery && ($run->id || $run->rider_user_id)) {
+            // 1. Primary: Run-scoped location cache (explicitly tagged to this specific run)
+            $cached = $run->id ? Cache::get("run:{$run->id}:location") : null;
+            if (!$cached && $run->id) {
                 try {
-                    $redisLoc = \Illuminate\Support\Facades\Redis::hgetall("rider:{$run->rider_user_id}:location");
-                    if (!empty($redisLoc['lat']) && !empty($redisLoc['lng'])) {
-                        $cached = $redisLoc;
+                    $runLoc = \Illuminate\Support\Facades\Redis::hgetall("run:{$run->id}:location");
+                    if (!empty($runLoc['lat']) && !empty($runLoc['lng'])) {
+                        $cached = $runLoc;
                     }
                 } catch (\Throwable $e) {}
             }
 
-            // Fallback: check run location
-            if (!$cached && $run->id) {
-                $cached = Cache::get("run:{$run->id}:location");
-                if (!$cached) {
+            // 2. Secondary fallback: Rider global location ONLY if tagged with this active run's ID
+            if (!$cached && $run->rider_user_id) {
+                $riderLoc = Cache::get("rider:{$run->rider_user_id}:location");
+                if (!$riderLoc) {
                     try {
-                        $runLoc = \Illuminate\Support\Facades\Redis::hgetall("run:{$run->id}:location");
-                        if (!empty($runLoc['lat']) && !empty($runLoc['lng'])) {
-                            $cached = $runLoc;
+                        $rLoc = \Illuminate\Support\Facades\Redis::hgetall("rider:{$run->rider_user_id}:location");
+                        if (!empty($rLoc['lat']) && !empty($rLoc['lng'])) {
+                            $riderLoc = $rLoc;
                         }
                     } catch (\Throwable $e) {}
                 }
+
+                if ($riderLoc && is_array($riderLoc)) {
+                    $cachedRunId = (int) ($riderLoc['run_id'] ?? 0);
+                    // Match run ID or accept if rider has no other conflicting run
+                    if ($cachedRunId === 0 || $cachedRunId === (int) $run->id) {
+                        $cached = $riderLoc;
+                    }
+                }
             }
 
-            // Fallback: check active shipment locations in this run
+            // 3. Fallback: check active shipment locations in this run
             if (!$cached && $run->relationLoaded('items')) {
                 foreach ($run->items as $item) {
                     $tNum = $item->shipment?->tracking_number;
@@ -1283,13 +1299,25 @@ final class DeliveryRunService
             }
 
             if ($cached && is_array($cached) && !empty($cached['lat']) && !empty($cached['lng'])) {
+                $updatedAtStr = $cached['updated_at'] ?? null;
+                $diffSeconds = 99999;
+                if ($updatedAtStr) {
+                    try {
+                        $diffSeconds = abs(\Carbon\Carbon::parse($updatedAtStr)->diffInSeconds(now()));
+                    } catch (\Throwable $e) {}
+                }
+                $isLive = ($diffSeconds <= 120); // actively transmitted within last 2 minutes
+                $isRecent = ($diffSeconds <= 900); // transmitted within last 15 minutes
+
                 $riderLocation = [
                     'lat' => (float) $cached['lat'],
                     'lng' => (float) $cached['lng'],
                     'heading' => isset($cached['heading']) && is_numeric($cached['heading']) ? (float) $cached['heading'] : null,
                     'speed' => isset($cached['speed']) && is_numeric($cached['speed']) ? (float) $cached['speed'] : null,
-                    'updated_at' => $cached['updated_at'] ?? null,
-                    'is_live' => true,
+                    'updated_at' => $updatedAtStr,
+                    'seconds_ago' => $diffSeconds,
+                    'is_live' => $isLive,
+                    'is_recent' => $isRecent,
                 ];
             }
         }

@@ -261,8 +261,24 @@ final class CheckoutDeliveryChargeResolver
             }
         }
 
-        // Match PublicWebsitePricingEstimateRequest: an omitted (or non-positive)
-        // weight is priced as one 1.5 kg parcel throughout checkout and creation.
+        // Match active pricing setting base weight
+        return $this->resolveBaseWeight();
+    }
+
+    private function resolveBaseWeight(): float
+    {
+        $setting = \Illuminate\Support\Facades\DB::table('pricing_settings')
+            ->where('is_active', true)
+            ->orderByDesc('id')
+            ->first(['base_weight_kg', 'included_weight_kg']);
+
+        if ($setting) {
+            $val = $setting->base_weight_kg ?? $setting->included_weight_kg;
+            if ($val !== null && (float) $val > 0) {
+                return (float) $val;
+            }
+        }
+
         return self::DEFAULT_WEIGHT_KG;
     }
 

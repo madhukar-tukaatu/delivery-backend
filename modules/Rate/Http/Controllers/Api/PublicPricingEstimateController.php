@@ -27,7 +27,9 @@ final class PublicPricingEstimateController extends Controller
             // Weight & dimensions – either actual weight OR complete dimensions
             // (or both; engine takes the higher value)
             // ------------------------------------------------------------------
-            $actualWeightKg = round((float) ($data['actual_weight_kg'] ?? 1.0), 3);
+            $actualWeightKg = isset($data['actual_weight_kg']) && (float) $data['actual_weight_kg'] > 0
+                ? round((float) $data['actual_weight_kg'], 3)
+                : $this->resolveDefaultWeight();
 
             $rawLength = data_get($data, 'parcel_dimensions.length_cm');
             $rawWidth  = data_get($data, 'parcel_dimensions.width_cm');
@@ -265,6 +267,10 @@ final class PublicPricingEstimateController extends Controller
                         'name' => data_get($result, 'pricing_setting.name'),
                     ],
 
+                    'pricing_limits'           => data_get($result, 'pricing_limits'),
+
+                    'delivery_charge_bounds'   => data_get($result, 'breakdown.delivery_charge_bounds'),
+
                     'route'                    => [
                         'base_rate'         => round(
                             (float) data_get($result, 'route.base_rate', 0),
@@ -347,6 +353,25 @@ final class PublicPricingEstimateController extends Controller
         }
     }
 
+    public function limits(PricingEngineService $pricingEngine): JsonResponse
+    {
+        try {
+            return response()->json([
+                'success' => true,
+                'data' => $pricingEngine->activePricingLimits(),
+            ]);
+        } catch (ValidationException $exception) {
+            throw $exception;
+        } catch (Throwable $exception) {
+            report($exception);
+
+            return response()->json([
+                'success' => false,
+                'message' => 'Pricing limits could not be loaded.',
+            ], 500);
+        }
+    }
+
     private function formatEstimatedDeliveryLabel(?int $estimatedHours): ?string
     {
         if ($estimatedHours === null || $estimatedHours <= 0) {
@@ -404,5 +429,25 @@ final class PublicPricingEstimateController extends Controller
             'fallback'                 => (bool) ($serving['fallback'] ?? true),
             'fallback_reason'          => $serving['fallback_reason'] ?? null,
         ];
+    }
+
+    /**
+     * Resolve default base weight dynamically from active pricing settings.
+     */
+    private function resolveDefaultWeight(): float
+    {
+        $setting = \Illuminate\Support\Facades\DB::table('pricing_settings')
+            ->where('is_active', true)
+            ->orderByDesc('id')
+            ->first(['base_weight_kg', 'included_weight_kg']);
+
+        if ($setting) {
+            $val = $setting->base_weight_kg ?? $setting->included_weight_kg;
+            if ($val !== null && (float) $val > 0) {
+                return round((float) $val, 3);
+            }
+        }
+
+        return 1.5;
     }
 }

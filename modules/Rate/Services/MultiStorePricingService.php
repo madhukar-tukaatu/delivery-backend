@@ -154,6 +154,8 @@ final class MultiStorePricingService
 
                 'valid_until'          => $earliestValidUntil,
 
+                'pricing_limits'       => $storeCalculations[0]['quote']['pricing_limits'] ?? null,
+
                 'store_quotes'         => $publicStoreQuotes,
             ],
 
@@ -563,10 +565,21 @@ final class MultiStorePricingService
          * Existing PricingEngineService is still the authority
          * for the actual delivery price.
          */
-        $quote = $this->pricingEngine->calculate(
-            $payload,
-            $merchantId
-        );
+        try {
+            $quote = $this->pricingEngine->calculate(
+                $payload,
+                $merchantId
+            );
+        } catch (ValidationException $exception) {
+            $errors = $exception->errors();
+
+            if (isset($errors['weight_limit'])) {
+                $errors["stores.{$storeIndex}.parcel_weight"] = $errors['weight_limit'];
+                throw ValidationException::withMessages($errors);
+            }
+
+            throw $exception;
+        }
 
         $this->validateQuote(
             $quote,
@@ -2640,6 +2653,9 @@ final class MultiStorePricingService
 
             'breakdown'          =>
             $quote['breakdown'],
+
+            'pricing_limits'     =>
+            $quote['pricing_limits'] ?? null,
 
             'delivery_charge'    =>
             (float) $quote['final_price'],

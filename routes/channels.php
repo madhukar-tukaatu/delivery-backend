@@ -196,11 +196,25 @@ Broadcast::channel('shipments.{shipmentId}', function ($user, $shipmentId) {
 });
 
 Broadcast::channel('rider.{riderId}.location', function ($user, $riderId) {
-    return (int) $user->id === (int) $riderId
-        || $user->hasRole('super_admin')
-        || $user->hasRole('main_admin')
-        || $user->hasRole('branch_manager')
-        || $user->hasRole('sub_branch_manager');
+    if ((int) $user->id === (int) $riderId) {
+        return true;
+    }
+    if (method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) {
+        return true;
+    }
+    $roles = method_exists($user, 'roleNames') ? $user->roleNames() : (array) ($user->role ?? []);
+    return !empty(array_intersect($roles, [
+        'super_admin', 'super-admin', 'admin', 'main_admin',
+        'branch_manager', 'branch-manager', 'sub_branch_manager', 'operations-manager'
+    ]));
+});
+
+Broadcast::channel('delivery-runs.{runId}.location', function ($user, $runId) {
+    return true;
+});
+
+Broadcast::channel('runs.{runId}', function ($user, $runId) {
+    return true;
 });
 
 

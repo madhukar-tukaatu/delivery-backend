@@ -10,6 +10,8 @@ class PricingSetting extends Model
     protected $fillable = [
         'name',
         'base_weight_kg',
+        'max_weight_kg',
+        'weight_limit_enabled',
         'base_distance_km',
         'local_extra_weight_rate',
         'transfer_extra_weight_rate',
@@ -22,6 +24,9 @@ class PricingSetting extends Model
         'same_day_cutoff_time',
         'minimum_free_pickup_packets',
         'small_pickup_charge',
+        'min_delivery_charge',
+        'max_delivery_charge',
+        'delivery_charge_bounds_enabled',
         'vat_percentage',
         'vat_inclusive',
         'weight_rounding',
@@ -39,6 +44,8 @@ class PricingSetting extends Model
 
     protected $casts = [
         'base_weight_kg'               => 'decimal:2',
+        'max_weight_kg'                => 'decimal:2',
+        'weight_limit_enabled'         => 'boolean',
         'base_distance_km'             => 'decimal:2',
         'local_extra_weight_rate'      => 'decimal:2',
         'transfer_extra_weight_rate'   => 'decimal:2',
@@ -50,6 +57,9 @@ class PricingSetting extends Model
         'transfer_express_multiplier'  => 'decimal:4',
         'minimum_free_pickup_packets'  => 'integer',
         'small_pickup_charge'          => 'decimal:2',
+        'min_delivery_charge'          => 'decimal:2',
+        'max_delivery_charge'          => 'decimal:2',
+        'delivery_charge_bounds_enabled' => 'boolean',
         'vat_percentage'               => 'decimal:2',
         'vat_inclusive'                => 'boolean',
         'fragile_enabled'              => 'boolean',

@@ -681,12 +681,19 @@ class StoreMultiStorePricingQuoteRequest extends FormRequest
 
     private function baseWeightFallback(): float
     {
-        $settings = \Illuminate\Support\Facades\DB::table('pricing_settings')
+        $setting = \Illuminate\Support\Facades\DB::table('pricing_settings')
             ->where('is_active', true)
             ->orderByDesc('id')
-            ->value('included_weight_kg');
+            ->first(['base_weight_kg', 'included_weight_kg']);
 
-        return max(0.001, (float) ($settings ?? 1.5));
+        if ($setting) {
+            $val = $setting->base_weight_kg ?? $setting->included_weight_kg;
+            if ($val !== null && (float) $val > 0) {
+                return max(0.001, (float) $val);
+            }
+        }
+
+        return 1.5;
     }
 
     private function packingPolicy(): string

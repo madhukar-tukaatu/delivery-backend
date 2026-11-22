@@ -15,6 +15,8 @@ return [
         'name' => 'Kathmandu Default Pricing Rules',
 
         'base_weight_kg' => 1.50,
+        'max_weight_kg' => 30.00,
+        'weight_limit_enabled' => true,
         'base_distance_km' => 5.00,
 
         'local_extra_weight_rate' => 20.00,
@@ -34,6 +36,10 @@ return [
 
         'minimum_free_pickup_packets' => 3,
         'small_pickup_charge' => 50.00,
+
+        'min_delivery_charge' => 0.00,
+        'max_delivery_charge' => null,
+        'delivery_charge_bounds_enabled' => false,
 
         'vat_percentage' => 13.00,
         'vat_inclusive' => true,

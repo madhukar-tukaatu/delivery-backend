@@ -11,9 +11,32 @@ use Illuminate\Validation\ValidationException;
 use JsonException;
 use Modules\Rate\Http\Requests\StoreMultiStorePricingQuoteRequest;
 use Modules\Rate\Services\MultiStorePricingService;
+use Modules\Rate\Services\PricingEngineService;
+use Throwable;
 
 final class MarketplacePricingQuoteController extends Controller
 {
+    /**
+     * Expose active dynamic pricing limits (weight limit and delivery charge bounds)
+     * so Tukaatu Marketplace can validate carts and display limits prior to checkout.
+     */
+    public function limits(PricingEngineService $pricingEngine): JsonResponse
+    {
+        try {
+            return response()->json([
+                'success' => true,
+                'message' => 'Active marketplace pricing limits fetched successfully.',
+                'data' => $pricingEngine->activePricingLimits(),
+            ]);
+        } catch (ValidationException $exception) {
+            throw $exception;
+        } catch (Throwable $exception) {
+            throw ValidationException::withMessages([
+                'pricing' => [$exception->getMessage()],
+            ]);
+        }
+    }
+
     /**
      * Supports one marketplace store or multiple stores.
      */
@@ -35,6 +58,8 @@ final class MarketplacePricingQuoteController extends Controller
                     'Marketplace pricing and transfer routes calculated successfully.',
                 'data' => $this->serialiseDates($result),
             ]);
+        } catch (ValidationException $exception) {
+            throw $exception;
         } catch (Throwable $exception) {
             throw ValidationException::withMessages([
                 'pricing' => [$exception->getMessage()],
@@ -60,6 +85,8 @@ final class MarketplacePricingQuoteController extends Controller
                     'Marketplace checkout quote created successfully.',
                 'data' => $this->serialiseDates($result),
             ], 201);
+        } catch (ValidationException $exception) {
+            throw $exception;
         } catch (Throwable $exception) {
             throw ValidationException::withMessages([
                 'pricing' => [$exception->getMessage()],

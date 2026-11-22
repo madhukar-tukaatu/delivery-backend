@@ -42,16 +42,33 @@ final class PublicWebsitePricingEstimateRequest extends FormRequest
             default => $parcelType,
         };
 
-        $weight = $this->input('actual_weight_kg');
-        $weight = ($weight !== null && $weight !== '' && (float) $weight > 0)
-            ? (float) $weight
-            : 1.5;
+        $rawWeight = $this->input('actual_weight_kg');
+        $weight = ($rawWeight !== null && $rawWeight !== '' && (float) $rawWeight > 0)
+            ? (float) $rawWeight
+            : $this->resolveBaseWeight();
 
         $this->merge([
             'service_type'     => $serviceType,
             'parcel_type'      => $parcelType,
             'actual_weight_kg' => $weight,
         ]);
+    }
+
+    private function resolveBaseWeight(): float
+    {
+        $setting = \Illuminate\Support\Facades\DB::table('pricing_settings')
+            ->where('is_active', true)
+            ->orderByDesc('id')
+            ->first(['base_weight_kg', 'included_weight_kg']);
+
+        if ($setting) {
+            $val = $setting->base_weight_kg ?? $setting->included_weight_kg;
+            if ($val !== null && (float) $val > 0) {
+                return round((float) $val, 3);
+            }
+        }
+
+        return 1.5;
     }
 
     public function rules(): array

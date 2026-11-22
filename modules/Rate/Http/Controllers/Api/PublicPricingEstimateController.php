@@ -429,6 +429,8 @@ final class PublicPricingEstimateController extends Controller
             'fallback'                 => (bool) ($serving['fallback'] ?? true),
             'fallback_reason'          => $serving['fallback_reason'] ?? null,
         ];
+    }
+
     /**
      * Resolve default base weight dynamically from active pricing settings.
      */

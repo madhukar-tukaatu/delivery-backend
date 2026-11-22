@@ -982,6 +982,86 @@ class PickupRunService
     /* Helpers & Sequencing                                               */
     /* ------------------------------------------------------------------ */
 
+    private const KATHMANDU_HUBS = [
+        ['sallaghari', 27.6718, 85.4286],
+        ['bhaktapur', 27.6710, 85.4298],
+        ['suryabinayak', 27.6710, 85.4298],
+        ['sanothimi', 27.6812, 85.3705],
+        ['thimi', 27.6722, 85.3868],
+        ['balkot', 27.6644, 85.3615],
+        ['mid baneshwor', 27.6955, 85.3375],
+        ['middle baneshwor', 27.6955, 85.3375],
+        ['new baneshwor', 27.6915, 85.3420],
+        ['old baneshwor', 27.6990, 85.3330],
+        ['baneshwor', 27.6916, 85.3422],
+        ['koteshwor', 27.6792, 85.3494],
+        ['tinkune', 27.6865, 85.3465],
+        ['gaushala', 27.7070, 85.3460],
+        ['chabahil', 27.7172, 85.3468],
+        ['sinamangal', 27.6960, 85.3500],
+        ['battisputali', 27.7042, 85.3418],
+        ['jorpati', 27.7200, 85.3750],
+        ['bouddha', 27.7215, 85.3620],
+        ['maitighar', 27.6922, 85.3218],
+        ['tripureshwor', 27.6953, 85.3134],
+        ['kalanki', 27.6934, 85.2815],
+        ['thamel', 27.7154, 85.3123],
+        ['lazimpat', 27.7212, 85.3197],
+        ['balaju', 27.7329, 85.3025],
+        ['maharajgunj', 27.7364, 85.3308],
+        ['kupandole', 27.6872, 85.3168],
+        ['pulchowk', 27.6784, 85.3162],
+        ['jawalakhel', 27.6728, 85.3155],
+        ['lagankhel', 27.6672, 85.3242],
+        ['satdobato', 27.6575, 85.3255],
+        ['gwarko', 27.6660, 85.3340],
+        ['mahalaxmi', 27.6660, 85.3340],
+        ['balkhu', 27.6851, 85.2974],
+        ['kalimati', 27.6987, 85.2996],
+        ['dillibazar', 27.7047, 85.3275],
+        ['putalisadak', 27.7031, 85.3212],
+        ['anamnagar', 27.6975, 85.3262],
+        ['gyaneshwor', 27.7088, 85.3341],
+        ['patan', 27.6728, 85.3255],
+        ['lalitpur', 27.6672, 85.3242],
+    ];
+
+    private function resolvePickupCoordinates($pr): ?array
+    {
+        if (! $pr) {
+            return null;
+        }
+        $lat = (float) ($pr->pickup_lat ?? 0);
+        $lng = (float) ($pr->pickup_lng ?? 0);
+        if ($lat !== 0.0 && $lng !== 0.0) {
+            return ['lat' => $lat, 'lng' => $lng];
+        }
+
+        $text = Str::lower(trim(($pr->pickup_area ?? '') . ' ' . ($pr->pickup_address ?? '') . ' ' . ($pr->pickup_city ?? '')));
+        foreach (self::KATHMANDU_HUBS as $hub) {
+            if (str_contains($text, $hub[0])) {
+                return ['lat' => (float) $hub[1], 'lng' => (float) $hub[2]];
+            }
+        }
+
+        return null;
+    }
+
+    private function haversineDistanceKm(float $lat1, float $lng1, float $lat2, float $lng2): float
+    {
+        $earthRadius = 6371.0;
+        $dLat = deg2rad($lat2 - $lat1);
+        $dLng = deg2rad($lng2 - $lng1);
+        $a = sin($dLat / 2) * sin($dLat / 2) +
+             cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
+             sin($dLng / 2) * sin($dLng / 2);
+        return $earthRadius * 2 * atan2(sqrt($a), sqrt(1 - $a));
+    }
+
+    /**
+     * Orders pickup run items along the most efficient geographic route.
+     * Uses Nearest-Neighbor TSP starting at the Branch office origin.
+     */
     private function autoSequence(PickupRun $run): void
     {
         $items = PickupRunItem::query()->where('pickup_run_id', $run->id)
@@ -989,16 +1069,75 @@ class PickupRunService
             ->with('pickupRequest:id,pickup_area,pickup_city,pickup_address,pickup_lat,pickup_lng')
             ->get();
 
-        $sorted = $items->sortBy(fn (PickupRunItem $i) => [
-            Str::lower(trim((string) ($i->pickupRequest?->pickup_area ?: $i->pickupRequest?->pickup_city ?: 'zzz'))),
-            Str::lower(trim((string) ($i->pickupRequest?->pickup_city ?? ''))),
-            Str::lower(trim((string) ($i->pickupRequest?->pickup_address ?? ''))),
-            $i->id,
-        ])->values();
+        if ($items->isEmpty()) {
+            return;
+        }
 
-        foreach ($sorted as $idx => $item) {
-            if ((int) $item->sequence !== $idx + 1) {
-                $item->update(['sequence' => $idx + 1]);
+        // 1. Resolve branch origin coordinates
+        $branch = $run->branch;
+        $currLat = (float) ($branch?->latitude ?: 0);
+        $currLng = (float) ($branch?->longitude ?: 0);
+        if ($currLat === 0.0 || $currLng === 0.0) {
+            $currLat = 27.6915;
+            $currLng = 85.3420;
+        }
+
+        // 2. Separate items into coordinate-resolvable vs non-resolvable
+        $withCoords = [];
+        $withoutCoords = [];
+
+        foreach ($items as $item) {
+            $coords = $this->resolvePickupCoordinates($item->pickupRequest);
+            if ($coords) {
+                $withCoords[] = [
+                    'item' => $item,
+                    'lat' => $coords['lat'],
+                    'lng' => $coords['lng'],
+                ];
+            } else {
+                $withoutCoords[] = $item;
+            }
+        }
+
+        // 3. Nearest-Neighbor Traveling Salesperson Path from Branch
+        $orderedItems = [];
+        while (! empty($withCoords)) {
+            $bestIdx = 0;
+            $bestDist = PHP_FLOAT_MAX;
+
+            foreach ($withCoords as $idx => $entry) {
+                $d = $this->haversineDistanceKm($currLat, $currLng, $entry['lat'], $entry['lng']);
+                if ($d < $bestDist) {
+                    $bestDist = $d;
+                    $bestIdx = $idx;
+                }
+            }
+
+            $chosen = $withCoords[$bestIdx];
+            $orderedItems[] = $chosen['item'];
+            $currLat = $chosen['lat'];
+            $currLng = $chosen['lng'];
+            array_splice($withCoords, $bestIdx, 1);
+        }
+
+        // 4. Any remaining items without coordinates sorted by area
+        if (! empty($withoutCoords)) {
+            $sortedRemaining = collect($withoutCoords)->sortBy(fn (PickupRunItem $i) => [
+                Str::lower(trim((string) ($i->pickupRequest?->pickup_area ?: $i->pickupRequest?->pickup_city ?: 'zzz'))),
+                Str::lower(trim((string) ($i->pickupRequest?->pickup_city ?? ''))),
+                Str::lower(trim((string) ($i->pickupRequest?->pickup_address ?? ''))),
+                $i->id,
+            ])->values();
+            foreach ($sortedRemaining as $rem) {
+                $orderedItems[] = $rem;
+            }
+        }
+
+        // 5. Update sequence 1..N
+        foreach ($orderedItems as $idx => $item) {
+            $seq = $idx + 1;
+            if ((int) $item->sequence !== $seq) {
+                $item->update(['sequence' => $seq]);
             }
         }
     }

@@ -363,7 +363,7 @@ class PickupRunController extends Controller
     private function scope(Request $request): int
     {
         $user = $request->user();
-        if ($user->isSuperAdmin() || $user->hasRole('main_admin') || $user->hasRole('admin')) {
+        if ($user->isSuperAdmin() || (method_exists($user, 'isHqUser') && $user->isHqUser()) || $user->hasAnyRole(['main_admin', 'admin', 'hq_admin', 'hq_manager', 'hq_operations_staff'])) {
             return max(0, (int) $request->input('branch_id', 0));
         }
         $branchId = (int) ($user->branch_id ?? 0);

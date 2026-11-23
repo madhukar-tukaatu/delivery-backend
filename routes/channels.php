@@ -9,15 +9,32 @@ if (!function_exists('isDeliveryAdminUser')) {
             return false;
         }
 
+        if (method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) {
+            return true;
+        }
+
+        if (method_exists($user, 'isHqUser') && $user->isHqUser()) {
+            return true;
+        }
+
         $adminRoles = [
             'super_admin',
             'super-admin',
             'main_admin',
             'admin',
+            'hq_admin',
+            'hq_manager',
+            'hq_operations_staff',
+            'hq_operation_staff',
+            'hq_accounts_staff',
+            'hq_account_staff',
             'operations_manager',
             'operations-manager',
             'branch_manager',
             'branch-manager',
+            'branch_staff',
+            'branch-staff',
+            'staff',
             'merchant_manager',
             'merchant-manager',
         ];
@@ -74,6 +91,10 @@ Broadcast::channel('admin.pickups', function ($user) {
 });
 
 Broadcast::channel('admin.deliveries', function ($user) {
+    return isDeliveryAdminUser($user);
+});
+
+Broadcast::channel('admin.transfers', function ($user) {
     return isDeliveryAdminUser($user);
 });
 

@@ -193,8 +193,12 @@ class BranchDocumentController extends Controller
     {
         $user = request()->user();
 
-        $allowed = $user?->hasRole('super_admin')
+        $allowed = $user?->isSuperAdmin()
+            || (method_exists($user, 'isHqUser') && $user?->isHqUser())
+            || $user?->hasRole('super_admin')
             || $user?->hasRole('main_admin')
+            || $user?->hasRole('hq_admin')
+            || $user?->hasRole('hq_manager')
             || $user?->can('branches.view')
             || $user?->can('branch_documents.view');
 

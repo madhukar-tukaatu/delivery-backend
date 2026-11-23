@@ -19,22 +19,29 @@ class PaymentGatewayAccountController extends Controller
     {
         $user = $request->user();
         $ok = method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin();
-        $ok = $ok || (method_exists($user, 'hasRole') && $user->hasRole(['super_admin', 'main_admin']));
+        $ok = $ok || (method_exists($user, 'isHqUser') && $user->isHqUser());
+        $ok = $ok || (method_exists($user, 'hasAnyRole') && $user->hasAnyRole(['super_admin', 'main_admin', 'hq_admin', 'hq_manager', 'hq_accounts_staff']));
         abort_unless($ok, 403, 'Only superadmin can manage company payment accounts.');
     }
 
     protected function isHqUser($user): bool
     {
+        if (method_exists($user, 'isHqUser') && $user->isHqUser()) {
+            return true;
+        }
         $ok = method_exists($user, 'isSuperAdmin') && ($user->isSuperAdmin() ?? false);
-        $ok = $ok || (method_exists($user, 'hasRole') && $user->hasRole(['super_admin', 'main_admin', 'admin']));
+        $ok = $ok || (method_exists($user, 'hasAnyRole') && $user->hasAnyRole(['super_admin', 'main_admin', 'admin', 'hq_admin', 'hq_manager', 'hq_accounts_staff', 'hq_operations_staff']));
 
         return (bool) $ok;
     }
 
     protected function canManageCompany($user): bool
     {
+        if (method_exists($user, 'isHqUser') && $user->isHqUser()) {
+            return true;
+        }
         $ok = method_exists($user, 'isSuperAdmin') && ($user->isSuperAdmin() ?? false);
-        $ok = $ok || (method_exists($user, 'hasRole') && $user->hasRole(['super_admin', 'main_admin']));
+        $ok = $ok || (method_exists($user, 'hasAnyRole') && $user->hasAnyRole(['super_admin', 'main_admin', 'hq_admin', 'hq_manager', 'hq_accounts_staff']));
 
         return (bool) $ok;
     }

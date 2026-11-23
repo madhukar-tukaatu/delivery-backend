@@ -35,7 +35,7 @@ class BranchCommissionController extends Controller
     {
         $user = $request->user();
         abort_unless(
-            ($user->isSuperAdmin() ?? false) || $user->hasRole(['super_admin', 'main_admin']),
+            ($user->isSuperAdmin() ?? false) || (method_exists($user, 'isHqUser') && $user->isHqUser()) || $user->hasAnyRole(['super_admin', 'main_admin', 'hq_admin', 'hq_manager', 'hq_accounts_staff']),
             403
         );
 

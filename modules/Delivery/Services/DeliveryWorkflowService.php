@@ -840,7 +840,7 @@ class DeliveryWorkflowService
 
     private function ensureRider(DeliveryAssignment $delivery, User $user, bool $allowManager = false): void
     {
-        if ($user->isSuperAdmin() || $user->hasRole('main_admin')) {
+        if ($user->isSuperAdmin() || (method_exists($user, 'isHqUser') && $user->isHqUser()) || $user->hasAnyRole(['main_admin', 'hq_admin', 'hq_manager', 'hq_operations_staff'])) {
             return;
         }
 

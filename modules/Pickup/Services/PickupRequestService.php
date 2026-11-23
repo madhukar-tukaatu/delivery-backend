@@ -2370,9 +2370,9 @@ final class PickupRequestService
         if (
             $user->isSuperAdmin()
             ||
-            $user->hasRole('main_admin')
+            (method_exists($user, 'isHqUser') && $user->isHqUser())
             ||
-            $user->hasRole('admin')
+            $user->hasAnyRole(['main_admin', 'admin', 'hq_admin', 'hq_manager', 'hq_operations_staff'])
         ) {
             return;
         }

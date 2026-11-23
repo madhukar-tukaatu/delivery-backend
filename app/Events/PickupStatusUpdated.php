@@ -3,16 +3,14 @@
 namespace App\Events;
 
 use Illuminate\Broadcasting\PrivateChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 use Modules\Pickup\Models\PickupRequest;
 
-class PickupStatusUpdated implements ShouldBroadcast
+class PickupStatusUpdated implements ShouldBroadcastNow
 {
     use Dispatchable, SerializesModels;
-
-    public string $queue = 'broadcasts';
 
     public function __construct(public PickupRequest $pickup)
     {

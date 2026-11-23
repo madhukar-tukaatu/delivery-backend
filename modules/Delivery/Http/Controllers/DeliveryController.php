@@ -33,7 +33,7 @@ class DeliveryController extends Controller
     {
         $query = DeliveryAssignment::query()
             ->with([
-                'shipment.merchant:id,name,code,external_store_id,marketplace_id',
+                'shipment.merchant:id,name,code,phone,external_store_id,marketplace_id',
                 'shipment.merchant.marketplace:id,name,code',
                 'shipment.originBranch',
                 'shipment.destinationBranch',
@@ -206,11 +206,15 @@ class DeliveryController extends Controller
 
     private function isHq(User $user): bool
     {
-        if ($user->isSuperAdmin() || in_array((string) $user->role, ['main_admin', 'admin'], true)) {
+        if (
+            $user->isSuperAdmin()
+            || (method_exists($user, 'isHqUser') && $user->isHqUser())
+            || in_array((string) $user->role, ['main_admin', 'admin', 'hq_admin', 'hq_manager', 'hq_operations_staff', 'hq_accounts_staff'], true)
+        ) {
             return true;
         }
         try {
-            return $user->hasAnyRole(['main_admin', 'admin']);
+            return $user->hasAnyRole(['main_admin', 'admin', 'hq_admin', 'hq_manager', 'hq_operations_staff', 'hq_accounts_staff']);
         } catch (\Throwable) {
             return false;
         }

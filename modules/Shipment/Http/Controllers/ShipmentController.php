@@ -1159,16 +1159,28 @@ final class ShipmentController extends Controller
     private function isGlobalAdmin(
         $user
     ): bool {
+        if (! $user) {
+            return false;
+        }
+
+        if (method_exists($user, 'isHqUser') && $user->isHqUser()) {
+            return true;
+        }
+
         return (bool) (
-            $user?->is_super_admin
-            || $user?->role === 'super_admin'
+            $user->is_super_admin
+            || $user->role === 'super_admin'
             || (
                 method_exists($user, 'isSuperAdmin')
                 && $user->isSuperAdmin()
             )
             || (
+                method_exists($user, 'hasAnyRole')
+                && $user->hasAnyRole(['main_admin', 'admin', 'hq_admin', 'hq_manager', 'hq_operations_staff', 'hq_accounts_staff'])
+            )
+            || (
                 method_exists($user, 'hasRole')
-                && $user->hasRole('main_admin')
+                && ($user->hasRole('main_admin') || $user->hasRole('hq_admin') || $user->hasRole('hq_manager') || $user->hasRole('hq_operations_staff'))
             )
         );
     }

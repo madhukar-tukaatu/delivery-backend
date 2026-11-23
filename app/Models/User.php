@@ -166,6 +166,60 @@ class User extends Authenticatable
         }
     }
 
+    public function isHqUser(): bool
+    {
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        $hqRoles = [
+            'super_admin',
+            'main_admin',
+            'admin',
+            'hq_admin',
+            'hq_manager',
+            'hq_accounts_staff',
+            'hq_account_staff',
+            'hq_operations_staff',
+            'hq_operation_staff',
+        ];
+
+        if (in_array((string) $this->role, $hqRoles, true)) {
+            return true;
+        }
+
+        try {
+            return $this->hasAnyRole($hqRoles);
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    public function isGlobalAdmin(): bool
+    {
+        if ($this->isSuperAdmin()) {
+            return true;
+        }
+
+        $globalRoles = [
+            'super_admin',
+            'main_admin',
+            'admin',
+            'hq_admin',
+            'hq_manager',
+        ];
+
+        if (in_array((string) $this->role, $globalRoles, true)) {
+            return true;
+        }
+
+        try {
+            return $this->hasAnyRole($globalRoles);
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
     public function assignedPickups(): HasMany
     {
         return $this->hasMany(

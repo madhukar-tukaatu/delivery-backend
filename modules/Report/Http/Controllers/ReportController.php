@@ -17,6 +17,22 @@ use Modules\Shipment\Models\Shipment;
 
 class ReportController extends Controller
 {
+    private function isGlobalScope($user): bool
+    {
+        return $user->isSuperAdmin()
+            || (method_exists($user, 'isHqUser') && $user->isHqUser())
+            || $user->hasAnyRole([
+                'super_admin',
+                'main_admin',
+                'admin',
+                'hq_admin',
+                'hq_manager',
+                'hq_accounts_staff',
+                'hq_operations_staff',
+            ])
+            || ($user->branch_type ?? null) === 'main';
+    }
+
     /**
      * Helper method to scope queries based on the logged-in user's authority
      */
@@ -24,8 +40,8 @@ class ReportController extends Controller
     {
         $user = Auth::user();
 
-        // Super Admin or Main Branch roles have global access
-        if ($user->hasRole('super_admin') || $user->branch_type === 'main') {
+        // Super Admin, HQ roles, or Main Branch have global access
+        if ($this->isGlobalScope($user)) {
             return $query;
         }
 
@@ -83,7 +99,7 @@ class ReportController extends Controller
         $user = Auth::user();
         $codQuery = PodRecord::query();
 
-        if (!$user->hasRole('super_admin') && $user->branch_type !== 'main') {
+        if (! $this->isGlobalScope($user)) {
             $codQuery->whereHas('shipment', function ($q) use ($user) {
                 $q->where('origin_branch_id', $user->branch_id)
                   ->orWhere('destination_branch_id', $user->branch_id);
@@ -124,7 +140,7 @@ class ReportController extends Controller
         $user = Auth::user();
         
         // If a branch manager views this, they only see stats relevant to their node identity
-        if (!$user->hasRole('super_admin') && $user->branch_type !== 'main') {
+        if (! $this->isGlobalScope($user)) {
             return ApiResponse::success([
                 'total' => 1,
                 'by_type' => Branch::where('id', $user->branch_id)->selectRaw('type, count(*) as total')->groupBy('type')->get(),
@@ -147,7 +163,7 @@ class ReportController extends Controller
         $userQuery = User::query();
         $assignmentQuery = DeliveryAssignment::query();
 
-        if (!$user->hasRole('super_admin') && $user->branch_type !== 'main') {
+        if (! $this->isGlobalScope($user)) {
             $userQuery->where('branch_id', $user->branch_id);
             $assignmentQuery->whereHas('staff', function($q) use ($user) {
                 $q->where('branch_id', $user->branch_id);

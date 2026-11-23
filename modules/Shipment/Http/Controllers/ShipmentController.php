@@ -572,6 +572,26 @@ final class ShipmentController extends Controller
         $currentLat = $this->resolveBranchLat($currentBranch) ?? $originLat;
         $currentLng = $this->resolveBranchLng($currentBranch) ?? $originLng;
 
+        $rawBreakdown = is_string($shipment->delivery_charge_breakdown)
+            ? json_decode($shipment->delivery_charge_breakdown, true)
+            : (array) $shipment->delivery_charge_breakdown;
+        $b = $rawBreakdown['breakdown'] ?? $rawBreakdown;
+        $destToCustomer = null;
+        $baseDistance = 10.0;
+        $extraMile = 0.0;
+
+        if (!empty($b['extra_delivery_distance'])) {
+            $extraObj = $b['extra_delivery_distance'];
+            $destToCustomer = !empty($extraObj['delivery_distance_km']) ? (float) $extraObj['delivery_distance_km'] : null;
+            $baseDistance = !empty($extraObj['included_distance_km']) ? (float) $extraObj['included_distance_km'] : 10.0;
+            $extraMile = !empty($extraObj['extra_distance_km']) ? (float) $extraObj['extra_distance_km'] : 0.0;
+        }
+
+        if ($destToCustomer === null && $destLat && !empty($shipment->delivery_lat) && !empty($shipment->delivery_lng)) {
+            $destToCustomer = $this->haversineKm((float) $destLat, (float) $destLng, (float) $shipment->delivery_lat, (float) $shipment->delivery_lng);
+            $extraMile = max(0.0, round($destToCustomer - $baseDistance, 2));
+        }
+
         $routeSteps = $shipment->routeSteps ?? collect();
         $routeStepsTotal = 0.0;
         $routeStepsCovered = 0.0;
@@ -666,6 +686,9 @@ final class ShipmentController extends Controller
 
         return [
             'total_distance_km'                   => round($totalDistance, 2),
+            'destination_to_customer_km'          => $destToCustomer !== null ? round($destToCustomer, 2) : null,
+            'base_distance_km'                    => round($baseDistance, 2),
+            'extra_mile_km'                       => round($extraMile, 2),
             'covered_distance_km'                 => round($coveredDistance, 2),
             'distance_from_destination_branch_km' => round($distanceFromDest, 2),
             'progress_percent'                    => (int) $progressPercent,
@@ -722,6 +745,52 @@ final class ShipmentController extends Controller
             ?? 0
         );
 
+        $deliveryExtraCharge = (float) (
+            $b['extra_delivery_distance']['total']
+            ?? $raw['distance']['charge']
+            ?? $raw['delivery_extra_charge']
+            ?? ($shipment->last_mile_fee ?? 0)
+        );
+
+        $extraDistanceKm = (float) (
+            $b['extra_delivery_distance']['extra_distance_km']
+            ?? $raw['distance']['extra_distance_km']
+            ?? 0
+        );
+
+        $extraDistanceRate = (float) (
+            $b['extra_delivery_distance']['rate_per_km']
+            ?? $raw['distance']['rate_per_km']
+            ?? 5.0
+        );
+
+        $weightCharge = (float) (
+            $b['additional_weight']['total']
+            ?? $raw['weight_summary']['total_weight_charge']
+            ?? $b['weight']['charge']
+            ?? $raw['weight_charge']
+            ?? ($shipment->weight_fee ?? 0)
+        );
+
+        $finalPrice = (float) (
+            $raw['final_price'] ?? $shipment->delivery_charge ?? 0
+        );
+
+        if ($weightCharge <= 0 && $finalPrice > ($routeBaseRate + $deliveryExtraCharge)) {
+            $weightCharge = round($finalPrice - ($routeBaseRate + $deliveryExtraCharge), 2);
+        }
+
+        $includedDistKm = (float) (
+            $b['extra_delivery_distance']['included_distance_km']
+            ?? $raw['distance']['included_distance_km']
+            ?? 10.0
+        );
+        $deliveryDistKm = (float) (
+            $b['extra_delivery_distance']['delivery_distance_km']
+            ?? $raw['distance']['delivery_distance_km']
+            ?? 0
+        );
+
         return [
             'pickup_branch_name'    => $pickupBranchName,
             'delivery_branch_name'  => $deliveryBranchName,
@@ -731,17 +800,30 @@ final class ShipmentController extends Controller
             'base_delivery_fee'     => $routeBaseRate,
             'base_transfer_fee'     => 0,
             'pickup_extra_charge'   => 0,
-            'delivery_extra_charge' => (float) ($b['extra_delivery_distance']['total'] ?? 0),
-            'extra_distance_km'     => (float) ($b['extra_delivery_distance']['extra_distance_km'] ?? 0),
-            'extra_distance_rate'   => (float) ($b['extra_delivery_distance']['rate_per_km'] ?? 0),
-            'weight_charge'         => (float) ($b['additional_weight']['total'] ?? 0),
-            'fragile_charge'        => (float) ($b['fragile']['total'] ?? 0),
-            'same_day_charge'       => (float) ($b['same_day']['total'] ?? 0),
-            'express_charge'        => (float) ($b['express']['total'] ?? 0),
+            'delivery_extra_charge' => $deliveryExtraCharge,
+            'extra_distance_km'     => $extraDistanceKm,
+            'extra_distance_rate'   => $extraDistanceRate,
+            'extra_delivery_distance' => $b['extra_delivery_distance'] ?? [
+                'delivery_distance_km' => $deliveryDistKm,
+                'included_distance_km' => $includedDistKm,
+                'extra_distance_km'    => $extraDistanceKm,
+                'rate_per_km'          => $extraDistanceRate,
+                'total'                => $deliveryExtraCharge,
+            ],
+            'weight_charge'         => $weightCharge,
+            'included_weight_kg'    => (float) ($b['additional_weight']['included_weight_kg'] ?? $raw['weight_summary']['included_weight_kg'] ?? 2.0),
+            'additional_weight'     => $b['additional_weight'] ?? [
+                'total_weight_kg'   => (float) ($shipment->weight ?? 0),
+                'included_weight_kg'=> (float) ($b['additional_weight']['included_weight_kg'] ?? 2.0),
+                'excess_weight_kg'  => (float) ($b['additional_weight']['excess_weight_kg'] ?? 0),
+                'rate_per_kg'       => (float) ($b['additional_weight']['rate_per_kg'] ?? 50.0),
+                'total'             => $weightCharge,
+            ],
+            'fragile_charge'        => (float) ($b['fragile']['total'] ?? $raw['fragile']['charge'] ?? 0),
+            'same_day_charge'       => (float) ($b['same_day']['total'] ?? $raw['same_day']['charge'] ?? 0),
+            'express_charge'        => (float) ($b['express']['total'] ?? $raw['express']['charge'] ?? 0),
             'pod_fee'               => (float) ($shipment->pod_charge ?? 0),
-            'final_price'           => (float) (
-                $raw['final_price'] ?? $shipment->delivery_charge ?? 0
-            ),
+            'final_price'           => $finalPrice,
             'raw'                   => $raw,
         ];
     }
@@ -1159,16 +1241,28 @@ final class ShipmentController extends Controller
     private function isGlobalAdmin(
         $user
     ): bool {
+        if (! $user) {
+            return false;
+        }
+
+        if (method_exists($user, 'isHqUser') && $user->isHqUser()) {
+            return true;
+        }
+
         return (bool) (
-            $user?->is_super_admin
-            || $user?->role === 'super_admin'
+            $user->is_super_admin
+            || $user->role === 'super_admin'
             || (
                 method_exists($user, 'isSuperAdmin')
                 && $user->isSuperAdmin()
             )
             || (
+                method_exists($user, 'hasAnyRole')
+                && $user->hasAnyRole(['main_admin', 'admin', 'hq_admin', 'hq_manager', 'hq_operations_staff', 'hq_accounts_staff'])
+            )
+            || (
                 method_exists($user, 'hasRole')
-                && $user->hasRole('main_admin')
+                && ($user->hasRole('main_admin') || $user->hasRole('hq_admin') || $user->hasRole('hq_manager') || $user->hasRole('hq_operations_staff'))
             )
         );
     }

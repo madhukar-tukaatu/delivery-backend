@@ -53,7 +53,9 @@ final class PickupController extends Controller
         if (
             $user->isSuperAdmin()
             ||
-            $user->hasRole('main_admin')
+            (method_exists($user, 'isHqUser') && $user->isHqUser())
+            ||
+            $user->hasAnyRole(['main_admin', 'hq_admin', 'hq_manager', 'hq_operations_staff'])
         ) {
             /*
              * Global access.
@@ -201,7 +203,9 @@ final class PickupController extends Controller
             (
                 $user->isSuperAdmin()
                 ||
-                $user->hasRole('main_admin')
+                (method_exists($user, 'isHqUser') && $user->isHqUser())
+                ||
+                $user->hasAnyRole(['main_admin', 'hq_admin', 'hq_manager', 'hq_operations_staff'])
             )
         ) {
             $branchId = (int) $request->input('branch_id');
@@ -660,7 +664,9 @@ final class PickupController extends Controller
         if (
             $user->isSuperAdmin()
             ||
-            $user->hasRole('main_admin')
+            (method_exists($user, 'isHqUser') && $user->isHqUser())
+            ||
+            $user->hasAnyRole(['main_admin', 'hq_admin', 'hq_manager', 'hq_operations_staff'])
         ) {
             return;
         }
@@ -721,7 +727,9 @@ final class PickupController extends Controller
         if (
             $user->isSuperAdmin()
             ||
-            $user->hasRole('main_admin')
+            (method_exists($user, 'isHqUser') && $user->isHqUser())
+            ||
+            $user->hasAnyRole(['main_admin', 'hq_admin', 'hq_manager', 'hq_operations_staff'])
         ) {
             return;
         }
@@ -766,7 +774,9 @@ final class PickupController extends Controller
         if (
             $user->isSuperAdmin()
             ||
-            $user->hasRole('main_admin')
+            (method_exists($user, 'isHqUser') && $user->isHqUser())
+            ||
+            $user->hasAnyRole(['main_admin', 'hq_admin', 'hq_manager', 'hq_operations_staff'])
         ) {
             return;
         }

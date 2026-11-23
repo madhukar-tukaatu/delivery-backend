@@ -3,16 +3,14 @@
 namespace App\Events;
 
 use Illuminate\Broadcasting\PrivateChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 use Modules\Delivery\Models\DeliveryAssignment;
 
-class DeliveryStatusUpdated implements ShouldBroadcast
+class DeliveryStatusUpdated implements ShouldBroadcastNow
 {
     use Dispatchable, SerializesModels;
-
-    public string $queue = 'broadcasts';
 
     public function __construct(public DeliveryAssignment $delivery)
     {

@@ -118,9 +118,31 @@ class FareQuoteService
         $breakdown = is_array($priced['breakdown'] ?? null) ? $priced['breakdown'] : [];
         $baseFee = round((float) (
             $breakdown['base_rate']
+            ?? data_get($breakdown, 'breakdown.route_base_rate.total')
+            ?? data_get($breakdown, 'breakdown.route_base_rate.amount')
             ?? data_get($breakdown, 'breakdown.base_rate')
+            ?? data_get($breakdown, 'route.base_rate')
             ?? $deliveryCharge
         ), 2);
+
+        $distanceFee = round((float) (
+            data_get($breakdown, 'distance_fee')
+            ?? data_get($breakdown, 'breakdown.extra_delivery_distance.total')
+            ?? data_get($breakdown, 'distance.charge')
+            ?? 0
+        ), 2);
+
+        $weightFee = round((float) (
+            data_get($breakdown, 'weight_fee')
+            ?? data_get($breakdown, 'breakdown.additional_weight.total')
+            ?? data_get($breakdown, 'weight_summary.total_weight_charge')
+            ?? data_get($breakdown, 'weight.charge')
+            ?? 0
+        ), 2);
+
+        if ($weightFee <= 0 && $deliveryCharge > ($baseFee + $distanceFee)) {
+            $weightFee = round($deliveryCharge - ($baseFee + $distanceFee), 2);
+        }
 
         return [
             'pickup_location' => $pickupLocation,
@@ -130,11 +152,11 @@ class FareQuoteService
             'fare' => [
                 'base_fee' => $baseFee,
                 'distance_km' => round($distanceKm, 2),
-                'distance_fee' => round((float) (data_get($breakdown, 'distance_fee') ?? 0), 2),
+                'distance_fee' => $distanceFee,
                 'actual_weight' => $actualWeight,
                 'volumetric_weight' => $volumetric,
                 'chargeable_weight' => $chargeableWeight,
-                'weight_fee' => round((float) (data_get($breakdown, 'weight_fee') ?? 0), 2),
+                'weight_fee' => $weightFee,
                 'pod_fee' => $podFee,
                 'pod_amount' => $podAmount,
                 'pod_charge' => $podFee,

@@ -602,6 +602,12 @@ final class PricingEngineService
                 'operational_branch_name' =>
                     $pickupServing['name'],
 
+                'operational_branch_latitude' =>
+                    $pickupServing['latitude'] ?? null,
+
+                'operational_branch_longitude' =>
+                    $pickupServing['longitude'] ?? null,
+
                 'operational_branch_distance_km' =>
                     $pickupServing['branch_distance_km'],
             ],
@@ -640,6 +646,12 @@ final class PricingEngineService
 
                 'operational_branch_name' =>
                     $deliveryServing['name'],
+
+                'operational_branch_latitude' =>
+                    $deliveryServing['latitude'] ?? null,
+
+                'operational_branch_longitude' =>
+                    $deliveryServing['longitude'] ?? null,
 
                 'operational_branch_distance_km' =>
                     $deliveryServing['branch_distance_km'],
@@ -1980,6 +1992,9 @@ final class PricingEngineService
                 'id' => null,
                 'name' => null,
                 'sub_branch_id' => null,
+                'sub_branch_name' => null,
+                'latitude' => null,
+                'longitude' => null,
                 'coverage_location_id' => (int) $zone->id,
                 'coverage_location_name' => (string) ($zone->name ?? "Zone {$zone->id}"),
                 'coverage_location_source' => 'customer_coverage_location',
@@ -2040,6 +2055,8 @@ final class PricingEngineService
                 'name' => $parent !== null ? ($parent->name ?? null) : ($node->name ?? null),
                 'sub_branch_id' => $payload['sub_branch_id'] ?? null,
                 'sub_branch_name' => $payload['sub_branch'] !== null ? ($node->name ?? null) : null,
+                'latitude' => (float) $nodeLat,
+                'longitude' => (float) $nodeLng,
                 'coverage_location_id' => (int) $pricingZone->id,
                 'coverage_location_name' => (string) $pricingZone->name,
                 'coverage_location_source' => (string) $pricingZone->source,

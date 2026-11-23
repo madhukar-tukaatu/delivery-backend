@@ -1794,8 +1794,14 @@ class BranchController extends Controller
 
     private function isSystemAdmin($user): bool
     {
-        return $user->hasRole('super_admin')
+        return $user->isSuperAdmin()
+            || (method_exists($user, 'isHqUser') && $user->isHqUser())
+            || $user->hasRole('super_admin')
             || $user->hasRole('main_admin')
-            || $user->hasRole('admin');
+            || $user->hasRole('admin')
+            || $user->hasRole('hq_admin')
+            || $user->hasRole('hq_manager')
+            || $user->hasRole('hq_operations_staff')
+            || $user->hasRole('hq_accounts_staff');
     }
 }

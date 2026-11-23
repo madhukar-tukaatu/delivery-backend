@@ -54,8 +54,12 @@ class MerchantDocumentController extends Controller
             && $user->merchant
             && (int) $user->merchant->id === (int) $document->merchant_id;
 
-        $isAdmin = $user->hasRole('super_admin')
+        $isAdmin = $user->isSuperAdmin()
+            || (method_exists($user, 'isHqUser') && $user->isHqUser())
+            || $user->hasRole('super_admin')
             || $user->hasRole('main_admin')
+            || $user->hasRole('hq_admin')
+            || $user->hasRole('hq_manager')
             || $user->can('merchant_applications.view')
             || $user->can('merchants.view');
 

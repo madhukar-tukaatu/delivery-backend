@@ -263,7 +263,7 @@ final class StorePublicPricingQuoteRequest extends FormRequest
             'packets.*.quantity' => [
                 'nullable',
                 'integer',
-                'in:1',
+                'min:1',
             ],
 
             'packets.*.actual_weight_kg' => [
@@ -547,41 +547,40 @@ final class StorePublicPricingQuoteRequest extends FormRequest
 
     private function normalizePackets(array $packets): array
     {
-        return array_map(
-            function (mixed $packet): mixed {
-                if (!is_array($packet)) {
-                    return $packet;
+        $expanded = [];
+
+        foreach ($packets as $packet) {
+            if (!is_array($packet)) {
+                $expanded[] = $packet;
+                continue;
+            }
+
+            $qty = max(1, (int) ($packet['quantity'] ?? 1));
+
+            if (
+                !array_key_exists('actual_weight_kg', $packet) &&
+                array_key_exists('parcel_weight', $packet)
+            ) {
+                $packet['actual_weight_kg'] = $packet['parcel_weight'];
+            }
+
+            $packet['parcel_type'] = $this->normalizeParcelType(
+                (string) ($packet['parcel_type'] ?? 'non_fragile')
+            );
+
+            $this->normalizeDimensions($packet);
+
+            for ($i = 0; $i < $qty; $i++) {
+                $p = $packet;
+                $p['quantity'] = 1;
+                if ($qty > 1 && !empty($p['packet_reference'])) {
+                    $p['packet_reference'] = $p['packet_reference'] . '-' . ($i + 1);
                 }
+                $expanded[] = $p;
+            }
+        }
 
-                $packet['quantity'] = (int) (
-                    $packet['quantity'] ?? 1
-                );
-
-                if (
-                    !array_key_exists(
-                        'actual_weight_kg',
-                        $packet
-                    ) &&
-                    array_key_exists('parcel_weight', $packet)
-                ) {
-                    $packet['actual_weight_kg'] =
-                        $packet['parcel_weight'];
-                }
-
-                $packet['parcel_type'] =
-                    $this->normalizeParcelType(
-                        (string) (
-                            $packet['parcel_type']
-                            ?? 'non_fragile'
-                        )
-                    );
-
-                $this->normalizeDimensions($packet);
-
-                return $packet;
-            },
-            $packets
-        );
+        return $expanded;
     }
 
     private function normalizeProducts(array $products): array

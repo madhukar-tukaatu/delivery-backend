@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Modules\Shipment\Http\Controllers;
 
 use App\Http\Controllers\Controller;
+use App\Events\TransferStatusUpdated;
 use App\Support\ApiResponse;
 use App\Support\CourierStatus;
 use Illuminate\Http\Request;
@@ -1257,6 +1258,18 @@ final class TransferController extends Controller
         $verb = !empty($data['hold']) ? 'loaded on' : 'dispatched on';
         $msg = "{$ok} parcel(s) {$verb} ".implode(', ', $result['transfer_numbers']).'.';
 
+        try {
+            event(new TransferStatusUpdated(
+                transferData: [
+                    'action' => !empty($data['hold']) ? 'loaded' : 'dispatched',
+                    'dispatched_count' => $ok,
+                    'transfer_numbers' => $result['transfer_numbers'] ?? [],
+                ],
+                action: !empty($data['hold']) ? 'loaded' : 'dispatched',
+                branchId: $branchId > 0 ? $branchId : null,
+            ));
+        } catch (\Throwable $e) {}
+
         return ApiResponse::success($result, $fail === 0 ? $msg : $msg." {$fail} skipped.");
     }
 
@@ -1298,6 +1311,18 @@ final class TransferController extends Controller
         } catch (\Exception $e) {
             return ApiResponse::error($e->getMessage(), 422);
         }
+
+        try {
+            event(new TransferStatusUpdated(
+                transferData: [
+                    'action' => 'received',
+                    'shipment_id' => $shipment->id,
+                    'tracking_number' => $shipment->tracking_number,
+                ],
+                action: 'received',
+                branchId: $branchId > 0 ? $branchId : null,
+            ));
+        } catch (\Throwable $e) {}
 
         return ApiResponse::success(
             $res['shipment'],
@@ -1444,7 +1469,7 @@ final class TransferController extends Controller
     {
         $branchId = $this->getBranchScope($user);
         $requested = $request->integer('branch_id');
-        if ($requested > 0 && ($user->isSuperAdmin() || $user->hasRole('main_admin') || $user->hasRole('admin'))) {
+        if ($requested > 0 && ($user->isSuperAdmin() || (method_exists($user, 'isHqUser') && $user->isHqUser()) || $user->hasAnyRole(['main_admin', 'admin', 'hq_admin', 'hq_manager', 'hq_operations_staff']))) {
             return $requested;
         }
         return $branchId;
@@ -2154,6 +2179,18 @@ final class TransferController extends Controller
         $msg = count($res['added']).' parcel(s) added to '.$c->display_number.'.'
             .($res['skipped'] ? ' '.count($res['skipped']).' skipped.' : '');
 
+        try {
+            event(new TransferStatusUpdated(
+                transferData: [
+                    'action' => 'container_received',
+                    'container_id' => $container->id,
+                    'display_number' => $container->display_number,
+                ],
+                action: 'received',
+                branchId: (int) $container->to_branch_id,
+            ));
+        } catch (\Throwable $e) {}
+
         return ApiResponse::success([
             'container' => $this->containers->summarize($c->load('items.shipment.destinationBranch:id,name'), true),
             'added' => $res['added'],
@@ -2173,6 +2210,18 @@ final class TransferController extends Controller
 
         $res = $this->containers->removeFromOpen($container, $data['shipment_ids'], $data['reason'] ?? null, (int) $request->user()->id);
         $c = $res['container'];
+
+        try {
+            event(new TransferStatusUpdated(
+                transferData: [
+                    'action' => 'container_received',
+                    'container_id' => $container->id,
+                    'display_number' => $container->display_number,
+                ],
+                action: 'received',
+                branchId: (int) $container->to_branch_id,
+            ));
+        } catch (\Throwable $e) {}
 
         return ApiResponse::success([
             'container' => $this->containers->summarize($c->load('items.shipment.destinationBranch:id,name'), true),
@@ -2252,6 +2301,18 @@ final class TransferController extends Controller
             $msg .= ' Seal '.$res['seal']['status'].' recorded; '.($c->fromBranch?->name ?? 'the sending branch').' notified.';
         }
 
+        try {
+            event(new TransferStatusUpdated(
+                transferData: [
+                    'action' => 'container_received',
+                    'container_id' => $container->id,
+                    'display_number' => $container->display_number,
+                ],
+                action: 'received',
+                branchId: (int) $container->to_branch_id,
+            ));
+        } catch (\Throwable $e) {}
+
         return ApiResponse::success([
             'container' => $this->containers->summarize($c->load('items.shipment.destinationBranch:id,name'), true),
             'received' => $res['received'],
@@ -2304,7 +2365,7 @@ final class TransferController extends Controller
         if (! $user) {
             return false;
         }
-        if ((method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) || $user->hasRole('main_admin')) {
+        if ((method_exists($user, 'isSuperAdmin') && $user->isSuperAdmin()) || (method_exists($user, 'isHqUser') && $user->isHqUser()) || $user->hasAnyRole(['main_admin', 'hq_admin', 'hq_manager', 'hq_operations_staff'])) {
             return true;
         }
 
@@ -2348,6 +2409,18 @@ final class TransferController extends Controller
         abort_unless($this->branchMatches($request, (int) $container->from_branch_id), 403, 'Only the sending branch can dispatch this TR.');
 
         $c = $this->containers->dispatchOpen($container, $data, (int) $request->user()->id);
+
+        try {
+            event(new TransferStatusUpdated(
+                transferData: [
+                    'action' => 'container_dispatched',
+                    'container_id' => $container->id,
+                    'display_number' => $container->display_number,
+                ],
+                action: 'dispatched',
+                branchId: (int) $container->from_branch_id,
+            ));
+        } catch (\Throwable $e) {}
 
         return ApiResponse::success($this->containers->summarize($c), $c->display_number.' dispatched.');
     }
@@ -2864,6 +2937,18 @@ final class TransferController extends Controller
             'created_by_user_id' => $request->user()?->id,
         ]);
 
+        try {
+            event(new TransferStatusUpdated(
+                transferData: [
+                    'action' => 'transfer_request_created',
+                    'request_number' => $number,
+                    'origin_branch_id' => $validated['origin_branch_id'],
+                ],
+                action: 'created',
+                branchId: (int) $validated['origin_branch_id'],
+            ));
+        } catch (\Throwable $e) {}
+
         return ApiResponse::success($req->fresh(['originBranch', 'destinationHub']), 'Transfer vehicle request submitted successfully.');
     }
 
@@ -2926,6 +3011,19 @@ final class TransferController extends Controller
             ]);
         }
 
+        try {
+            event(new TransferStatusUpdated(
+                transferData: [
+                    'action' => 'transfer_request_dispatched',
+                    'request_number' => $transferRequest->request_number,
+                    'origin_branch_id' => $originId,
+                    'manifest_id' => $manifest?->id,
+                ],
+                action: 'dispatched',
+                branchId: $originId,
+            ));
+        } catch (\Throwable $e) {}
+
         return ApiResponse::success([
             'transfer_request' => $transferRequest->fresh(),
             'manifest' => $manifest,
@@ -2934,7 +3032,11 @@ final class TransferController extends Controller
 
     private function getBranchScope($user): int
     {
-        if ($user->isSuperAdmin() || $user->hasRole('main_admin')) {
+        if (
+            $user->isSuperAdmin()
+            || (method_exists($user, 'isHqUser') && $user->isHqUser())
+            || $user->hasAnyRole(['main_admin', 'admin', 'hq_admin', 'hq_manager', 'hq_operations_staff'])
+        ) {
             return 0; // No scope restriction
         }
 

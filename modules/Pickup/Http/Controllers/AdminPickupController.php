@@ -1180,10 +1180,17 @@ final class AdminPickupController extends Controller
     private function isGlobalAdmin(
         User $user
     ): bool {
+        if ($user->isSuperAdmin() || (method_exists($user, 'isHqUser') && $user->isHqUser())) {
+            return true;
+        }
+
         return $user->hasAnyRole([
             'super_admin',
             'admin',
             'main_admin',
+            'hq_admin',
+            'hq_manager',
+            'hq_operations_staff',
         ]);
     }
 

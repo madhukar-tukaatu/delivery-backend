@@ -6,11 +6,11 @@ namespace App\Events;
 
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
-use Illuminate\Contracts\Broadcasting\ShouldBroadcast;
+use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
-final class MerchantApplicationChanged implements ShouldBroadcast
+final class MerchantApplicationChanged implements ShouldBroadcastNow
 {
     use Dispatchable;
     use InteractsWithSockets;
@@ -28,6 +28,7 @@ final class MerchantApplicationChanged implements ShouldBroadcast
         $channels = [
             new PrivateChannel('admin.merchants'),
             new PrivateChannel('admin.operations'),
+            new PrivateChannel('admin.merchant-applications'),
         ];
 
         if (!empty($this->merchant['id'])) {

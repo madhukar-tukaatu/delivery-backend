@@ -251,7 +251,7 @@ class DeliveryRunController extends Controller
             'vehicle_number' => ['nullable', 'string', 'max:60'],
         ]);
         $user = $request->user();
-        abort_unless($user->isSuperAdmin() || $user->hasRole('main_admin'), 403, 'The rider starts the run after bagging every parcel.');
+        abort_unless($user->isSuperAdmin() || (method_exists($user, 'isHqUser') && $user->isHqUser()) || $user->hasAnyRole(['main_admin', 'hq_admin', 'hq_manager', 'hq_operations_staff']), 403, 'The rider starts the run after bagging every parcel.');
         $run = $this->runs->dispatch($run, $user, $data);
 
         return ApiResponse::success($this->runs->summarize($run, true), "{$run->run_number} started by admin override. ".$this->outCount($run).'.');
@@ -385,7 +385,7 @@ class DeliveryRunController extends Controller
     private function scope(Request $request): int
     {
         $user = $request->user();
-        if ($user->isSuperAdmin() || $user->hasRole('main_admin') || $user->hasRole('admin')) {
+        if ($user->isSuperAdmin() || (method_exists($user, 'isHqUser') && $user->isHqUser()) || $user->hasAnyRole(['main_admin', 'admin', 'hq_admin', 'hq_manager', 'hq_operations_staff'])) {
             return max(0, (int) $request->input('branch_id', 0));
         }
         $branchId = (int) ($user->branch_id ?? 0);

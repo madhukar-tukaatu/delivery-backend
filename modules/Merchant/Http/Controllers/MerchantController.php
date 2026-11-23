@@ -27,18 +27,33 @@ class MerchantController extends Controller
     */
 
         $isSuperAdmin =
-        $user?->is_super_admin === true ||
-        in_array(
-            strtolower((string) $user?->role),
-            [
+            $user?->is_super_admin === true ||
+            (method_exists($user, 'isHqUser') && $user?->isHqUser()) ||
+            in_array(
+                strtolower((string) $user?->role),
+                [
+                    'super_admin',
+                    'super-admin',
+                    'superadmin',
+                    'admin',
+                    'main_admin',
+                    'hq_admin',
+                    'hq_manager',
+                    'hq_accounts_staff',
+                    'hq_operations_staff',
+                    'web',
+                ],
+                true
+            ) ||
+            (method_exists($user, 'hasAnyRole') && $user?->hasAnyRole([
                 'super_admin',
-                'super-admin',
-                'superadmin',
+                'main_admin',
                 'admin',
-                'web',
-            ],
-            true
-        );
+                'hq_admin',
+                'hq_manager',
+                'hq_accounts_staff',
+                'hq_operations_staff',
+            ]));
 
         /*
     |--------------------------------------------------------------------------

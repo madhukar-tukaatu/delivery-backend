@@ -123,7 +123,7 @@ final class DeliveryRunService
     /** @return list<array<string,mixed>> */
     public function readyList(int $branchId, ?string $search = null, int $limit = 500): array
     {
-        $q = $this->readyQuery($branchId)->with('merchant:id,name');
+        $q = $this->readyQuery($branchId)->with('merchant:id,name,code,phone,address');
         if ($search !== null && trim($search) !== '') {
             $term = trim($search);
             $q->where(function ($w) use ($term) {
@@ -1386,7 +1386,7 @@ final class DeliveryRunService
 
         if ($withItems) {
             $items = DeliveryRunItem::query()->where('delivery_run_id', $run->id)
-                ->with(['shipment.merchant:id,name', 'delivery'])
+                ->with(['shipment.merchant:id,name,code,phone,address', 'delivery'])
                 ->orderByRaw("CASE WHEN status = 'removed' THEN 1 ELSE 0 END")
                 ->orderBy('sequence')->orderBy('id')->get();
             $out['items'] = $items->map(fn (DeliveryRunItem $i) => $this->itemRow($i))->values()->all();
@@ -2089,11 +2089,21 @@ final class DeliveryRunService
 
     private function shipmentRow(Shipment $s): array
     {
+        $m = $s->relationLoaded('merchant') ? $s->merchant : null;
+
         return [
             'shipment_id' => $s->id,
             'tracking_number' => $s->tracking_number,
             'shipment_status' => $s->status,
-            'merchant' => $s->relationLoaded('merchant') && $s->merchant ? ['id' => $s->merchant->id, 'name' => $s->merchant->name] : null,
+            'merchant' => $m ? [
+                'id' => $m->id,
+                'name' => $m->name,
+                'code' => $m->code ?? null,
+                'phone' => $m->phone ?? null,
+                'address' => $m->address ?? null,
+            ] : null,
+            'merchant_name' => $m?->name,
+            'merchant_phone' => $m?->phone,
             'receiver_name' => $s->receiver_name,
             'receiver_phone' => $s->receiver_phone,
             'delivery_address' => $s->delivery_address,

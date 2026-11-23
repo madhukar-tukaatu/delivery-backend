@@ -40,7 +40,17 @@ use Modules\Shipment\Models\Shipment;
  */
 class FinanceBranchScope
 {
-    public const HQ_ROLES = ['super_admin', 'main_admin', 'admin'];
+    public const HQ_ROLES = [
+        'super_admin',
+        'main_admin',
+        'admin',
+        'hq_admin',
+        'hq_manager',
+        'hq_accounts_staff',
+        'hq_account_staff',
+        'hq_operations_staff',
+        'hq_operation_staff',
+    ];
 
     public static function isHq(?Authenticatable $user): bool
     {

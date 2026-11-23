@@ -194,7 +194,11 @@ class BranchVisibilityService
     {
         return $user->hasRole('super_admin')
             || $user->hasRole('main_admin')
-            || $user->hasRole('admin');
+            || $user->hasRole('admin')
+            || $user->hasRole('hq_admin')
+            || $user->hasRole('hq_manager')
+            || $user->hasRole('hq_operations_staff')
+            || $user->hasRole('hq_accounts_staff');
     }
 
     private function isHeadBranch(?string $type): bool

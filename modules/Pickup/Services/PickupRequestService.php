@@ -967,7 +967,20 @@ final class PickupRequestService
                         }
 
                         if ($this->shipmentHasColumn('last_mile_fee') && !empty($resolved['breakdown'])) {
-                            $shipment->last_mile_fee = round((float) data_get($resolved, 'breakdown.breakdown.extra_delivery_distance.total', 0), 2);
+                            $shipment->last_mile_fee = round((float) (
+                                data_get($resolved, 'breakdown.breakdown.extra_delivery_distance.total')
+                                ?? data_get($resolved, 'breakdown.distance.charge')
+                                ?? 0
+                            ), 2);
+                        }
+
+                        if ($this->shipmentHasColumn('weight_fee') && !empty($resolved['breakdown'])) {
+                            $shipment->weight_fee = round((float) (
+                                data_get($resolved, 'breakdown.breakdown.additional_weight.total')
+                                ?? data_get($resolved, 'breakdown.weight_summary.total_weight_charge')
+                                ?? data_get($resolved, 'breakdown.weight.charge')
+                                ?? 0
+                            ), 2);
                         }
 
                         // Sync downstream pricing breakdown if table exists

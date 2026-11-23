@@ -509,11 +509,39 @@ final class ShipmentService
                 }
 
                 if (array_key_exists('last_mile_fee', $columns)) {
-                    $shipmentData['last_mile_fee'] = round((float) data_get($charges, 'breakdown.breakdown.extra_delivery_distance.total', 0), 2);
+                    $shipmentData['last_mile_fee'] = round((float) (
+                        data_get($charges, 'breakdown.breakdown.extra_delivery_distance.total')
+                        ?? data_get($charges, 'breakdown.distance.charge')
+                        ?? data_get($charges, 'distance_fee')
+                        ?? 0
+                    ), 2);
                 }
 
                 if (array_key_exists('route_fee', $columns)) {
-                    $shipmentData['route_fee'] = round((float) data_get($charges, 'breakdown.breakdown.route_base_rate.total', 0), 2);
+                    $shipmentData['route_fee'] = round((float) (
+                        data_get($charges, 'breakdown.breakdown.route_base_rate.total')
+                        ?? data_get($charges, 'breakdown.base_rate')
+                        ?? data_get($charges, 'base_fee')
+                        ?? 0
+                    ), 2);
+                }
+
+                if (array_key_exists('weight_fee', $columns)) {
+                    $shipmentData['weight_fee'] = round((float) (
+                        data_get($charges, 'breakdown.breakdown.additional_weight.total')
+                        ?? data_get($charges, 'breakdown.weight_summary.total_weight_charge')
+                        ?? data_get($charges, 'breakdown.weight.charge')
+                        ?? data_get($charges, 'weight_fee')
+                        ?? 0
+                    ), 2);
+                }
+
+                if (array_key_exists('pickup_fee', $columns)) {
+                    $shipmentData['pickup_fee'] = round((float) (
+                        data_get($charges, 'breakdown.breakdown.pickup_minimum.charge')
+                        ?? data_get($charges, 'pickup_fee')
+                        ?? 0
+                    ), 2);
                 }
 
                 /*

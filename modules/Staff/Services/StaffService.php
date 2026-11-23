@@ -47,6 +47,8 @@ final class StaffService
         'super_admin',
         'main_admin',
         'admin',
+        'hq_admin',
+        'hq_manager',
     ];
 
     /** Form / legacy values mapped to real role names. */
@@ -61,6 +63,8 @@ final class StaffService
         'account' => 'accounts_staff',
         'accounts' => 'accounts_staff',
         'account_staff' => 'accounts_staff',
+        'hq_account_staff' => 'hq_accounts_staff',
+        'hq_operation_staff' => 'hq_operations_staff',
         'support' => 'support_staff',
         'warehouse' => 'warehouse_staff',
         'manager' => 'branch_manager',
@@ -106,10 +110,7 @@ final class StaffService
         */
 
         if (
-            $user->hasAnyRole([
-                'super_admin',
-                'admin',
-            ])
+            $user->hasAnyRole(self::GLOBAL_ADMIN_ROLES)
         ) {
             return $query
                 ->orderBy(
@@ -278,10 +279,7 @@ final class StaffService
         */
 
         if (
-            ! $editor->hasAnyRole([
-                'super_admin',
-                'admin',
-            ])
+            ! $editor->hasAnyRole(self::GLOBAL_ADMIN_ROLES)
         ) {
             $staff->branch_id =
                 $editor->branch_id;
@@ -411,10 +409,7 @@ final class StaffService
         mixed $requestedBranchId = null
     ): ?int {
         if (
-            $creator->hasAnyRole([
-                'super_admin',
-                'admin',
-            ])
+            $creator->hasAnyRole(self::GLOBAL_ADMIN_ROLES)
         ) {
             // Global admins may pick the branch; default to their own.
             if ($requestedBranchId !== null && $requestedBranchId !== '') {

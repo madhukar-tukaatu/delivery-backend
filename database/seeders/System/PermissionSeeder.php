@@ -294,6 +294,17 @@ class PermissionSeeder extends Seeder
                 'merchant_settlements.pay'    => 'Merchant Settlements Pay',
             ],
 
+            'HQ Commissions' => [
+                'hq-commissions.bills'        => 'HQ Commission Bills View',
+                'hq-commissions.settings'     => 'HQ Commission Settings',
+                'hq-commissions.settlements'  => 'HQ Commission Settlements',
+            ],
+
+            'Payment Gateways' => [
+                'payment-gateways.accounts' => 'Payment Gateway Accounts',
+                'payment-gateways.catalog'  => 'Payment Gateway Catalog',
+            ],
+
             // ─────────────────────────────────────────────────────────────
             // Integrations / Logs
             // ─────────────────────────────────────────────────────────────

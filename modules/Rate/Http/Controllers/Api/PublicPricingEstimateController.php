@@ -436,16 +436,20 @@ final class PublicPricingEstimateController extends Controller
      */
     private function resolveDefaultWeight(): float
     {
-        $setting = \Illuminate\Support\Facades\DB::table('pricing_settings')
-            ->where('is_active', true)
-            ->orderByDesc('id')
-            ->first(['base_weight_kg', 'included_weight_kg']);
+        try {
+            $setting = \Illuminate\Support\Facades\DB::table('pricing_settings')
+                ->where('is_active', true)
+                ->orderByDesc('id')
+                ->first();
 
-        if ($setting) {
-            $val = $setting->base_weight_kg ?? $setting->included_weight_kg;
-            if ($val !== null && (float) $val > 0) {
-                return round((float) $val, 3);
+            if ($setting) {
+                $val = $setting->base_weight_kg ?? $setting->included_weight_kg ?? null;
+                if ($val !== null && (float) $val > 0) {
+                    return round((float) $val, 3);
+                }
             }
+        } catch (\Throwable $e) {
+            // fallback
         }
 
         return 1.5;

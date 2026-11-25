@@ -35,6 +35,44 @@ class AdminShipmentController extends Controller
 
         $this->attachListFields($shipment);
 
+        // Multi-product reconciliation for accurate weight and delivery charge display
+        $packetProducts = !empty($shipment->packet_products)
+            ? (is_string($shipment->packet_products) ? json_decode($shipment->packet_products, true) : (array) $shipment->packet_products)
+            : [];
+        $productsTotal = 0.0;
+        $totalProductWeight = 0.0;
+        if (is_array($packetProducts)) {
+            foreach ($packetProducts as $prod) {
+                if (!is_array($prod)) continue;
+                $pPrice = (float) ($prod['unit_price'] ?? $prod['price'] ?? 0);
+                $pWeight = (float) ($prod['unit_weight'] ?? $prod['weight'] ?? 1.0);
+                $qty = max(1, (int) ($prod['quantity'] ?? 1));
+                if ($pPrice > 0) {
+                    $productsTotal += $pPrice * $qty;
+                }
+                if ($pWeight > 0) {
+                    $totalProductWeight += $pWeight * $qty;
+                }
+            }
+        }
+
+        // If products total weight is higher than stored weight, reflect actual combined weight
+        if ($totalProductWeight > (float) ($shipment->weight ?? 0)) {
+            $shipment->weight = $totalProductWeight;
+            $shipment->actual_weight = $totalProductWeight;
+            $shipment->chargeable_weight = $totalProductWeight;
+        }
+
+        // Reconcile customer delivery fee when customer pays delivery and collect_amount covers products + delivery
+        $paidBy = strtolower((string) ($shipment->delivery_charge_paid_by ?? 'customer'));
+        $collectAmt = (float) ($shipment->collect_amount ?? $shipment->pod_amount ?? $shipment->total_collectable_amount ?? 0);
+        if ($paidBy === 'customer' && $productsTotal > 0 && $collectAmt > $productsTotal) {
+            $customerDeliveryFee = round($collectAmt - $productsTotal, 2);
+            if ($customerDeliveryFee > (float) ($shipment->delivery_charge ?? 0)) {
+                $shipment->delivery_charge = $customerDeliveryFee;
+            }
+        }
+
         $priceBreakdown = $this->optionalFirst('shipment_price_breakdowns', 'shipment_id', $id);
         if (!$priceBreakdown && !empty($shipment->delivery_charge_breakdown)) {
             $raw = is_string($shipment->delivery_charge_breakdown)
@@ -53,14 +91,14 @@ class AdminShipmentController extends Controller
                     ?? data_get($raw, 'distance.charge')
                     ?? ($shipment->last_mile_fee ?? 0)
                 );
+                $delivCharge = (float) ($shipment->delivery_charge ?? data_get($raw, 'final_price') ?? 0);
                 $weightChg = (float) (
                     data_get($b, 'additional_weight.total')
                     ?? data_get($raw, 'weight_summary.total_weight_charge')
                     ?? data_get($raw, 'weight.charge')
                     ?? ($shipment->weight_fee ?? 0)
                 );
-                $delivCharge = (float) (data_get($raw, 'final_price') ?? ($shipment->delivery_charge ?? 0));
-                if ($weightChg <= 0 && $delivCharge > ($routeBaseRate + $extraDistTotal)) {
+                if ($delivCharge > ($routeBaseRate + $extraDistTotal)) {
                     $weightChg = round($delivCharge - ($routeBaseRate + $extraDistTotal), 2);
                 }
 
@@ -85,6 +123,13 @@ class AdminShipmentController extends Controller
                     ?? 5.0
                 );
 
+                $includedWeightKg = (float) (
+                    data_get($b, 'additional_weight.included_weight_kg')
+                    ?? data_get($raw, 'weight_summary.included_weight_kg')
+                    ?? 1.0
+                );
+                $excessWeightKg = max(0.0, round((float) ($shipment->weight ?? 0) - $includedWeightKg, 2));
+
                 $priceBreakdown = (object) [
                     'pickup_branch_name'    => data_get($raw, 'pickup_branch.name') ?? ($shipment->origin_branch_name ?? null),
                     'delivery_branch_name'  => data_get($raw, 'delivery_branch.name') ?? ($shipment->destination_branch_name ?? null),
@@ -105,12 +150,12 @@ class AdminShipmentController extends Controller
                         'total'                => $extraDistTotal,
                     ],
                     'weight_charge'         => $weightChg,
-                    'included_weight_kg'    => (float) (data_get($b, 'additional_weight.included_weight_kg') ?? data_get($raw, 'weight_summary.included_weight_kg') ?? 2.0),
-                    'additional_weight'     => data_get($b, 'additional_weight') ?? [
+                    'included_weight_kg'    => $includedWeightKg,
+                    'additional_weight'     => [
                         'total_weight_kg'   => (float) ($shipment->weight ?? 0),
-                        'included_weight_kg'=> (float) (data_get($b, 'additional_weight.included_weight_kg') ?? 2.0),
-                        'excess_weight_kg'  => (float) (data_get($b, 'additional_weight.excess_weight_kg') ?? 0),
-                        'rate_per_kg'       => (float) (data_get($b, 'additional_weight.rate_per_kg') ?? 50.0),
+                        'included_weight_kg'=> $includedWeightKg,
+                        'excess_weight_kg'  => $excessWeightKg,
+                        'rate_per_kg'       => (float) (data_get($b, 'additional_weight.rate_per_kg') ?? 30.0),
                         'total'             => $weightChg,
                     ],
                     'fragile_charge'        => (float) (data_get($b, 'fragile.total') ?? data_get($raw, 'fragile.charge') ?? 0),
@@ -120,6 +165,14 @@ class AdminShipmentController extends Controller
                     'final_price'           => $delivCharge,
                     'raw'                   => $raw,
                 ];
+            }
+        } elseif ($priceBreakdown) {
+            $delivCharge = (float) ($shipment->delivery_charge ?? 0);
+            $baseRate = (float) ($priceBreakdown->route_base_rate ?? $priceBreakdown->base_delivery_fee ?? 0);
+            $distCharge = (float) ($priceBreakdown->delivery_extra_charge ?? 0);
+            if ($delivCharge > ($baseRate + $distCharge)) {
+                $priceBreakdown->weight_charge = round($delivCharge - ($baseRate + $distCharge), 2);
+                $priceBreakdown->final_price = $delivCharge;
             }
         }
 

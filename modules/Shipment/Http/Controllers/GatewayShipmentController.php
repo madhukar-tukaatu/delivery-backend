@@ -233,6 +233,18 @@ final class GatewayShipmentController extends Controller
                 'min:0',
             ],
 
+            'shipping_charge' => [
+                'nullable',
+                'numeric',
+                'min:0',
+            ],
+
+            'pod_amount' => [
+                'nullable',
+                'numeric',
+                'min:0',
+            ],
+
             'delivery_charge_breakdown' => [
                 'nullable',
                 'array',
@@ -282,16 +294,41 @@ final class GatewayShipmentController extends Controller
 
         if (isset($data['delivery_charge']) && is_numeric($data['delivery_charge'])) {
             $data['delivery_charge'] = (float) $data['delivery_charge'];
+        } elseif (isset($data['shipping_charge']) && is_numeric($data['shipping_charge'])) {
+            $data['delivery_charge'] = (float) $data['shipping_charge'];
         }
 
         $data['self_drop'] =
             (bool) ($data['self_drop'] ?? false);
 
-        // A gateway packet is one packed shipment, matching the public
-        // pricing check's default of 1.5 kg for one parcel. Product quantity
-        // describes contents and must not multiply the shipment weight.
-        if (! isset($data['packet']['weight']) || (float) $data['packet']['weight'] <= 0) {
-            $data['packet']['weight'] = 1.5;
+        // Resolve packet weight: sum product weights if items are present so
+        // multi-item shipments are correctly weighed and not undercharged.
+        $packetProducts = $data['packet']['products'] ?? [];
+        $totalProductWeight = 0.0;
+        $hasItemWeights = false;
+
+        if (is_array($packetProducts) && !empty($packetProducts)) {
+            foreach ($packetProducts as $prod) {
+                if (!is_array($prod)) continue;
+                $unitW = (float) (
+                    $prod['unit_weight']
+                    ?? $prod['weight']
+                    ?? $prod['actual_weight_kg']
+                    ?? 1.0
+                );
+                $qty = max(1, (int) ($prod['quantity'] ?? 1));
+                if ($unitW > 0) {
+                    $totalProductWeight += $unitW * $qty;
+                    $hasItemWeights = true;
+                }
+            }
+        }
+
+        $explicitWeight = (float) ($data['packet']['weight'] ?? 0);
+        if ($hasItemWeights && $totalProductWeight > 0) {
+            $data['packet']['weight'] = $explicitWeight > 0 ? max($explicitWeight, $totalProductWeight) : $totalProductWeight;
+        } elseif ($explicitWeight <= 0) {
+            $data['packet']['weight'] = 1.0;
         }
 
         $data['order_source'] =

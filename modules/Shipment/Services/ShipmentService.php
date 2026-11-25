@@ -401,7 +401,13 @@ final class ShipmentService
                         $packet['quantity'],
 
                     'weight' =>
-                        $packet['weight'],
+                        $charges['weight'] ?? $packet['weight'],
+
+                    'actual_weight' =>
+                        $charges['weight'] ?? $packet['weight'],
+
+                    'chargeable_weight' =>
+                        $charges['weight'] ?? $packet['weight'],
 
                     'declared_value' =>
                         $packet['declared_value'],
@@ -970,13 +976,41 @@ final class ShipmentService
 
         $customerPaysDelivery = ($freeBy === 'none' && $paidBy === 'customer');
 
-        $totalCollectable = $podAmount
-            + ($customerPaysDelivery ? $deliveryCharge : 0.0);
+        // Check if podAmount already represents the gross customer total (products + delivery),
+        // e.g. when the store passed the order grand total into declared_value or pod_amount.
+        $productsTotal = 0.0;
+        $products = data_get($data, 'packet.products', []);
+        if (is_array($products)) {
+            foreach ($products as $p) {
+                $productsTotal += (float) ($p['unit_price'] ?? 0) * max(1, (int) ($p['quantity'] ?? 1));
+            }
+        }
+
+        if ($customerPaysDelivery && $productsTotal > 0 && $podAmount > $productsTotal) {
+            $diff = round($podAmount - $productsTotal, 2);
+            if ($diff > 0) {
+                if (abs($diff - $deliveryCharge) < 0.01 || $diff > $deliveryCharge) {
+                    // podAmount is already the gross total (products + delivery)
+                    $totalCollectable = $podAmount;
+                    if ($diff > $deliveryCharge) {
+                        $deliveryCharge = $diff;
+                    }
+                } else {
+                    $totalCollectable = $podAmount + $deliveryCharge;
+                }
+            } else {
+                $totalCollectable = $podAmount + $deliveryCharge;
+            }
+        } else {
+            $totalCollectable = $podAmount
+                + ($customerPaysDelivery ? $deliveryCharge : 0.0);
+        }
 
         return [
             'pod_amount' => $podAmount,
             'delivery_charge' => $deliveryCharge,
             'total_collectable_amount' => round($totalCollectable, 2),
+            'weight' => $priced['weight'] ?? (float) ($data['packet']['weight'] ?? 1.0),
             'breakdown' => $priced['breakdown'] ?? null,
             'pricing_source' => $priced['source'] ?? null,
             'pod_charge' => round((float) ($priced['pod_charge'] ?? $data['pod_charge'] ?? 0), 2),

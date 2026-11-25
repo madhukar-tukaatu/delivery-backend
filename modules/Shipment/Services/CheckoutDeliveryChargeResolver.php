@@ -80,7 +80,7 @@ final class CheckoutDeliveryChargeResolver
 
         $explicitCharge = isset($data['delivery_charge'])
             ? round((float) $data['delivery_charge'], 2)
-            : null;
+            : (isset($data['shipping_charge']) ? round((float) $data['shipping_charge'], 2) : null);
 
         // Shipment creation may carry the exact quote already shown to the
         // merchant. Preserve it instead of recalculating against a different
@@ -92,6 +92,7 @@ final class CheckoutDeliveryChargeResolver
                 'breakdown' => is_array($data['delivery_charge_breakdown'] ?? null)
                     ? $data['delivery_charge_breakdown']
                     : null,
+                'weight' => $weight,
                 'pod_charge' => round((float) ($data['pod_charge'] ?? 0), 2),
             ];
         }
@@ -133,15 +134,19 @@ final class CheckoutDeliveryChargeResolver
                     is_array($singlePacket)
                 ) {
                     $packet = $singlePacket;
+                    $actualPacketWeight = max((float) ($packet['weight'] ?? 0), $weight);
                     $enginePayload['packets'] = [[
                         'packet_reference' => $packet['packet_reference'] ?? 'SHIPMENT-PKT-001',
-                        'actual_weight_kg' => (float) ($packet['weight'] ?? $weight),
+                        'actual_weight_kg' => $actualPacketWeight,
                         'length_cm' => $packet['length_cm'] ?? $packet['length'] ?? null,
                         'width_cm' => $packet['width_cm'] ?? $packet['width'] ?? null,
                         'height_cm' => $packet['height_cm'] ?? $packet['height'] ?? null,
                         'parcel_type' => $parcelType,
                         'declared_value' => $packet['declared_value'] ?? null,
                     ]];
+                    if (!empty($packet['products']) && is_array($packet['products'])) {
+                        $enginePayload['products'] = $packet['products'];
+                    }
                 }
 
                 $engine = $this->pricingEngine->calculate(
@@ -155,6 +160,7 @@ final class CheckoutDeliveryChargeResolver
                         'delivery_charge' => $final,
                         'source' => 'pricing_engine',
                         'breakdown' => $engine,
+                        'weight' => $weight,
                         'pod_charge' => round((float) (
                             $data['pod_charge']
                                 ?? data_get($engine, 'breakdown.pod_fee.total')
@@ -245,6 +251,33 @@ final class CheckoutDeliveryChargeResolver
 
     private function resolveWeight(array $data): float
     {
+        // 1. Calculate combined weight from products or packet.products if present
+        $products = data_get($data, 'packet.products')
+            ?? data_get($data, 'products')
+            ?? data_get($data, 'packet_products')
+            ?? [];
+
+        $totalProductWeight = 0.0;
+        $hasProductWeights = false;
+
+        if (is_array($products) && !empty($products)) {
+            foreach ($products as $product) {
+                if (!is_array($product)) continue;
+                $unitWeight = (float) (
+                    $product['unit_weight']
+                    ?? $product['weight']
+                    ?? $product['actual_weight_kg']
+                    ?? $product['actual_weight']
+                    ?? 0
+                );
+                $qty = max(1, (int) ($product['quantity'] ?? 1));
+                if ($unitWeight > 0) {
+                    $totalProductWeight += $unitWeight * $qty;
+                    $hasProductWeights = true;
+                }
+            }
+        }
+
         $candidates = [
             data_get($data, 'packet.weight'),
             data_get($data, 'package.weight'),
@@ -255,10 +288,22 @@ final class CheckoutDeliveryChargeResolver
             $data['actual_weight'] ?? null,
         ];
 
+        $explicitWeight = null;
         foreach ($candidates as $value) {
             if ($value !== null && (float) $value > 0) {
-                return (float) $value;
+                $explicitWeight = (float) $value;
+                break;
             }
+        }
+
+        // When product item weights sum to a positive number, ensure multi-item shipments
+        // are weighed at least as much as their combined items (never under-weighed!).
+        if ($hasProductWeights && $totalProductWeight > 0) {
+            return $explicitWeight !== null ? max($explicitWeight, $totalProductWeight) : $totalProductWeight;
+        }
+
+        if ($explicitWeight !== null) {
+            return $explicitWeight;
         }
 
         // Match active pricing setting base weight

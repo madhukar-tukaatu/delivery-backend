@@ -124,6 +124,10 @@ class PickupRunController extends Controller
 
     public function store(Request $request)
     {
+        if ($request->has('vehicle_type') && ($request->input('vehicle_type') === '' || $request->input('vehicle_type') === null)) {
+            $request->merge(['vehicle_type' => null]);
+        }
+
         $data = $request->validate([
             'pickup_request_ids' => ['required', 'array', 'min:1', 'max:300'],
             'pickup_request_ids.*' => ['integer'],
@@ -202,6 +206,9 @@ class PickupRunController extends Controller
     public function assignRider(Request $request, PickupRun $run)
     {
         $this->assertScope($run, $this->scope($request));
+        if ($request->has('vehicle_type') && ($request->input('vehicle_type') === '' || $request->input('vehicle_type') === null)) {
+            $request->merge(['vehicle_type' => null]);
+        }
         $data = $request->validate([
             'rider_user_id' => ['required', 'integer'],
             'vehicle_type' => ['nullable', 'string', Rule::in(PickupRun::VEHICLE_TYPES)],
@@ -228,6 +235,9 @@ class PickupRunController extends Controller
     public function dispatch(Request $request, PickupRun $run)
     {
         $this->assertScope($run, $this->scope($request));
+        if ($request->has('vehicle_type') && ($request->input('vehicle_type') === '' || $request->input('vehicle_type') === null)) {
+            $request->merge(['vehicle_type' => null]);
+        }
         $data = $request->validate([
             'rider_user_id' => ['nullable', 'integer'],
             'vehicle_type' => ['nullable', 'string', Rule::in(PickupRun::VEHICLE_TYPES)],

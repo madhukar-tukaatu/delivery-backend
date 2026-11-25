@@ -285,6 +285,7 @@ class PickupRunService
                         ->where('shipments.status', CourierStatus::AWAITING_PICKUP)
                         ->update([
                             'shipments.status' => CourierStatus::PICKUP_ASSIGNED,
+                            'shipments.merchant_status' => CourierStatus::PICKUP_ASSIGNED,
                             'shipments.updated_at' => now(),
                         ]);
                 }
@@ -386,9 +387,10 @@ class PickupRunService
                     ->join('shipments', 'shipments.id', '=', 'pickup_request_shipments.shipment_id')
                     ->whereIn('pickup_request_shipments.pickup_request_id', $requestIds)
                     ->whereNull('pickup_request_shipments.removed_at')
-                    ->where('shipments.status', CourierStatus::AWAITING_PICKUP)
+                    ->whereIn('shipments.status', [CourierStatus::AWAITING_PICKUP, CourierStatus::PICKUP_ASSIGNED])
                     ->update([
                         'shipments.status' => CourierStatus::PICKUP_ASSIGNED,
+                        'shipments.merchant_status' => CourierStatus::PICKUP_ASSIGNED,
                         'shipments.updated_at' => now(),
                     ]);
             }

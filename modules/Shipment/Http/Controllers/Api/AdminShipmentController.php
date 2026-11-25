@@ -219,6 +219,23 @@ class AdminShipmentController extends Controller
             }
         }
 
+        // Additive merchant / pickup location so the detail drawer can show
+        // the same Sender / Merchant card as the list, without changing existing keys.
+        if (! empty($shipment->merchant_id) && Schema::hasTable('merchants')) {
+            $merchant = DB::table('merchants')->where('id', $shipment->merchant_id)->first();
+            if ($merchant) {
+                $shipment->merchant = $merchant;
+                $shipment->merchant_name = $merchant->name ?? $merchant->business_name ?? null;
+            }
+        }
+        if (! empty($shipment->pickup_location_id) && Schema::hasTable('merchant_pickup_locations')) {
+            $location = DB::table('merchant_pickup_locations')->where('id', $shipment->pickup_location_id)->first();
+            if ($location) {
+                $shipment->pickup_location = $location;
+                $shipment->pickup_location_name = $location->name ?? null;
+            }
+        }
+
         try {
             $model = Shipment::find($shipment->id);
             if ($model) {

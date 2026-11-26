@@ -165,10 +165,14 @@ final class TransferContainerService
                 continue;
             }
 
-            // A route chosen on the board is assigned when the parcel has none yet.
-            if (! empty($meta['transfer_route_id']) && empty($shipment->transfer_route_id)
+            // A route chosen on the board (or passed per shipment) is assigned when the parcel has none yet.
+            $targetRouteId = !empty($meta['shipment_routes'][(int) $shipment->id])
+                ? (int) $meta['shipment_routes'][(int) $shipment->id]
+                : (!empty($meta['transfer_route_id']) ? (int) $meta['transfer_route_id'] : null);
+
+            if ($targetRouteId && empty($shipment->transfer_route_id)
                 && Schema::hasColumn('shipments', 'transfer_route_id')) {
-                $shipment->forceFill(['transfer_route_id' => (int) $meta['transfer_route_id']])->save();
+                $shipment->forceFill(['transfer_route_id' => $targetRouteId])->save();
             }
 
             $p = $this->progress->resolveForShipment($shipment, $from);
@@ -178,6 +182,12 @@ final class TransferContainerService
                 if ($forcedNextHopId) {
                     $this->progress->assertNextHopMatches($shipment, (int) $forcedNextHopId, $from);
                     $hop = (int) $forcedNextHopId;
+                    if (empty($p['next_hop_branch_id'])) {
+                        $p['next_hop_branch_id'] = $hop;
+                        if (Schema::hasColumn('shipments', 'next_hop_branch_id')) {
+                            $shipment->forceFill(['next_hop_branch_id' => $hop])->save();
+                        }
+                    }
                 } elseif ($p['ready_for_last_mile'] ?? false) {
                     throw ValidationException::withMessages(['shipment_ids' => [
                         sprintf('Shipment %s is already at its final destination.', $shipment->tracking_number ?? $shipment->id),

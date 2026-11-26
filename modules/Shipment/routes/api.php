@@ -102,6 +102,9 @@ Route::prefix('v1/admin')
             Route::post('transfers/reconcile', [TransferController::class, 'reconcile'])
                 ->name('transfers.reconcile');
 
+            Route::post('transfers/assign-route', [TransferController::class, 'assignRoute'])
+                ->name('transfers.assign-route');
+
             Route::post('transfers/dispatch', [TransferController::class, 'dispatch'])
                 ->name('transfers.dispatch');
 

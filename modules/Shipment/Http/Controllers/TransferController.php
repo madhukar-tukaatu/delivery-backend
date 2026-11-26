@@ -1181,6 +1181,8 @@ final class TransferController extends Controller
             'shipment_ids' => ['required', 'array', 'min:1'],
             'shipment_ids.*' => ['integer'],
             'transfer_route_id' => ['nullable', 'integer', 'exists:branch_transfer_routes,id'],
+            'shipment_routes' => ['nullable', 'array'],
+            'shipment_routes.*' => ['integer'],
             'next_hop_branch_id' => ['nullable', 'integer'],
             'vehicle_type' => ['nullable', 'string', 'in:'.implode(',', \Modules\Dispatch\Models\DispatchManifest::VEHICLE_TYPES)],
             'vehicle_number' => ['nullable', 'string', 'max:50'],
@@ -2650,6 +2652,67 @@ final class TransferController extends Controller
             'shipments' => $reconciledShipments,
             'manifests' => $reconciledManifests,
         ]);
+    }
+
+    /**
+     * Explicitly assign a transfer route snapshot to one or more shipments.
+     * Recalculates progress so next hop, leg index, and path are immediately updated.
+     */
+    public function assignRoute(Request $request)
+    {
+        $validated = $request->validate([
+            'shipment_ids' => ['required', 'array', 'min:1'],
+            'shipment_ids.*' => ['integer'],
+            'transfer_route_id' => ['nullable', 'integer', 'exists:branch_transfer_routes,id'],
+        ]);
+
+        $user = $request->user();
+        $branchId = $this->resolveReceivingBranchId($user, $request);
+        $routeId = !empty($validated['transfer_route_id']) ? (int) $validated['transfer_route_id'] : null;
+
+        $shipments = Shipment::query()
+            ->whereIn('id', $validated['shipment_ids'])
+            ->get();
+
+        if ($shipments->isEmpty()) {
+            return ApiResponse::error('No shipments found to update.', 404);
+        }
+
+        $updated = [];
+        $errors = [];
+
+        foreach ($shipments as $shipment) {
+            try {
+                $shipment->transfer_route_id = $routeId;
+                if ($routeId) {
+                    $route = \Modules\Rate\Models\BranchTransferRoute::find($routeId);
+                    if ($route) {
+                        $shipment->route_code = $route->route_code;
+                        $shipment->route_name = $route->name;
+                    }
+                }
+                $shipment->save();
+
+                // Apply progress
+                $atBranch = $branchId > 0 ? $branchId : null;
+                $this->progress->applyProgressToShipment($shipment, $atBranch, false);
+
+                $updated[] = $shipment->tracking_number ?? (string) $shipment->id;
+            } catch (\Throwable $e) {
+                $errors[$shipment->tracking_number ?? (string) $shipment->id] = $e->getMessage();
+            }
+        }
+
+        $msg = count($updated).' shipment(s) assigned to route'.($routeId ? " #{$routeId}" : ' (auto-resolved)').'.';
+        if (!empty($errors)) {
+            $msg .= ' '.count($errors).' encountered errors.';
+        }
+
+        return ApiResponse::success([
+            'updated_count' => count($updated),
+            'updated' => $updated,
+            'errors' => $errors,
+        ], $msg);
     }
 
     /**

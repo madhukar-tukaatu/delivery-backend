@@ -243,6 +243,26 @@ final class TransferRouteProgressService
         $expectedOp = (int) ($this->resolveOperationalBranchId($expected) ?? $expected);
 
         if ($expected <= 0) {
+            $destId = (int) ($shipment->destination_sub_branch_id ?? $shipment->destination_branch_id ?? 0);
+            $destOp = (int) ($this->resolveOperationalBranchId($destId) ?? $destId);
+
+            // Direct transfer to destination branch is allowed!
+            if ($to > 0 && ($to === $destOp || $this->sameOperationalLocation($to, $destOp))) {
+                return;
+            }
+
+            if ($to > 0) {
+                throw ValidationException::withMessages([
+                    'to_branch_id' => [
+                        sprintf(
+                            'Cannot route shipment %s via branch #%d. Please assign an active transfer route that includes this transit hub under Admin → Transfer Routes.',
+                            $shipment->tracking_number ?? $shipment->id,
+                            $to
+                        ),
+                    ],
+                ]);
+            }
+
             throw ValidationException::withMessages([
                 'to_branch_id' => [
                     sprintf(
@@ -374,6 +394,9 @@ final class TransferRouteProgressService
         $exact = null;
         $partial = null;
 
+        $originOp = (int) ($this->resolveOperationalBranchId($originBranchId) ?? $originBranchId);
+        $destOp = (int) ($this->resolveOperationalBranchId($destinationBranchId) ?? $destinationBranchId);
+
         foreach ($candidates as $route) {
             $path = array_map('intval', $route->getPathBranchIds());
             if ($path === []) {
@@ -387,21 +410,41 @@ final class TransferRouteProgressService
             $pathStart = (int) $path[0];
             $pathEnd = (int) end($path);
 
-            $startMatches = $fromCoverage !== null && $pathStart === (int) $fromCoverage;
-            $endMatches = $toCoverage !== null && $pathEnd === (int) $toCoverage;
+            $startBranch = $this->branchIdForCoverage($pathStart) ?? $pathStart;
+            $startBranchOp = (int) ($this->resolveOperationalBranchId($startBranch) ?? $startBranch);
+
+            $endBranch = $this->branchIdForCoverage($pathEnd) ?? $pathEnd;
+            $endBranchOp = (int) ($this->resolveOperationalBranchId($endBranch) ?? $endBranch);
+
+            // Origin match: coverage id OR branch id OR operational location
+            $startMatches = ($fromCoverage !== null && $pathStart === (int) $fromCoverage)
+                || ($originBranchId > 0 && ($pathStart === $originBranchId || $startBranch === $originBranchId || $startBranchOp === $originOp || $this->sameOperationalLocation($startBranch, $originBranchId)));
+
+            if (!$startMatches && $route->origin_branch_id) {
+                $routeOriginBranch = $this->branchIdForCoverage((int) $route->origin_branch_id) ?? (int) $route->origin_branch_id;
+                $startMatches = $originBranchId > 0 && ($routeOriginBranch === $originBranchId || $this->sameOperationalLocation($routeOriginBranch, $originBranchId));
+            }
+
+            // Destination match: coverage id OR branch id OR operational location
+            $endMatches = ($toCoverage !== null && $pathEnd === (int) $toCoverage)
+                || ($destinationBranchId > 0 && ($pathEnd === $destinationBranchId || $endBranch === $destinationBranchId || $endBranchOp === $destOp || $this->sameOperationalLocation($endBranch, $destinationBranchId)));
+
+            if (!$endMatches && $route->destination_branch_id) {
+                $routeDestBranch = $this->branchIdForCoverage((int) $route->destination_branch_id) ?? (int) $route->destination_branch_id;
+                $endMatches = $destinationBranchId > 0 && ($routeDestBranch === $destinationBranchId || $this->sameOperationalLocation($routeDestBranch, $destinationBranchId));
+            }
 
             if ($startMatches && $endMatches) {
                 $exact = $route;
                 break;
             }
 
-            $idx = false;
-            foreach ($path as $i => $stopCov) {
-                if ($fromCoverage !== null && (int) $stopCov === (int) $fromCoverage) {
-                    $idx = $i;
-                    break;
-                }
+            $pathBranches = [];
+            foreach ($path as $cov) {
+                $pathBranches[] = $this->branchIdForCoverage((int) $cov) ?? (int) $cov;
             }
+
+            $idx = $this->indexOnPath($path, $pathBranches, $originBranchId, $fromCoverage);
 
             if ($partial === null
                 && $idx !== false

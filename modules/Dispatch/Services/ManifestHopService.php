@@ -14,7 +14,7 @@ use Modules\Dispatch\Models\DispatchManifestItem;
  * Actual transfer hops and transport cost per dispatch manifest.
  *
  *  - recordDispatch(): one shipment_route_steps row per shipment on the manifest
- *    (from_branch -> to_branch, manifest id, transport portion, dispatched_at).
+ *    (from_branch -> to_branch, manifest id, transportj portion, dispatched_at).
  *  - applyTransportCost(): the dispatching branch's trip cost, split over the
  *    manifest items (equal or by weight) and copied onto the hop rows.
  *  - markReceived(): closes the manifest item, the hop, and the manifest when

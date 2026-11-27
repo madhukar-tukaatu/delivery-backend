@@ -50,6 +50,8 @@ class MenuSeeder extends Seeder
             ['section' => MenuSection::Admin->value, 'label' => 'Shipment Tasks', 'route' => '/admin/shipment-tasks', 'icon' => 'checklist', 'permission' => 'shipment_tasks.view', 'sort_order' => 20, 'parent' => 'Operations'],
             ['section' => MenuSection::Admin->value, 'label' => 'Pickups', 'route' => '/admin/pickups', 'icon' => 'pickups', 'permission' => 'pickups.view', 'sort_order' => 30, 'parent' => 'Operations'],
             ['section' => MenuSection::Admin->value, 'label' => 'Deliveries', 'route' => '/admin/deliveries', 'icon' => 'deliveries', 'permission' => 'deliveries.view', 'sort_order' => 40, 'parent' => 'Operations'],
+            ['section' => MenuSection::Admin->value, 'label' => 'Returns', 'route' => '/admin/returns', 'icon' => 'rollback', 'permission' => 'deliveries.view', 'sort_order' => 42, 'parent' => 'Operations'],
+            ['section' => MenuSection::Admin->value, 'label' => 'Cancellations', 'route' => '/admin/cancellations', 'icon' => 'close', 'permission' => 'deliveries.view', 'sort_order' => 44, 'parent' => 'Operations'],
             ['section' => MenuSection::Admin->value, 'label' => 'Transfers', 'route' => '/admin/transfers', 'icon' => 'dispatches', 'permission' => 'transfers.view', 'sort_order' => 50, 'parent' => 'Operations'],
             ['section' => MenuSection::Admin->value, 'label' => 'Dispatches', 'route' => '/admin/dispatches', 'icon' => 'dispatches', 'permission' => 'dispatches.view', 'sort_order' => 60, 'parent' => 'Operations'],
 

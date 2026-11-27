@@ -1476,7 +1476,8 @@ final class DeliveryRunService
                     $w->whereIn('ri.delivery_id', $deliveryIds ?: [0])
                         ->orWhere(function ($a) use ($shipmentIds) {
                             $a->whereIn('ri.shipment_id', $shipmentIds ?: [0])
-                                ->whereIn('r.status', DeliveryRun::ACTIVE_STATUSES);
+                                ->whereIn('r.status', ['open', 'assigned', 'out_for_delivery'])
+                                ->whereIn('ri.status', ['queued', 'bagged', 'out_for_delivery']);
                         });
                 })
                 ->orderBy('ri.id')
@@ -1487,11 +1488,14 @@ final class DeliveryRunService
                 ]);
 
             foreach ($rows as $row) {
+                $isActive = in_array($row->run_status, ['open', 'assigned', 'out_for_delivery'], true)
+                    && in_array($row->item_status, ['queued', 'bagged', 'out_for_delivery'], true);
+
                 $info = [
                     'id' => (int) $row->run_id,
                     'run_number' => $row->run_number,
                     'status' => $row->run_status,
-                    'active' => in_array($row->run_status, DeliveryRun::ACTIVE_STATUSES, true),
+                    'active' => $isActive,
                     'sequence' => (int) $row->sequence,
                     'item_status' => $row->item_status,
                     'outcome' => $row->outcome,

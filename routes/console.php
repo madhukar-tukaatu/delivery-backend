@@ -1277,3 +1277,80 @@ Artisan::command('billing:restore-unpaid-delivery-charges {--dry-run : Report on
     return 0;
 })->purpose('Restore delivery charge invoices that were falsely marked paid without recorded payments');
 
+Artisan::command('delivery:reconcile-failed {trackings?* : Optional specific tracking numbers}', function () {
+    $trackings = (array) $this->argument('trackings');
+    if (empty($trackings)) {
+        $trackings = ['TEX-20261126-245404', 'TEX-20261126-926633'];
+    }
+
+    $defaultReasons = [
+        'TEX-20261126-245404' => 'Seller want to return',
+        'TEX-20261126-926633' => 'Not enough time to deliver',
+    ];
+
+    $this->info("Reconciling " . count($trackings) . " shipment(s) to failed state...");
+
+    foreach ($trackings as $tracking) {
+        $shipment = \Modules\Shipment\Models\Shipment::where('tracking_number', $tracking)->first();
+        if (! $shipment) {
+            $this->warn("Shipment [{$tracking}] not found, skipping.");
+            continue;
+        }
+
+        $reason = $defaultReasons[$tracking] ?? $shipment->failure_reason ?? 'Customer requested reschedule / delivery failed';
+
+        DB::transaction(function () use ($shipment, $tracking, $reason) {
+            $shipment->update([
+                'status' => \App\Support\CourierStatus::DELIVERY_FAILED,
+                'merchant_status' => \App\Support\CourierStatus::merchantStatus(\App\Support\CourierStatus::DELIVERY_FAILED),
+                'failed_attempts' => 1,
+                'max_delivery_attempts' => 3,
+                'failure_reason' => $reason,
+            ]);
+
+            $assignments = \Modules\Delivery\Models\DeliveryAssignment::where('shipment_id', $shipment->id)
+                ->orderBy('id', 'asc')
+                ->get();
+
+            if ($assignments->isNotEmpty()) {
+                $primary = $assignments->first();
+                $primary->update([
+                    'status' => 'failed',
+                    'failed_at' => now(),
+                    'failure_reason' => $reason,
+                    'remarks' => $reason,
+                    'attempt_no' => 1,
+                ]);
+
+                $extras = $assignments->slice(1);
+                foreach ($extras as $extra) {
+                    $extra->delete();
+                }
+            } else {
+                \Modules\Delivery\Models\DeliveryAssignment::create([
+                    'shipment_id' => $shipment->id,
+                    'branch_id' => $shipment->destination_branch_id ?? $shipment->current_branch_id,
+                    'sub_branch_id' => $shipment->destination_sub_branch_id ?? $shipment->current_sub_branch_id,
+                    'delivery_type' => 'last_mile',
+                    'status' => 'failed',
+                    'failed_at' => now(),
+                    'failure_reason' => $reason,
+                    'remarks' => $reason,
+                    'attempt_no' => 1,
+                ]);
+            }
+
+            \Modules\Delivery\Models\DeliveryRunItem::where('shipment_id', $shipment->id)->update([
+                'status' => \Modules\Delivery\Models\DeliveryRunItem::STATUS_FAILED,
+                'reason' => $reason,
+                'failed_at' => now(),
+            ]);
+        });
+
+        $this->info("✓ Reconciled [{$tracking}] to status 'failed' with reason: '{$reason}'.");
+    }
+
+    $this->info("Completed. These shipments will now show under the 'Failed' deliveries tab.");
+    return 0;
+})->purpose('Reset and reconcile failed deliveries back to failed status with proper failure reasons and clean delivery assignments');
+

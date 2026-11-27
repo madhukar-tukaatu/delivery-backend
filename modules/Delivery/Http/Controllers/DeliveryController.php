@@ -250,8 +250,8 @@ class DeliveryController extends Controller
             $e->selectRaw('1')->from('delivery_run_items as ri')
                 ->join('delivery_runs as r', 'r.id', '=', 'ri.delivery_run_id')
                 ->whereColumn('ri.shipment_id', 'delivery_assignments.shipment_id')
-                ->where('ri.status', '!=', 'removed')
-                ->whereIn('r.status', DeliveryRun::ACTIVE_STATUSES);
+                ->whereIn('ri.status', ['queued', 'bagged', 'out_for_delivery'])
+                ->whereIn('r.status', ['open', 'assigned', 'out_for_delivery']);
         };
     }
 

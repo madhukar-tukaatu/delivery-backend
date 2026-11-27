@@ -1297,7 +1297,7 @@ Artisan::command('delivery:reconcile-failed {trackings?* : Optional specific tra
             continue;
         }
 
-        $reason = $defaultReasons[$tracking] ?? $shipment->failure_reason ?? 'Customer requested reschedule / delivery failed';
+        $reason = $defaultReasons[$tracking] ?? 'Customer requested reschedule / delivery failed';
 
         DB::transaction(function () use ($shipment, $tracking, $reason) {
             $shipment->update([
@@ -1305,7 +1305,6 @@ Artisan::command('delivery:reconcile-failed {trackings?* : Optional specific tra
                 'merchant_status' => \App\Support\CourierStatus::merchantStatus(\App\Support\CourierStatus::DELIVERY_FAILED),
                 'failed_attempts' => 1,
                 'max_delivery_attempts' => 3,
-                'failure_reason' => $reason,
             ]);
 
             $assignments = \Modules\Delivery\Models\DeliveryAssignment::where('shipment_id', $shipment->id)

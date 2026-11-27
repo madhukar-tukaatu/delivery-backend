@@ -38,7 +38,7 @@ class ReconcileFailedDeliveriesCommand extends Command
                 continue;
             }
 
-            $reason = $defaultReasons[$tracking] ?? $shipment->failure_reason ?? 'Customer requested reschedule / delivery failed';
+            $reason = $defaultReasons[$tracking] ?? 'Customer requested reschedule / delivery failed';
 
             DB::transaction(function () use ($shipment, $tracking, $reason) {
                 // 1. Update Shipment
@@ -47,7 +47,6 @@ class ReconcileFailedDeliveriesCommand extends Command
                     'merchant_status' => CourierStatus::merchantStatus(CourierStatus::DELIVERY_FAILED),
                     'failed_attempts' => 1,
                     'max_delivery_attempts' => 3,
-                    'failure_reason' => $reason,
                 ]);
 
                 // 2. Clean up any extra pending / requeued assignments for this shipment

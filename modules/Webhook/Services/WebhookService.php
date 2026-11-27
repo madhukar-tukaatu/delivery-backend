@@ -9,7 +9,7 @@ use Modules\Webhook\Models\WebhookDeliveryLog;
 
 class WebhookService
 {
-    public function queueShipmentEvent(Shipment $shipment, string $event): void
+    public function queueShipmentEvent(Shipment $shipment, string $event, array $extra = []): void
     {
         if (!$shipment->merchant_id) {
             return;
@@ -25,7 +25,7 @@ class WebhookService
                 continue;
             }
 
-            $payload = [
+            $payload = array_merge([
                 'event' => $event,
                 'tracking_number' => $shipment->tracking_number,
                 'merchant_order_id' => $shipment->merchant_order_id,
@@ -34,7 +34,7 @@ class WebhookService
                 'pod_amount' => (float) $shipment->pod_amount,
                 'delivery_charge' => (float) $shipment->delivery_charge,
                 'updated_at' => now()->toIso8601String(),
-            ];
+            ], $extra);
 
             $signature = $webhook->secret ? hash_hmac('sha256', json_encode($payload), $webhook->secret) : null;
 

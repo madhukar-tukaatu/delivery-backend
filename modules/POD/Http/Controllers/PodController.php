@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Support\ApiResponse;
 use App\Support\FinanceBranchScope;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Modules\POD\Models\PodDeposit;
 use Modules\POD\Models\PodRecord;
@@ -140,6 +141,36 @@ class PodController extends Controller
                 } catch (\Throwable $e) {
                     report($e);
                 }
+            }
+
+            // Sync delivery runs if all items are now deposited
+            try {
+                $runIds = DB::table('delivery_run_items')
+                    ->whereIn('shipment_id', $shipmentIds)
+                    ->pluck('delivery_run_id')
+                    ->filter()
+                    ->unique()
+                    ->all();
+                if (!empty($runIds)) {
+                    foreach ($runIds as $rId) {
+                        $run = \Modules\Delivery\Models\DeliveryRun::find($rId);
+                        if ($run) {
+                            $hasUndeposited = DB::table('delivery_run_items')
+                                ->join('pod_records', 'pod_records.shipment_id', '=', 'delivery_run_items.shipment_id')
+                                ->where('delivery_run_items.delivery_run_id', $rId)
+                                ->whereNotIn('pod_records.status', ['deposited', 'settled'])
+                                ->exists();
+                            if (!$hasUndeposited) {
+                                $run->update([
+                                    'cash_deposited' => true,
+                                    'pod_deposit_id' => $deposit->id,
+                                ]);
+                            }
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                report($e);
             }
         }
 

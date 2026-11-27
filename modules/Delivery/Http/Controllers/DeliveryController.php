@@ -35,9 +35,10 @@ class DeliveryController extends Controller
             ->with([
                 'shipment.merchant:id,name,code,phone,external_store_id,marketplace_id',
                 'shipment.merchant.marketplace:id,name,code',
-                'shipment.originBranch',
-                'shipment.destinationBranch',
-                'rider',
+                'shipment.originBranch:id,name,code',
+                'shipment.destinationBranch:id,name,code',
+                'shipment.nextHopBranch:id,name,code',
+                'rider:id,name,phone,email',
             ]);
 
         $this->applyScope($query, $request);
@@ -519,6 +520,64 @@ class DeliveryController extends Controller
         return ApiResponse::success(
             $this->service->failed($delivery, $request->user(), $data['reason']),
             'Delivery marked as failed.'
+        );
+    }
+
+    public function retry(Request $request, DeliveryAssignment $delivery)
+    {
+        $this->assertHandles($request, $delivery);
+        $shipment = $delivery->shipment;
+        if (! $shipment) {
+            throw ValidationException::withMessages(['delivery' => ['Shipment not found for this delivery.']]);
+        }
+
+        $force = $request->boolean('force');
+        if (! $force && $shipment->retries_left <= 0) {
+            throw ValidationException::withMessages([
+                'retries' => ["Maximum delivery attempts reached (3). Return to store or pass force=true to override."],
+            ]);
+        }
+
+        $reason = $request->input('reason');
+        $this->runs->requeue($shipment, null, null, $request->user(), $reason);
+
+        return ApiResponse::success(
+            $delivery->fresh(['shipment']),
+            'Shipment queued for re-delivery attempt.'
+        );
+    }
+
+    public function returnToStore(Request $request, DeliveryAssignment $delivery)
+    {
+        $this->assertHandles($request, $delivery);
+        $shipment = $delivery->shipment;
+        if (! $shipment) {
+            throw ValidationException::withMessages(['delivery' => ['Shipment not found for this delivery.']]);
+        }
+
+        $reason = $request->input('reason', 'Return initiated by branch');
+        $this->runs->initiateReturn($shipment, null, null, $request->user(), $reason);
+
+        return ApiResponse::success(
+            $delivery->fresh(['shipment']),
+            'Return to store initiated.'
+        );
+    }
+
+    public function cancel(Request $request, DeliveryAssignment $delivery)
+    {
+        $this->assertHandles($request, $delivery);
+        $shipment = $delivery->shipment;
+        if (! $shipment) {
+            throw ValidationException::withMessages(['delivery' => ['Shipment not found for this delivery.']]);
+        }
+
+        $reason = $request->input('reason', 'Delivery cancelled by branch');
+        $this->runs->cancelFailedShipment($shipment, null, null, $request->user(), $reason);
+
+        return ApiResponse::success(
+            $delivery->fresh(['shipment']),
+            'Shipment cancelled.'
         );
     }
 }

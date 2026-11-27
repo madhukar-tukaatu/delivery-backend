@@ -32,9 +32,21 @@ class Shipment extends Model
         'transfer_stage',
         'transfer_stage_label',
         'hop_meta',
-        'route_progress',
         'collect_amount',
+        'retries_left',
+        'can_retry_delivery',
     ];
+
+    private static array $branchNameCache = [];
+
+    public static function getCachedBranchName(?int $branchId): ?string
+    {
+        if (! $branchId) {
+            return null;
+        }
+
+        return self::$branchNameCache[$branchId] ??= \Modules\Branch\Models\Branch::query()->whereKey($branchId)->value('name');
+    }
 
     protected static function booted(): void
     {
@@ -76,6 +88,29 @@ class Shipment extends Model
         }
 
         return 0.0;
+    }
+
+    /**
+     * Number of remaining delivery attempts allowed before return to store is required.
+     * Default maximum attempts is 3.
+     */
+    public function getRetriesLeftAttribute(): int
+    {
+        $max = (int) ($this->attributes['max_delivery_attempts'] ?? 3);
+        if ($max <= 0) {
+            $max = 3;
+        }
+        $failed = (int) ($this->attributes['failed_attempts'] ?? 0);
+
+        return max(0, $max - $failed);
+    }
+
+    /**
+     * Whether this shipment can be scheduled for another delivery attempt.
+     */
+    public function getCanRetryDeliveryAttribute(): bool
+    {
+        return $this->retries_left > 0;
     }
 
     /**
@@ -192,13 +227,22 @@ class Shipment extends Model
                 $this->attributes['route_name'] = $live['route_name'];
             }
         } else {
-            // Re-resolve only when persisted next hop looks like a skip to final
-            // (common when route was matched/added after sort). Avoids N+1 on every row.
-            $destId       = (int) ($this->attributes['destination_branch_id'] ?? $this->attributes['destination_sub_branch_id'] ?? 0);
-            $looksStale   = $nextHopId !== null && $destId > 0 && (int) $nextHopId === $destId;
-            $hasRouteHint = ! empty($this->attributes['transfer_route_id'])
-            || ! empty($this->attributes['route_code']);
-            if ($looksStale || ($hasRouteHint && $nextHopId === null)) {
+            $status = (string) ($this->attributes['status'] ?? '');
+            $isTransferActive = in_array($status, [
+                CourierStatus::SORTED_FOR_TRANSFER,
+                CourierStatus::IN_TRANSIT,
+                CourierStatus::RECEIVED_AT_TRANSIT_HUB,
+                CourierStatus::DISPATCHED_TO_DESTINATION_BRANCH,
+                CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+            ], true);
+
+            // Re-resolve only for active cross-branch parcels when next hop looks stale.
+            // Avoids N+1 queries on delivered, completed, or last-mile delivery rows.
+            $destId = (int) ($this->attributes['destination_branch_id'] ?? $this->attributes['destination_sub_branch_id'] ?? 0);
+            $looksStale = $nextHopId !== null && $destId > 0 && (int) $nextHopId === $destId;
+            $hasRouteHint = ! empty($this->attributes['transfer_route_id']) || ! empty($this->attributes['route_code']);
+
+            if ($isTransferActive && ($looksStale || ($hasRouteHint && $nextHopId === null))) {
                 try {
                     $progressSvc = app(\Modules\Shipment\Services\TransferRouteProgressService::class);
                     $progress    = $progressSvc->resolveForShipment($this);
@@ -253,27 +297,32 @@ class Shipment extends Model
         if ($nextHopId) {
             $nextHopName = $this->relationLoaded('nextHopBranch')
                 ? $this->nextHopBranch?->name
-                : \Modules\Branch\Models\Branch::query()->whereKey($nextHopId)->value('name');
-            if (! $nextHopName) {
-                try {
-                    $nextHopName = \Modules\Branch\Models\CoverageLocation::query()->whereKey($nextHopId)->value('name');
-                } catch (\Throwable $e) {
-                    $nextHopName = null;
-                }
-            }
+                : self::getCachedBranchName((int) $nextHopId);
         }
+
+        $originName = $this->relationLoaded('originBranch')
+            ? $this->originBranch?->name
+            : self::getCachedBranchName((int) ($this->attributes['origin_branch_id'] ?? 0));
+
+        $destName = $this->relationLoaded('destinationBranch')
+            ? $this->destinationBranch?->name
+            : self::getCachedBranchName((int) ($this->attributes['destination_branch_id'] ?? 0));
+
+        $currName = $this->relationLoaded('currentBranch')
+            ? $this->currentBranch?->name
+            : self::getCachedBranchName((int) ($this->attributes['current_branch_id'] ?? 0));
 
         $inTransitLabel = null;
         if ($this->status === CourierStatus::IN_TRANSIT && $nextHopName) {
             $inTransitLabel = "In transit to {$nextHopName}";
-        } elseif ($this->status === CourierStatus::IN_TRANSIT && $this->destinationBranch) {
-            $inTransitLabel = "In transit toward {$this->destinationBranch->name}";
+        } elseif ($this->status === CourierStatus::IN_TRANSIT && $destName) {
+            $inTransitLabel = "In transit toward {$destName}";
         }
 
         return [
-            'origin_name'        => $this->originBranch?->name,
-            'destination_name'   => $this->destinationBranch?->name,
-            'current_name'       => $this->currentBranch?->name,
+            'origin_name'        => $originName,
+            'destination_name'   => $destName,
+            'current_name'       => $currName,
             'next_hop_branch_id' => $nextHopId !== null ? (int) $nextHopId : null,
             'next_hop_name'      => $nextHopName,
             'transfer_route_id'  => $routeId !== null ? (int) $routeId : null,
@@ -327,6 +376,12 @@ class Shipment extends Model
 
         'cancelled_at'              =>
         'datetime',
+
+        'failed_attempts'           =>
+        'integer',
+
+        'max_delivery_attempts'     =>
+        'integer',
 
         /*
         |--------------------------------------------------------------------------

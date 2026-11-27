@@ -163,8 +163,48 @@ class SettlementController extends Controller
             ->limit($perPage)
             ->get();
 
-        $rows = $records->map(function (PodRecord $record) {
+        // Resolve delivery runs and rider details for all shipments
+        $allShipmentIds = $records->pluck('shipment_id')
+            ->merge($orphanShipments->pluck('id'))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+
+        $runItems = collect();
+        if (!empty($allShipmentIds)) {
+            $runItems = DB::table('delivery_run_items')
+                ->join('delivery_runs', 'delivery_runs.id', '=', 'delivery_run_items.delivery_run_id')
+                ->leftJoin('users as riders', 'riders.id', '=', 'delivery_runs.rider_user_id')
+                ->whereIn('delivery_run_items.shipment_id', $allShipmentIds)
+                ->select([
+                    'delivery_run_items.shipment_id',
+                    'delivery_runs.id as delivery_run_id',
+                    'delivery_runs.run_number',
+                    'delivery_runs.status as run_status',
+                    'delivery_runs.rider_user_id',
+                    'delivery_runs.dispatched_at as run_dispatched_at',
+                    'delivery_runs.completed_at as run_completed_at',
+                    'riders.name as rider_name',
+                    'riders.phone as rider_phone',
+                ])
+                ->orderByDesc('delivery_run_items.id')
+                ->get()
+                ->keyBy('shipment_id');
+        }
+
+        $allCollectorIds = $records->pluck('collected_by')->filter()->unique()->values()->all();
+        $collectors = !empty($allCollectorIds)
+            ? DB::table('users')->whereIn('id', $allCollectorIds)->select('id', 'name', 'phone')->get()->keyBy('id')
+            : collect();
+
+        $rows = $records->map(function (PodRecord $record) use ($runItems, $collectors) {
             $merchant = $record->merchant;
+            $runInfo = $runItems->get($record->shipment_id);
+            $collector = $collectors->get($record->collected_by);
+
+            $riderName = $collector?->name ?? $runInfo?->rider_name ?? ($record->collected_by ? "Rider #{$record->collected_by}" : null);
+            $riderPhone = $collector?->phone ?? $runInfo?->rider_phone;
 
             return [
                 'id' => $record->id,
@@ -178,6 +218,11 @@ class SettlementController extends Controller
                 'marketplace_name' => $merchant?->marketplace?->name,
                 'merchant' => $this->merchantBrief($merchant),
                 'collected_by' => $record->collected_by,
+                'collector_name' => $riderName,
+                'collector_phone' => $riderPhone,
+                'delivery_run_id' => $runInfo?->delivery_run_id,
+                'delivery_run_number' => $runInfo?->run_number,
+                'run_status' => $runInfo?->run_status,
                 'pod_amount' => $record->pod_amount,
                 'collected_amount' => $record->collected_amount,
                 'status' => $record->status,
@@ -189,6 +234,10 @@ class SettlementController extends Controller
 
         foreach ($orphanShipments as $shipment) {
             $merchant = $shipment->merchant;
+            $runInfo = $runItems->get($shipment->id);
+            $riderName = $runInfo?->rider_name;
+            $riderPhone = $runInfo?->rider_phone;
+
             $rows->push([
                 'id' => 'shipment-'.$shipment->id,
                 'source' => 'shipment_fallback',
@@ -201,6 +250,11 @@ class SettlementController extends Controller
                 'marketplace_name' => $merchant?->marketplace?->name,
                 'merchant' => $this->merchantBrief($merchant),
                 'collected_by' => null,
+                'collector_name' => $riderName,
+                'collector_phone' => $riderPhone,
+                'delivery_run_id' => $runInfo?->delivery_run_id,
+                'delivery_run_number' => $runInfo?->run_number,
+                'run_status' => $runInfo?->run_status,
                 'pod_amount' => $shipment->pod_amount,
                 'collected_amount' => $shipment->pod_amount,
                 'status' => 'pending_deposit_no_pod_row',
@@ -209,6 +263,184 @@ class SettlementController extends Controller
                 'can_deposit' => false,
             ]);
         }
+
+        // Group into delivery runs for 1-click run reconciliation.
+        // Include all runs with pending cash, active road runs, and completed runs with returns/failed parcels.
+        $runIdsFromRows = $rows->pluck('delivery_run_id')->filter()->unique()->all();
+
+        $activeBranchRunsQuery = \Modules\Delivery\Models\DeliveryRun::query();
+        FinanceBranchScope::scopeBranchColumn($activeBranchRunsQuery, $user, 'branch_id');
+        $activeBranchRuns = $activeBranchRunsQuery
+            ->with(['rider:id,name,phone'])
+            ->where(function ($q) use ($runIdsFromRows) {
+                if (!empty($runIdsFromRows)) {
+                    $q->whereIn('id', $runIdsFromRows);
+                }
+                $q->orWhereIn('status', ['out_for_delivery', 'completed'])
+                  ->orWhere(function ($sub) {
+                      $sub->where('status', 'closed')
+                          ->where('cash_deposited', false)
+                          ->where('created_at', '>=', now()->subDays(14));
+                  })
+                  ->orWhere(function ($sub) {
+                      $sub->where('failed_count', '>', 0)
+                          ->where('created_at', '>=', now()->subDays(14));
+                  });
+            })
+            ->latest('id')
+            ->limit(100)
+            ->get();
+
+        $allRunIds = $activeBranchRuns->pluck('id')->merge($runIdsFromRows)->unique()->filter()->values()->all();
+        $runItemsGrouped = collect();
+        if (!empty($allRunIds)) {
+            $runItemsGrouped = DB::table('delivery_run_items')
+                ->join('shipments', 'shipments.id', '=', 'delivery_run_items.shipment_id')
+                ->leftJoin('merchants', 'merchants.id', '=', 'shipments.merchant_id')
+                ->leftJoin('pod_records', function ($join) {
+                    $join->on('pod_records.shipment_id', '=', 'shipments.id')
+                        ->where('pod_records.status', '=', 'collected');
+                })
+                ->whereIn('delivery_run_items.delivery_run_id', $allRunIds)
+                ->select([
+                    'delivery_run_items.id as item_id',
+                    'delivery_run_items.delivery_run_id',
+                    'delivery_run_items.shipment_id',
+                    'delivery_run_items.status as item_status',
+                    'delivery_run_items.outcome',
+                    'delivery_run_items.reason as item_reason',
+                    'delivery_run_items.collected_amount as item_collected_amount',
+                    'delivery_run_items.cod_amount as item_cod_amount',
+                    'shipments.tracking_number',
+                    'shipments.merchant_id',
+                    'shipments.status as shipment_status',
+                    'shipments.pod_status',
+                    'shipments.settlement_status',
+                    'merchants.name as merchant_name',
+                    'merchants.external_store_id',
+                    'pod_records.id as pod_record_id',
+                    'pod_records.status as pod_record_status',
+                ])
+                ->orderBy('delivery_run_items.sequence')
+                ->orderBy('delivery_run_items.id')
+                ->get()
+                ->groupBy('delivery_run_id');
+        }
+
+        $runsMap = [];
+        foreach ($activeBranchRuns as $run) {
+            $runKey = (string) $run->id;
+            $itemsForRun = $runItemsGrouped->get($run->id, collect());
+
+            $shipmentsList = [];
+            $podRecordIds = [];
+            $totalCollected = 0.0;
+
+            foreach ($itemsForRun as $item) {
+                $isDelivered = in_array($item->item_status, ['delivered', 'collected'], true) || in_array($item->shipment_status, ['delivered'], true);
+                $isFailed = in_array($item->item_status, ['failed', 'removed'], true) || in_array($item->shipment_status, ['failed', 'cancelled'], true);
+                $canDepositItem = !empty($item->pod_record_id) && $item->pod_record_status === 'collected';
+                if ($canDepositItem) {
+                    $podRecordIds[] = $item->pod_record_id;
+                }
+                $colAmt = (float) ($item->item_collected_amount ?? ($canDepositItem ? $item->item_cod_amount : 0));
+                $totalCollected += $colAmt;
+
+                $shipmentsList[] = [
+                    'id' => $item->item_id,
+                    'item_id' => $item->item_id,
+                    'pod_record_id' => $item->pod_record_id,
+                    'shipment_id' => $item->shipment_id,
+                    'tracking_number' => $item->tracking_number,
+                    'merchant_name' => $item->merchant_name,
+                    'collected_amount' => $colAmt,
+                    'cod_amount' => (float) ($item->item_cod_amount ?? 0),
+                    'status' => $item->item_status ?: $item->shipment_status,
+                    'outcome' => $item->outcome,
+                    'failure_reason' => $item->item_reason,
+                    'can_deposit' => $canDepositItem,
+                    'is_failed' => $isFailed,
+                    'is_delivered' => $isDelivered,
+                ];
+            }
+
+            // Also include any fallback row that might belong to this run
+            $matchingRows = $rows->where('delivery_run_id', $run->id);
+            foreach ($matchingRows as $mRow) {
+                if (!empty($mRow['pod_record_id']) && !in_array($mRow['pod_record_id'], $podRecordIds, true)) {
+                    $podRecordIds[] = $mRow['pod_record_id'];
+                }
+            }
+
+            $runsMap[$runKey] = [
+                'key' => $runKey,
+                'is_direct' => false,
+                'delivery_run_id' => $run->id,
+                'run_number' => $run->run_number,
+                'run_status' => $run->status,
+                'rider_id' => $run->rider_user_id,
+                'rider_name' => $run->rider?->name ?? ($run->rider_user_id ? "Rider #{$run->rider_user_id}" : '-'),
+                'rider_phone' => $run->rider?->phone,
+                'expected_count' => (int) ($run->expected_count ?? count($shipmentsList)),
+                'delivered_count' => (int) ($run->delivered_count ?? count(array_filter($shipmentsList, fn ($s) => $s['is_delivered']))),
+                'failed_count' => (int) ($run->failed_count ?? count(array_filter($shipmentsList, fn ($s) => $s['is_failed']))),
+                'returned_count' => (int) ($run->returned_count ?? 0),
+                'parcel_count' => count($shipmentsList),
+                'total_collected_amount' => round($run->cod_collected ?: $totalCollected, 2),
+                'pod_record_ids' => array_values(array_unique($podRecordIds)),
+                'can_deposit_all' => count($podRecordIds) > 0,
+                'cash_deposited' => (bool) $run->cash_deposited,
+                'shipments' => $shipmentsList,
+            ];
+        }
+
+        // Direct / Standalone Deliveries (parcels without delivery run)
+        $directRows = $rows->filter(fn ($r) => empty($r['delivery_run_id']));
+        if ($directRows->isNotEmpty()) {
+            $directShipments = $directRows->map(fn ($r) => [
+                'id' => $r['id'],
+                'pod_record_id' => $r['pod_record_id'],
+                'shipment_id' => $r['shipment_id'],
+                'tracking_number' => $r['tracking_number'],
+                'merchant_name' => $r['merchant_name'],
+                'collected_amount' => $r['collected_amount'],
+                'cod_amount' => $r['collected_amount'],
+                'status' => $r['status'],
+                'outcome' => null,
+                'failure_reason' => null,
+                'can_deposit' => $r['can_deposit'],
+                'is_failed' => false,
+                'is_delivered' => true,
+            ])->values()->all();
+
+            $runsMap['direct'] = [
+                'key' => 'direct',
+                'is_direct' => true,
+                'delivery_run_id' => null,
+                'run_number' => 'Direct / Standalone Deliveries',
+                'run_status' => 'completed',
+                'rider_id' => null,
+                'rider_name' => 'Direct / Branch',
+                'rider_phone' => null,
+                'expected_count' => $directRows->count(),
+                'delivered_count' => $directRows->count(),
+                'failed_count' => 0,
+                'returned_count' => 0,
+                'parcel_count' => $directRows->count(),
+                'total_collected_amount' => round($directRows->sum(fn ($r) => (float) ($r['collected_amount'] ?? 0)), 2),
+                'pod_record_ids' => $directRows->pluck('pod_record_id')->filter()->values()->all(),
+                'can_deposit_all' => true,
+                'cash_deposited' => false,
+                'shipments' => $directShipments,
+            ];
+        }
+
+        $pendingRuns = array_values($runsMap);
+        usort($pendingRuns, function ($a, $b) {
+            if (!empty($a['is_direct'])) return 1;
+            if (!empty($b['is_direct'])) return -1;
+            return ($b['delivery_run_id'] ?? 0) <=> ($a['delivery_run_id'] ?? 0);
+        });
 
         $readyQuery = Shipment::query();
         FinanceBranchScope::scopeShipments($readyQuery, $user);
@@ -222,12 +454,14 @@ class SettlementController extends Controller
 
         return ApiResponse::success([
             'pending_deposit' => $rows,
+            'pending_runs' => $pendingRuns,
             'counts' => [
                 'awaiting_branch_deposit' => $rows->count(),
+                'pending_runs_count' => count(array_filter($pendingRuns, fn ($r) => !$r['is_direct'])),
                 'ready_to_settle' => $readyCount,
                 'settlements' => $settlementCountQuery->count(),
             ],
-            'hint' => 'Cash POD from rider complete appears here first. Settlements table stays empty until you Generate settlement after deposit (or on_collection path).',
+            'hint' => 'Reconcile and deposit cash per Delivery Run from riders. Deposited cash immediately enables store payout settlements in the Payouts tab.',
             'filters' => [
                 'marketplace_id' => $marketplaceId,
                 'merchant_id' => $merchantId,

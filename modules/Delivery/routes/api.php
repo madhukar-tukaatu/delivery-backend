@@ -126,6 +126,18 @@ Route::prefix('v1/admin')
         Route::post('deliveries/{delivery}/failed', [DeliveryController::class, 'failed'])
             ->middleware(['route.permission'])
             ->name('deliveries.failed');
+
+        Route::post('deliveries/{delivery}/retry', [DeliveryController::class, 'retry'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.retry.assign');
+
+        Route::post('deliveries/{delivery}/return-to-store', [DeliveryController::class, 'returnToStore'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.return.assign');
+
+        Route::post('deliveries/{delivery}/cancel', [DeliveryController::class, 'cancel'])
+            ->middleware(['route.permission'])
+            ->name('deliveries.cancel.assign');
     });
 
 /*

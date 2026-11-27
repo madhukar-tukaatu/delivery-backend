@@ -28,13 +28,13 @@ final class ShipmentController extends Controller
             ->with([
                 'merchant:id,name,code,external_store_id,marketplace_id',
                 'merchant.marketplace:id,name,code',
-                'originBranch',
-                'originSubBranch',
-                'destinationBranch',
-                'destinationSubBranch',
-                'currentBranch',
-                'currentSubBranch',
-                'nextHopBranch',
+                'originBranch:id,name,code',
+                'originSubBranch:id,name,code',
+                'destinationBranch:id,name,code',
+                'destinationSubBranch:id,name,code',
+                'currentBranch:id,name,code',
+                'currentSubBranch:id,name,code',
+                'nextHopBranch:id,name,code',
             ])
             ->latest();
 
@@ -420,7 +420,8 @@ final class ShipmentController extends Controller
             }
         }
 
-        // is_transfer, hop_meta, etc. already on $appends â€“ no extra append() needed
+        // Append full route progress for the detailed drawer view
+        $shipment->append(['route_progress', 'hop_meta']);
 
         $payload = $shipment->toArray();
 

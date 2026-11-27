@@ -257,6 +257,11 @@ class PickupRunController extends Controller
         $this->assertScope($run, $this->scope($request));
         $data = $request->validate([
             'notes' => ['nullable', 'string', 'max:1000'],
+            'default_action' => ['nullable', 'string', 'in:reschedule,cancel'],
+            'items' => ['nullable', 'array'],
+            'items.*.item_id' => ['required', 'integer'],
+            'items.*.action' => ['required', 'string', 'in:reschedule,cancel'],
+            'items.*.reason' => ['nullable', 'string', 'max:500'],
         ]);
         $run = $this->runs->close($run, $data, $request->user());
 

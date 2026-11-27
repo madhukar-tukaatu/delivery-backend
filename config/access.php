@@ -388,6 +388,8 @@ return [
         'branch_manager' => [
             'dashboard.view',
 
+            'merchants.view',
+
             'shipments.view',
             'shipments.create',
             'shipments.update',
@@ -418,6 +420,8 @@ return [
 
         'sub_branch_manager' => [
             'dashboard.view',
+
+            'merchants.view',
 
             'shipments.view',
             'shipments.status',

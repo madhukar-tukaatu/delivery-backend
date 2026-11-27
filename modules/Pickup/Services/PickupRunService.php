@@ -699,6 +699,175 @@ class PickupRunService
         }
 
         DB::transaction(function () use ($run, $data, $actor) {
+            $defaultAction = in_array(strtolower((string) ($data['default_action'] ?? 'reschedule')), ['cancel', 'cancelled'], true) ? 'cancel' : 'reschedule';
+            $choices = [];
+            foreach (($data['items'] ?? []) as $row) {
+                $rawAction = strtolower(trim((string) ($row['action'] ?? '')));
+                $action = in_array($rawAction, ['cancel', 'cancelled', 'full_cancel'], true) ? 'cancel' : 'reschedule';
+                $choices[(int) ($row['item_id'] ?? 0)] = ['action' => $action, 'reason' => $row['reason'] ?? null];
+            }
+
+            $items = PickupRunItem::query()->where('pickup_run_id', $run->id)
+                ->where('status', '!=', PickupRunItem::STATUS_REMOVED)
+                ->with(['pickupRequest.shipments'])
+                ->get();
+
+            $trackingService = app(\Modules\Tracking\Services\TrackingService::class);
+            $webhookService = app(\Modules\Webhook\Services\WebhookService::class);
+
+            foreach ($items as $item) {
+                $pr = $item->pickupRequest;
+                if (! $pr) {
+                    continue;
+                }
+
+                $action = $choices[$item->id]['action'] ?? $defaultAction;
+                $reason = trim((string) ($choices[$item->id]['reason'] ?? '')) ?: ('Not picked up on ' . $run->run_number . '; run closed at branch.');
+
+                // Check all shipments attached to this pickup request
+                $shipments = $pr->shipments()->whereNull('pickup_request_shipments.removed_at')->get();
+                $hasCollected = false;
+                $uncollectedShipments = [];
+
+                foreach ($shipments as $shipment) {
+                    $pivotStatus = strtolower((string) ($shipment->pivot->status ?? ''));
+                    $isCollected = in_array($shipment->status, [
+                        CourierStatus::PICKED_UP,
+                        CourierStatus::RECEIVED_AT_ORIGIN_BRANCH,
+                        CourierStatus::RECEIVED_AT_ORIGIN_SUB_BRANCH,
+                        CourierStatus::SORTED_FOR_TRANSFER,
+                        CourierStatus::SORTED_FOR_DELIVERY,
+                        CourierStatus::IN_TRANSIT,
+                    ], true) || in_array($pivotStatus, [\Modules\Pickup\Support\PickupShipmentStatus::RECEIVED, 'collected'], true);
+
+                    if ($isCollected) {
+                        $hasCollected = true;
+                    } else {
+                        $uncollectedShipments[] = $shipment;
+                    }
+                }
+
+                // If all shipments were collected, ensure item is picked_up
+                if (empty($uncollectedShipments) && $hasCollected) {
+                    if ($item->status !== PickupRunItem::STATUS_PICKED_UP) {
+                        $item->update([
+                            'status' => PickupRunItem::STATUS_PICKED_UP,
+                            'picked_up_at' => $item->picked_up_at ?: now(),
+                        ]);
+                    }
+                    continue;
+                }
+
+                // Handle uncollected shipments
+                foreach ($uncollectedShipments as $uncollected) {
+                    if ($action === 'cancel') {
+                        $uncollected->update([
+                            'status' => CourierStatus::CANCELLED,
+                            'merchant_status' => CourierStatus::merchantStatus(CourierStatus::CANCELLED),
+                            'cancelled_at' => now(),
+                            'cancelled_by' => $actor->id,
+                            'cancel_reason' => $reason,
+                        ]);
+
+                        DB::table('pickup_request_shipments')
+                            ->where('pickup_request_id', $pr->id)
+                            ->where('shipment_id', $uncollected->id)
+                            ->whereNull('removed_at')
+                            ->update([
+                                'status' => \Modules\Pickup\Support\PickupShipmentStatus::FAILED,
+                                'removed_at' => now(),
+                                'removed_by' => $actor->id,
+                                'remarks' => "Cancelled on run {$run->run_number}: {$reason}",
+                            ]);
+
+                        $trackingService->record(
+                            $uncollected->fresh(),
+                            CourierStatus::CANCELLED,
+                            "Shipment pickup cancelled on run {$run->run_number}: {$reason}",
+                            $actor->id
+                        );
+
+                        try {
+                            $webhookService->queueShipmentEvent($uncollected->fresh(), 'shipment.cancelled', [
+                                'cancel_reason' => $reason,
+                                'cancelled_by' => $actor->name,
+                                'source' => 'pickup_run_close',
+                                'run_number' => $run->run_number,
+                            ]);
+                        } catch (\Throwable $e) {}
+                    } else {
+                        // Reschedule: re-queue for pickup
+                        $uncollected->update([
+                            'status' => CourierStatus::AWAITING_PICKUP,
+                            'merchant_status' => CourierStatus::merchantStatus(CourierStatus::AWAITING_PICKUP),
+                        ]);
+
+                        if ($hasCollected) {
+                            // Partial collection: detach uncollected shipment from this completed pickup
+                            DB::table('pickup_request_shipments')
+                                ->where('pickup_request_id', $pr->id)
+                                ->where('shipment_id', $uncollected->id)
+                                ->whereNull('removed_at')
+                                ->update([
+                                    'status' => \Modules\Pickup\Support\PickupShipmentStatus::REMOVED,
+                                    'removed_at' => now(),
+                                    'removed_by' => $actor->id,
+                                    'remarks' => "Uncollected on run {$run->run_number}; rescheduled for next pickup run.",
+                                ]);
+                        }
+
+                        $trackingService->record(
+                            $uncollected->fresh(),
+                            CourierStatus::AWAITING_PICKUP,
+                            "Pickup uncollected on run {$run->run_number}; rescheduled for next pickup. Reason: {$reason}",
+                            $actor->id
+                        );
+
+                        try {
+                            $webhookService->queueShipmentEvent($uncollected->fresh(), 'pickup.rescheduled', [
+                                'reason' => $reason,
+                                'run_number' => $run->run_number,
+                                'source' => 'pickup_run_close',
+                            ]);
+                        } catch (\Throwable $e) {}
+                    }
+                }
+
+                // Update the PickupRequest and PickupRunItem
+                if ($hasCollected && ! empty($uncollectedShipments)) {
+                    $pr->update([
+                        'status' => PickupStatus::COMPLETED,
+                        'completed_at' => now(),
+                    ]);
+                    $item->update([
+                        'status' => PickupRunItem::STATUS_PICKED_UP,
+                        'reason' => 'Partially picked up; ' . count($uncollectedShipments) . ' parcel(s) rescheduled.',
+                        'picked_up_at' => $item->picked_up_at ?: now(),
+                    ]);
+                } elseif (! $hasCollected) {
+                    if ($action === 'cancel') {
+                        $pr->update([
+                            'status' => PickupStatus::CANCELLED,
+                            'cancelled_at' => now(),
+                            'failed_reason' => $reason,
+                        ]);
+                    } else {
+                        $pr->update([
+                            'status' => PickupStatus::REQUESTED,
+                            'assigned_to' => null,
+                            'assigned_by' => null,
+                            'assigned_at' => null,
+                            'pickup_run_id' => null,
+                        ]);
+                    }
+                    $item->update([
+                        'status' => PickupRunItem::STATUS_FAILED,
+                        'reason' => $reason,
+                        'failed_at' => now(),
+                    ]);
+                }
+            }
+
             $run->update([
                 'status' => PickupRun::STATUS_CLOSED,
                 'close_notes' => $data['notes'] ?? null,

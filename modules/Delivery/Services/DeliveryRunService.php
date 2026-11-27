@@ -1722,8 +1722,16 @@ final class DeliveryRunService
         ];
         $shipment->update($updates);
 
+        // Mark previous failed delivery assignment(s) as 'requeued' so they leave the failed queue
+        DeliveryAssignment::query()->where('shipment_id', $shipment->id)
+            ->where('status', 'failed')
+            ->update([
+                'status' => 'requeued',
+                'remarks' => $customReason ? "Re-queued: {$customReason}" : 'Re-queued for delivery attempt',
+            ]);
+
         $hasOpen = DeliveryAssignment::query()->where('shipment_id', $shipment->id)
-            ->whereNotIn('status', ['failed', 'cancelled', 'delivered'])->exists();
+            ->whereNotIn('status', ['failed', 'cancelled', 'delivered', 'requeued', 'return_initiated'])->exists();
         if (! $hasOpen) {
             DeliveryAssignment::create([
                 'shipment_id' => $shipment->id,
@@ -1773,6 +1781,14 @@ final class DeliveryRunService
             'current_branch_id' => $shipment->current_branch_id ?: $shipment->destination_branch_id ?: ($run?->branch_id ?? null),
             'return_reason' => $returnReason,
         ]);
+
+        // Mark previous failed assignments as 'return_initiated' so they leave the failed queue
+        DeliveryAssignment::query()->where('shipment_id', $shipment->id)
+            ->where('status', 'failed')
+            ->update([
+                'status' => 'return_initiated',
+                'remarks' => $returnReason,
+            ]);
         $this->tracking->record(
             $shipment->fresh(),
             CourierStatus::RETURN_INITIATED,

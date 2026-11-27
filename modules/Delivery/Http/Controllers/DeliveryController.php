@@ -7,6 +7,7 @@ use App\Models\User;
 use App\Support\ApiResponse;
 use App\Support\CourierStatus;
 use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 use Modules\Delivery\Models\DeliveryAssignment;
 use Modules\Delivery\Models\DeliveryRun;
 use Modules\Delivery\Services\DeliveryRunService;
@@ -69,6 +70,13 @@ class DeliveryController extends Controller
             ->groupBy('status')
             ->pluck('total', 'status')
             ->map(fn ($v) => (int) $v);
+
+        // Adjust failed count so it only counts unresolved failed parcels
+        $failedCount = (clone $base)->where('status', 'failed')
+            ->whereHas('shipment', function ($sq) {
+                $sq->whereNotIn('status', [CourierStatus::SORTED_FOR_DELIVERY, CourierStatus::RETURN_INITIATED, CourierStatus::CANCELLED, CourierStatus::DELIVERED]);
+            })->count();
+        $byStatus['failed'] = $failedCount;
 
         // "Ready to assign" = pending and not on an active DR; "planned" =
         // pending but already on a DR (rider set on the run, not dispatched yet).
@@ -268,7 +276,16 @@ class DeliveryController extends Controller
 
         $query->where(function ($w) use ($plain, $ready, $planned, $onRun) {
             if ($plain) {
-                $w->orWhereIn('status', $plain);
+                if (in_array('failed', $plain, true) && count($plain) === 1) {
+                    $w->orWhere(function ($f) {
+                        $f->where('status', 'failed')
+                            ->whereHas('shipment', function ($sq) {
+                                $sq->whereNotIn('status', [CourierStatus::SORTED_FOR_DELIVERY, CourierStatus::RETURN_INITIATED, CourierStatus::CANCELLED, CourierStatus::DELIVERED]);
+                            });
+                    });
+                } else {
+                    $w->orWhereIn('status', $plain);
+                }
             }
             if ($ready && $planned) {
                 $w->orWhere('status', 'pending');
@@ -523,18 +540,42 @@ class DeliveryController extends Controller
         );
     }
 
-    public function retry(Request $request, DeliveryAssignment $delivery)
+    private function resolveDelivery($delivery): DeliveryAssignment
     {
-        $this->assertHandles($request, $delivery);
-        $shipment = $delivery->shipment;
+        if ($delivery instanceof DeliveryAssignment) {
+            return $delivery;
+        }
+
+        $found = DeliveryAssignment::query()->find($delivery);
+        if ($found) {
+            return $found;
+        }
+
+        $byShipment = DeliveryAssignment::query()->where('shipment_id', $delivery)->latest('id')->first();
+        if ($byShipment) {
+            return $byShipment;
+        }
+
+        throw new \Illuminate\Database\Eloquent\ModelNotFoundException("Delivery assignment not found for ID {$delivery}");
+    }
+
+    public function retry(Request $request, $delivery)
+    {
+        $assignment = $this->resolveDelivery($delivery);
+        $this->assertHandles($request, $assignment);
+        $shipment = $assignment->shipment;
         if (! $shipment) {
             throw ValidationException::withMessages(['delivery' => ['Shipment not found for this delivery.']]);
         }
 
         $force = $request->boolean('force');
-        if (! $force && $shipment->retries_left <= 0) {
+        $attempts = max(1, (int) $assignment->attempt_no, (int) $shipment->failed_attempts);
+        $maxAttempts = (int) ($shipment->max_delivery_attempts ?? 3);
+        $retriesLeft = max(0, $maxAttempts - $attempts);
+
+        if (! $force && $retriesLeft <= 0 && $shipment->retries_left <= 0) {
             throw ValidationException::withMessages([
-                'retries' => ["Maximum delivery attempts reached (3). Return to store or pass force=true to override."],
+                'retries' => ["Maximum delivery attempts reached ({$maxAttempts}). Return to store or pass force=true to override."],
             ]);
         }
 
@@ -542,15 +583,16 @@ class DeliveryController extends Controller
         $this->runs->requeue($shipment, null, null, $request->user(), $reason);
 
         return ApiResponse::success(
-            $delivery->fresh(['shipment']),
+            $assignment->fresh(['shipment']),
             'Shipment queued for re-delivery attempt.'
         );
     }
 
-    public function returnToStore(Request $request, DeliveryAssignment $delivery)
+    public function returnToStore(Request $request, $delivery)
     {
-        $this->assertHandles($request, $delivery);
-        $shipment = $delivery->shipment;
+        $assignment = $this->resolveDelivery($delivery);
+        $this->assertHandles($request, $assignment);
+        $shipment = $assignment->shipment;
         if (! $shipment) {
             throw ValidationException::withMessages(['delivery' => ['Shipment not found for this delivery.']]);
         }
@@ -559,15 +601,16 @@ class DeliveryController extends Controller
         $this->runs->initiateReturn($shipment, null, null, $request->user(), $reason);
 
         return ApiResponse::success(
-            $delivery->fresh(['shipment']),
+            $assignment->fresh(['shipment']),
             'Return to store initiated.'
         );
     }
 
-    public function cancel(Request $request, DeliveryAssignment $delivery)
+    public function cancel(Request $request, $delivery)
     {
-        $this->assertHandles($request, $delivery);
-        $shipment = $delivery->shipment;
+        $assignment = $this->resolveDelivery($delivery);
+        $this->assertHandles($request, $assignment);
+        $shipment = $assignment->shipment;
         if (! $shipment) {
             throw ValidationException::withMessages(['delivery' => ['Shipment not found for this delivery.']]);
         }
@@ -576,7 +619,7 @@ class DeliveryController extends Controller
         $this->runs->cancelFailedShipment($shipment, null, null, $request->user(), $reason);
 
         return ApiResponse::success(
-            $delivery->fresh(['shipment']),
+            $assignment->fresh(['shipment']),
             'Shipment cancelled.'
         );
     }

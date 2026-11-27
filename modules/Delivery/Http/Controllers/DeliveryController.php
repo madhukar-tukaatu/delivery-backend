@@ -35,9 +35,10 @@ class DeliveryController extends Controller
             ->with([
                 'shipment.merchant:id,name,code,phone,external_store_id,marketplace_id',
                 'shipment.merchant.marketplace:id,name,code',
-                'shipment.originBranch',
-                'shipment.destinationBranch',
-                'rider',
+                'shipment.originBranch:id,name,code',
+                'shipment.destinationBranch:id,name,code',
+                'shipment.nextHopBranch:id,name,code',
+                'rider:id,name,phone,email',
             ]);
 
         $this->applyScope($query, $request);

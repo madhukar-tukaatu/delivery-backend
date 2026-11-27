@@ -39,6 +39,11 @@ class CheckRoutePermission
             return $next($request);
         }
 
+        // Branch operators and branch managers are authorized to view merchants scoped to their branch
+        if ($permission === 'merchants.view' && ($user->branch_id || in_array($user->role, ['branch_manager', 'sub_branch_manager', 'branch_staff', 'operator', 'web'], true))) {
+            return $next($request);
+        }
+
         return response()->json([
             'success' => false,
             'message' => 'Missing required permission: '.$permission,

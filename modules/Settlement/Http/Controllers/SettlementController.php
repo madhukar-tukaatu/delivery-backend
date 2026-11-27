@@ -264,48 +264,183 @@ class SettlementController extends Controller
             ]);
         }
 
-        // Group into delivery runs for 1-click run reconciliation
+        // Group into delivery runs for 1-click run reconciliation.
+        // Include all runs with pending cash, active road runs, and completed runs with returns/failed parcels.
+        $runIdsFromRows = $rows->pluck('delivery_run_id')->filter()->unique()->all();
+
+        $activeBranchRunsQuery = \Modules\Delivery\Models\DeliveryRun::query();
+        FinanceBranchScope::scopeBranchColumn($activeBranchRunsQuery, $user, 'branch_id');
+        $activeBranchRuns = $activeBranchRunsQuery
+            ->with(['rider:id,name,phone'])
+            ->where(function ($q) use ($runIdsFromRows) {
+                if (!empty($runIdsFromRows)) {
+                    $q->whereIn('id', $runIdsFromRows);
+                }
+                $q->orWhereIn('status', ['out_for_delivery', 'completed'])
+                  ->orWhere(function ($sub) {
+                      $sub->where('status', 'closed')
+                          ->where('cash_deposited', false)
+                          ->where('created_at', '>=', now()->subDays(14));
+                  })
+                  ->orWhere(function ($sub) {
+                      $sub->where('failed_count', '>', 0)
+                          ->where('created_at', '>=', now()->subDays(14));
+                  });
+            })
+            ->latest('id')
+            ->limit(100)
+            ->get();
+
+        $allRunIds = $activeBranchRuns->pluck('id')->merge($runIdsFromRows)->unique()->filter()->values()->all();
+        $runItemsGrouped = collect();
+        if (!empty($allRunIds)) {
+            $runItemsGrouped = DB::table('delivery_run_items')
+                ->join('shipments', 'shipments.id', '=', 'delivery_run_items.shipment_id')
+                ->leftJoin('merchants', 'merchants.id', '=', 'shipments.merchant_id')
+                ->leftJoin('pod_records', function ($join) {
+                    $join->on('pod_records.shipment_id', '=', 'shipments.id')
+                        ->where('pod_records.status', '=', 'collected');
+                })
+                ->whereIn('delivery_run_items.delivery_run_id', $allRunIds)
+                ->select([
+                    'delivery_run_items.id as item_id',
+                    'delivery_run_items.delivery_run_id',
+                    'delivery_run_items.shipment_id',
+                    'delivery_run_items.status as item_status',
+                    'delivery_run_items.outcome',
+                    'delivery_run_items.reason as item_reason',
+                    'delivery_run_items.collected_amount as item_collected_amount',
+                    'delivery_run_items.cod_amount as item_cod_amount',
+                    'shipments.tracking_number',
+                    'shipments.merchant_id',
+                    'shipments.status as shipment_status',
+                    'shipments.pod_status',
+                    'shipments.settlement_status',
+                    'merchants.name as merchant_name',
+                    'merchants.external_store_id',
+                    'pod_records.id as pod_record_id',
+                    'pod_records.status as pod_record_status',
+                ])
+                ->orderBy('delivery_run_items.sequence')
+                ->orderBy('delivery_run_items.id')
+                ->get()
+                ->groupBy('delivery_run_id');
+        }
+
         $runsMap = [];
-        foreach ($rows as $row) {
-            $runKey = $row['delivery_run_id'] ? (string) $row['delivery_run_id'] : 'direct';
-            if (!isset($runsMap[$runKey])) {
-                $runsMap[$runKey] = [
-                    'key' => $runKey,
-                    'is_direct' => $runKey === 'direct',
-                    'delivery_run_id' => $row['delivery_run_id'],
-                    'run_number' => $row['delivery_run_number'] ?? 'Direct / Standalone Deliveries',
-                    'run_status' => $row['run_status'] ?? ($runKey === 'direct' ? 'completed' : 'unknown'),
-                    'rider_id' => $row['collected_by'] ?? null,
-                    'rider_name' => $row['collector_name'] ?? ($runKey === 'direct' ? 'Direct / Branch' : '-'),
-                    'rider_phone' => $row['collector_phone'] ?? null,
-                    'parcel_count' => 0,
-                    'total_collected_amount' => 0.0,
-                    'pod_record_ids' => [],
-                    'can_deposit_all' => true,
-                    'shipments' => [],
+        foreach ($activeBranchRuns as $run) {
+            $runKey = (string) $run->id;
+            $itemsForRun = $runItemsGrouped->get($run->id, collect());
+
+            $shipmentsList = [];
+            $podRecordIds = [];
+            $totalCollected = 0.0;
+
+            foreach ($itemsForRun as $item) {
+                $isDelivered = in_array($item->item_status, ['delivered', 'collected'], true) || in_array($item->shipment_status, ['delivered'], true);
+                $isFailed = in_array($item->item_status, ['failed', 'removed'], true) || in_array($item->shipment_status, ['failed', 'cancelled'], true);
+                $canDepositItem = !empty($item->pod_record_id) && $item->pod_record_status === 'collected';
+                if ($canDepositItem) {
+                    $podRecordIds[] = $item->pod_record_id;
+                }
+                $colAmt = (float) ($item->item_collected_amount ?? ($canDepositItem ? $item->item_cod_amount : 0));
+                $totalCollected += $colAmt;
+
+                $shipmentsList[] = [
+                    'id' => $item->item_id,
+                    'item_id' => $item->item_id,
+                    'pod_record_id' => $item->pod_record_id,
+                    'shipment_id' => $item->shipment_id,
+                    'tracking_number' => $item->tracking_number,
+                    'merchant_name' => $item->merchant_name,
+                    'collected_amount' => $colAmt,
+                    'cod_amount' => (float) ($item->item_cod_amount ?? 0),
+                    'status' => $item->item_status ?: $item->shipment_status,
+                    'outcome' => $item->outcome,
+                    'failure_reason' => $item->item_reason,
+                    'can_deposit' => $canDepositItem,
+                    'is_failed' => $isFailed,
+                    'is_delivered' => $isDelivered,
                 ];
             }
-            $runsMap[$runKey]['parcel_count']++;
-            $amount = (float) ($row['collected_amount'] ?? 0);
-            $runsMap[$runKey]['total_collected_amount'] = round($runsMap[$runKey]['total_collected_amount'] + $amount, 2);
-            if (!empty($row['pod_record_id'])) {
-                $runsMap[$runKey]['pod_record_ids'][] = $row['pod_record_id'];
+
+            // Also include any fallback row that might belong to this run
+            $matchingRows = $rows->where('delivery_run_id', $run->id);
+            foreach ($matchingRows as $mRow) {
+                if (!empty($mRow['pod_record_id']) && !in_array($mRow['pod_record_id'], $podRecordIds, true)) {
+                    $podRecordIds[] = $mRow['pod_record_id'];
+                }
             }
-            if (!$row['can_deposit']) {
-                $runsMap[$runKey]['can_deposit_all'] = false;
-            }
-            $runsMap[$runKey]['shipments'][] = [
-                'id' => $row['id'],
-                'pod_record_id' => $row['pod_record_id'],
-                'shipment_id' => $row['shipment_id'],
-                'tracking_number' => $row['tracking_number'],
-                'merchant_name' => $row['merchant_name'],
-                'collected_amount' => $row['collected_amount'],
-                'status' => $row['status'],
-                'can_deposit' => $row['can_deposit'],
+
+            $runsMap[$runKey] = [
+                'key' => $runKey,
+                'is_direct' => false,
+                'delivery_run_id' => $run->id,
+                'run_number' => $run->run_number,
+                'run_status' => $run->status,
+                'rider_id' => $run->rider_user_id,
+                'rider_name' => $run->rider?->name ?? ($run->rider_user_id ? "Rider #{$run->rider_user_id}" : '-'),
+                'rider_phone' => $run->rider?->phone,
+                'expected_count' => (int) ($run->expected_count ?? count($shipmentsList)),
+                'delivered_count' => (int) ($run->delivered_count ?? count(array_filter($shipmentsList, fn ($s) => $s['is_delivered']))),
+                'failed_count' => (int) ($run->failed_count ?? count(array_filter($shipmentsList, fn ($s) => $s['is_failed']))),
+                'returned_count' => (int) ($run->returned_count ?? 0),
+                'parcel_count' => count($shipmentsList),
+                'total_collected_amount' => round($run->cod_collected ?: $totalCollected, 2),
+                'pod_record_ids' => array_values(array_unique($podRecordIds)),
+                'can_deposit_all' => count($podRecordIds) > 0,
+                'cash_deposited' => (bool) $run->cash_deposited,
+                'shipments' => $shipmentsList,
             ];
         }
+
+        // Direct / Standalone Deliveries (parcels without delivery run)
+        $directRows = $rows->filter(fn ($r) => empty($r['delivery_run_id']));
+        if ($directRows->isNotEmpty()) {
+            $directShipments = $directRows->map(fn ($r) => [
+                'id' => $r['id'],
+                'pod_record_id' => $r['pod_record_id'],
+                'shipment_id' => $r['shipment_id'],
+                'tracking_number' => $r['tracking_number'],
+                'merchant_name' => $r['merchant_name'],
+                'collected_amount' => $r['collected_amount'],
+                'cod_amount' => $r['collected_amount'],
+                'status' => $r['status'],
+                'outcome' => null,
+                'failure_reason' => null,
+                'can_deposit' => $r['can_deposit'],
+                'is_failed' => false,
+                'is_delivered' => true,
+            ])->values()->all();
+
+            $runsMap['direct'] = [
+                'key' => 'direct',
+                'is_direct' => true,
+                'delivery_run_id' => null,
+                'run_number' => 'Direct / Standalone Deliveries',
+                'run_status' => 'completed',
+                'rider_id' => null,
+                'rider_name' => 'Direct / Branch',
+                'rider_phone' => null,
+                'expected_count' => $directRows->count(),
+                'delivered_count' => $directRows->count(),
+                'failed_count' => 0,
+                'returned_count' => 0,
+                'parcel_count' => $directRows->count(),
+                'total_collected_amount' => round($directRows->sum(fn ($r) => (float) ($r['collected_amount'] ?? 0)), 2),
+                'pod_record_ids' => $directRows->pluck('pod_record_id')->filter()->values()->all(),
+                'can_deposit_all' => true,
+                'cash_deposited' => false,
+                'shipments' => $directShipments,
+            ];
+        }
+
         $pendingRuns = array_values($runsMap);
+        usort($pendingRuns, function ($a, $b) {
+            if (!empty($a['is_direct'])) return 1;
+            if (!empty($b['is_direct'])) return -1;
+            return ($b['delivery_run_id'] ?? 0) <=> ($a['delivery_run_id'] ?? 0);
+        });
 
         $readyQuery = Shipment::query();
         FinanceBranchScope::scopeShipments($readyQuery, $user);

@@ -521,4 +521,62 @@ class DeliveryController extends Controller
             'Delivery marked as failed.'
         );
     }
+
+    public function retry(Request $request, DeliveryAssignment $delivery)
+    {
+        $this->assertHandles($request, $delivery);
+        $shipment = $delivery->shipment;
+        if (! $shipment) {
+            throw ValidationException::withMessages(['delivery' => ['Shipment not found for this delivery.']]);
+        }
+
+        $force = $request->boolean('force');
+        if (! $force && $shipment->retries_left <= 0) {
+            throw ValidationException::withMessages([
+                'retries' => ["Maximum delivery attempts reached (3). Return to store or pass force=true to override."],
+            ]);
+        }
+
+        $reason = $request->input('reason');
+        $this->runs->requeue($shipment, null, null, $request->user(), $reason);
+
+        return ApiResponse::success(
+            $delivery->fresh(['shipment']),
+            'Shipment queued for re-delivery attempt.'
+        );
+    }
+
+    public function returnToStore(Request $request, DeliveryAssignment $delivery)
+    {
+        $this->assertHandles($request, $delivery);
+        $shipment = $delivery->shipment;
+        if (! $shipment) {
+            throw ValidationException::withMessages(['delivery' => ['Shipment not found for this delivery.']]);
+        }
+
+        $reason = $request->input('reason', 'Return initiated by branch');
+        $this->runs->initiateReturn($shipment, null, null, $request->user(), $reason);
+
+        return ApiResponse::success(
+            $delivery->fresh(['shipment']),
+            'Return to store initiated.'
+        );
+    }
+
+    public function cancel(Request $request, DeliveryAssignment $delivery)
+    {
+        $this->assertHandles($request, $delivery);
+        $shipment = $delivery->shipment;
+        if (! $shipment) {
+            throw ValidationException::withMessages(['delivery' => ['Shipment not found for this delivery.']]);
+        }
+
+        $reason = $request->input('reason', 'Delivery cancelled by branch');
+        $this->runs->cancelFailedShipment($shipment, null, null, $request->user(), $reason);
+
+        return ApiResponse::success(
+            $delivery->fresh(['shipment']),
+            'Shipment cancelled.'
+        );
+    }
 }

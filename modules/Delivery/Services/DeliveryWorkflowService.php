@@ -637,6 +637,14 @@ class DeliveryWorkflowService
 
             $shipment = $delivery->shipment;
 
+            $failedAttempts = (int) ($shipment->failed_attempts ?? 0) + 1;
+            $maxAttempts = (int) ($shipment->max_delivery_attempts ?? 3);
+            if ($maxAttempts <= 0) {
+                $maxAttempts = 3;
+            }
+            $retriesLeft = max(0, $maxAttempts - $failedAttempts);
+            $attemptNo = (int) ($delivery->attempt_no ?? $failedAttempts);
+
             $delivery->update([
                 'status' => 'failed',
                 'failed_at' => now(),
@@ -647,13 +655,28 @@ class DeliveryWorkflowService
             $shipment->update([
                 'status' => CourierStatus::DELIVERY_FAILED,
                 'merchant_status' => CourierStatus::merchantStatus(CourierStatus::DELIVERY_FAILED),
+                'failed_attempts' => $failedAttempts,
             ]);
 
-            $this->trackingService->record($shipment->fresh(), CourierStatus::DELIVERY_FAILED, $reason, $user->id);
-            $this->webhookService->queueShipmentEvent($shipment->fresh(), 'delivery.failed');
+            $this->trackingService->record(
+                $shipment->fresh(),
+                CourierStatus::DELIVERY_FAILED,
+                "Delivery attempt {$attemptNo} failed: {$reason} ({$retriesLeft} retries remaining).",
+                $user->id
+            );
+            $this->webhookService->queueShipmentEvent($shipment->fresh(), 'delivery.failed', [
+                'failure_reason' => $reason,
+                'attempt_no' => $attemptNo,
+                'retries_left' => $retriesLeft,
+                'max_attempts' => $maxAttempts,
+                'next_action' => $retriesLeft > 0 ? 'retrying' : 'return_to_store',
+            ]);
             $this->callbacks->deliveryFailed($shipment->fresh(), [
                 'rider' => ['id' => $user->id, 'name' => $user->name],
                 'reason' => $reason,
+                'attempt_no' => $attemptNo,
+                'retries_left' => $retriesLeft,
+                'max_attempts' => $maxAttempts,
                 'failed_at' => $delivery->failed_at?->toIso8601String(),
             ]);
 

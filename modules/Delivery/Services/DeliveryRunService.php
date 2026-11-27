@@ -1049,13 +1049,19 @@ final class DeliveryRunService
                 throw ValidationException::withMessages(['status' => [$this->statusMessage($run)]]);
             }
 
-            $defaultAction = ($data['default_action'] ?? 'reattempt') === 'return' ? 'return' : 'reattempt';
+            $normalizeAction = function (string $raw): string {
+                return match (strtolower(trim($raw))) {
+                    'return', 'return_to_store', 'rto' => 'return',
+                    'cancel', 'full_cancel', 'cancelled' => 'cancel',
+                    default => 'reattempt',
+                };
+            };
+
+            $defaultAction = $normalizeAction((string) ($data['default_action'] ?? 'reattempt'));
             $choices = [];
             foreach (($data['items'] ?? []) as $row) {
-                $action = (string) ($row['action'] ?? '');
-                if (! in_array($action, ['reattempt', 'return'], true)) {
-                    throw ValidationException::withMessages(['items' => ['Action must be reattempt or return.']]);
-                }
+                $rawAction = (string) ($row['action'] ?? '');
+                $action = $normalizeAction($rawAction);
                 $choices[(int) ($row['item_id'] ?? 0)] = ['action' => $action, 'reason' => $row['reason'] ?? null];
             }
 
@@ -1077,22 +1083,26 @@ final class DeliveryRunService
                 $this->applyDeliveryState($item);
             }
 
-            // 2) Failed parcels: re-delivery queue or return to merchant.
+            // 2) Failed parcels: re-delivery queue, return to merchant, or full cancel.
             foreach ($items as $item) {
                 $item->refresh();
-                if ($item->status !== DeliveryRunItem::STATUS_FAILED || in_array($item->outcome, ['reattempt', 'returned'], true)) {
+                if ($item->status !== DeliveryRunItem::STATUS_FAILED || in_array($item->outcome, ['reattempt', 'returned', 'cancelled'], true)) {
                     continue;
                 }
                 $action = $choices[$item->id]['action'] ?? $defaultAction;
+                $customReason = $choices[$item->id]['reason'] ?? null;
                 $shipment = Shipment::query()->lockForUpdate()->find($item->shipment_id);
                 if (! $shipment) {
                     continue;
                 }
                 if ($action === 'return') {
-                    $this->initiateReturn($shipment, $run, $item, $actor);
+                    $this->initiateReturn($shipment, $run, $item, $actor, $customReason);
                     $item->update(['outcome' => 'returned']);
+                } elseif ($action === 'cancel') {
+                    $this->cancelFailedShipment($shipment, $run, $item, $actor, $customReason);
+                    $item->update(['outcome' => 'cancelled']);
                 } else {
-                    $this->requeue($shipment, $run, $item, $actor);
+                    $this->requeue($shipment, $run, $item, $actor, $customReason);
                     $item->update(['outcome' => 'reattempt']);
                 }
             }
@@ -1698,17 +1708,18 @@ final class DeliveryRunService
     }
 
     /** Failed parcel back to the branch delivery queue with a fresh pending delivery. */
-    private function requeue(Shipment $shipment, DeliveryRun $run, ?DeliveryRunItem $item, User $actor): void
+    public function requeue(Shipment $shipment, ?DeliveryRun $run, ?DeliveryRunItem $item, User $actor, ?string $customReason = null): void
     {
         $lastAttempt = (int) DeliveryAssignment::query()->where('shipment_id', $shipment->id)->max('attempt_no');
+        $nextAttemptNo = max(1, $lastAttempt) + 1;
+        $failedAttempts = (int) ($shipment->failed_attempts ?? 0);
+        $retriesLeft = max(0, ($shipment->max_delivery_attempts ?? 3) - $failedAttempts);
+
         $updates = [
             'status' => CourierStatus::SORTED_FOR_DELIVERY,
             'merchant_status' => CourierStatus::merchantStatus(CourierStatus::SORTED_FOR_DELIVERY),
-            'current_branch_id' => $shipment->current_branch_id ?: $shipment->destination_branch_id ?: $run->branch_id,
+            'current_branch_id' => $shipment->current_branch_id ?: $shipment->destination_branch_id ?: ($run?->branch_id ?? null),
         ];
-        if ($item && Schema::hasColumn('shipments', 'failed_attempts')) {
-            $updates['failed_attempts'] = (int) ($shipment->failed_attempts ?? 0) + 1;
-        }
         $shipment->update($updates);
 
         $hasOpen = DeliveryAssignment::query()->where('shipment_id', $shipment->id)
@@ -1720,38 +1731,101 @@ final class DeliveryRunService
                 'sub_branch_id' => $shipment->destination_sub_branch_id ?? $shipment->current_sub_branch_id,
                 'delivery_type' => 'last_mile',
                 'status' => 'pending',
-                'attempt_no' => max(1, $lastAttempt) + 1,
+                'attempt_no' => $nextAttemptNo,
                 'assigned_by' => $actor->id,
             ]);
+        }
+
+        $trackingNote = $item && $run
+            ? "Back at branch after a failed attempt on {$run->run_number}; queued for re-delivery (attempt {$nextAttemptNo}, {$retriesLeft} retries remaining)."
+            : "Queued again for re-delivery (attempt {$nextAttemptNo}, {$retriesLeft} retries remaining).";
+        if ($customReason) {
+            $trackingNote .= " Reason: {$customReason}";
         }
 
         $this->tracking->record(
             $shipment->fresh(),
             CourierStatus::SORTED_FOR_DELIVERY,
-            $item
-                ? "Back at branch after a failed attempt on {$run->run_number}; queued for re-delivery (attempt ".(max(1, $lastAttempt) + 1).').'
-                : 'Queued again for re-delivery.',
+            $trackingNote,
             $actor->id
         );
+
+        try {
+            app(\Modules\Webhook\Services\WebhookService::class)->queueShipmentEvent($shipment->fresh(), 'delivery.reattempt_scheduled', [
+                'attempt_no' => $nextAttemptNo,
+                'failed_attempts' => $failedAttempts,
+                'retries_left' => $retriesLeft,
+                'max_attempts' => (int) ($shipment->max_delivery_attempts ?? 3),
+                'run_number' => $run?->run_number,
+                'reason' => $customReason ?: ($item?->reason ?? null),
+            ]);
+        } catch (\Throwable $e) {
+            Log::info('delivery_run.reattempt_webhook_skipped', ['shipment_id' => $shipment->id, 'error' => $e->getMessage()]);
+        }
     }
 
-    private function initiateReturn(Shipment $shipment, DeliveryRun $run, DeliveryRunItem $item, User $actor): void
+    public function initiateReturn(Shipment $shipment, ?DeliveryRun $run, ?DeliveryRunItem $item, User $actor, ?string $customReason = null): void
     {
+        $returnReason = $customReason ?: ($item?->reason ?: ('Return to merchant started after failed delivery'.($run ? ' on '.$run->run_number : '')));
         $shipment->update([
             'status' => CourierStatus::RETURN_INITIATED,
             'merchant_status' => CourierStatus::merchantStatus(CourierStatus::RETURN_INITIATED),
-            'current_branch_id' => $shipment->current_branch_id ?: $shipment->destination_branch_id ?: $run->branch_id,
+            'current_branch_id' => $shipment->current_branch_id ?: $shipment->destination_branch_id ?: ($run?->branch_id ?? null),
+            'return_reason' => $returnReason,
         ]);
         $this->tracking->record(
             $shipment->fresh(),
             CourierStatus::RETURN_INITIATED,
-            'Return to merchant started after failed delivery on '.$run->run_number.($item->reason ? ': '.$item->reason : '.'),
+            'Return to merchant started: '.$returnReason,
             $actor->id
         );
         try {
-            app(\Modules\Webhook\Services\WebhookService::class)->queueShipmentEvent($shipment->fresh(), 'delivery.return_initiated');
+            app(\Modules\Webhook\Services\WebhookService::class)->queueShipmentEvent($shipment->fresh(), 'delivery.return_initiated', [
+                'return_reason' => $returnReason,
+                'failed_attempts' => (int) $shipment->failed_attempts,
+                'max_attempts' => (int) ($shipment->max_delivery_attempts ?? 3),
+                'run_number' => $run?->run_number,
+            ]);
         } catch (\Throwable $e) {
             Log::info('delivery_run.return_webhook_skipped', ['shipment_id' => $shipment->id, 'error' => $e->getMessage()]);
+        }
+    }
+
+    public function cancelFailedShipment(Shipment $shipment, ?DeliveryRun $run, ?DeliveryRunItem $item, User $actor, ?string $reason = null): void
+    {
+        $cancelReason = trim((string) ($reason ?: ($item?->reason ?? ''))) ?: ('Cancelled after failed delivery'.($run ? ' on '.$run->run_number : ''));
+        $shipment->update([
+            'status' => CourierStatus::CANCELLED,
+            'merchant_status' => CourierStatus::merchantStatus(CourierStatus::CANCELLED),
+            'cancelled_at' => now(),
+            'cancelled_by' => $actor->id,
+            'cancel_reason' => $cancelReason,
+        ]);
+
+        DeliveryAssignment::query()->where('shipment_id', $shipment->id)
+            ->whereNotIn('status', ['delivered', 'cancelled'])
+            ->update([
+                'status' => 'cancelled',
+                'cancelled_at' => now(),
+                'cancellation_reason' => $cancelReason,
+            ]);
+
+        $this->tracking->record(
+            $shipment->fresh(),
+            CourierStatus::CANCELLED,
+            "Shipment cancelled: {$cancelReason}",
+            $actor->id
+        );
+
+        try {
+            app(\Modules\Webhook\Services\WebhookService::class)->queueShipmentEvent($shipment->fresh(), 'shipment.cancelled', [
+                'cancel_reason' => $cancelReason,
+                'cancelled_by' => $actor->name,
+                'source' => 'delivery_run_reconciliation',
+                'run_number' => $run?->run_number,
+            ]);
+        } catch (\Throwable $e) {
+            Log::info('delivery_run.cancel_webhook_skipped', ['shipment_id' => $shipment->id, 'error' => $e->getMessage()]);
         }
     }
 

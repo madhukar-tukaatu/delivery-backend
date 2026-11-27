@@ -34,6 +34,8 @@ class Shipment extends Model
         'hop_meta',
         'route_progress',
         'collect_amount',
+        'retries_left',
+        'can_retry_delivery',
     ];
 
     protected static function booted(): void
@@ -76,6 +78,29 @@ class Shipment extends Model
         }
 
         return 0.0;
+    }
+
+    /**
+     * Number of remaining delivery attempts allowed before return to store is required.
+     * Default maximum attempts is 3.
+     */
+    public function getRetriesLeftAttribute(): int
+    {
+        $max = (int) ($this->attributes['max_delivery_attempts'] ?? 3);
+        if ($max <= 0) {
+            $max = 3;
+        }
+        $failed = (int) ($this->attributes['failed_attempts'] ?? 0);
+
+        return max(0, $max - $failed);
+    }
+
+    /**
+     * Whether this shipment can be scheduled for another delivery attempt.
+     */
+    public function getCanRetryDeliveryAttribute(): bool
+    {
+        return $this->retries_left > 0;
     }
 
     /**
@@ -327,6 +352,12 @@ class Shipment extends Model
 
         'cancelled_at'              =>
         'datetime',
+
+        'failed_attempts'           =>
+        'integer',
+
+        'max_delivery_attempts'     =>
+        'integer',
 
         /*
         |--------------------------------------------------------------------------

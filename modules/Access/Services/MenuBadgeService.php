@@ -92,10 +92,10 @@ class MenuBadgeService
             ->count();
 
         return [
-            ['key' => 'ready', 'count' => $ready, 'label' => 'parcels ready for a delivery run', 'color' => '#1677ff'],
-            ['key' => 'runs', 'count' => $active, 'label' => 'delivery runs open or on the road', 'color' => '#722ed1'],
-            ['key' => 'close', 'count' => $toClose, 'label' => 'delivery runs back and waiting to close', 'color' => '#f5222d'],
-            ['key' => 'failed', 'count' => $failed, 'label' => 'failed deliveries needing retry or return', 'color' => '#faad14'],
+            ['key' => 'ready', 'count' => $ready, 'label' => 'Ready to Assign', 'color' => '#0284c7'],
+            ['key' => 'active', 'count' => $active, 'label' => 'Out for Delivery (Runs)', 'color' => '#2563eb'],
+            ['key' => 'completed', 'count' => $toClose, 'label' => 'Completed Runs (to close)', 'color' => '#10b981'],
+            ['key' => 'failed', 'count' => $failed, 'label' => 'Failed Deliveries', 'color' => '#ef4444'],
         ];
     }
 
@@ -123,8 +123,8 @@ class MenuBadgeService
         }
 
         return [
-            ['key' => 'incoming', 'count' => $incoming, 'label' => 'TRs in transit to receive', 'color' => '#13c2c2'],
-            ['key' => 'outbound', 'count' => $outbound, 'label' => 'parcels ready to send', 'color' => '#fa8c16'],
+            ['key' => 'incoming', 'count' => $incoming, 'label' => 'Incoming TR Containers in Transit', 'color' => '#0891b2'],
+            ['key' => 'outbound', 'count' => $outbound, 'label' => 'Parcels Ready to Send', 'color' => '#f59e0b'],
         ];
     }
 
@@ -147,10 +147,13 @@ class MenuBadgeService
                 ->count();
         }
 
+        $failed = (clone $base)->where('status', 'failed')->count();
+
         return [
-            ['key' => 'requested', 'count' => $new, 'label' => 'pickup requests waiting for a rider', 'color' => '#fa541c'],
-            ['key' => 'incoming', 'count' => $incoming, 'label' => 'pickups collected, on the way to the branch', 'color' => '#13c2c2'],
-            ['key' => 'close', 'count' => $toClose, 'label' => 'pickup runs back and waiting to close', 'color' => '#f5222d'],
+            ['key' => 'pending', 'count' => $new, 'label' => 'Pending Pickups', 'color' => '#f59e0b'],
+            ['key' => 'incoming', 'count' => $incoming, 'label' => 'Pickups in Transit to Branch', 'color' => '#0891b2'],
+            ['key' => 'completed', 'count' => $toClose, 'label' => 'Completed Pickup Runs (to close)', 'color' => '#10b981'],
+            ['key' => 'failed', 'count' => $failed, 'label' => 'Failed Pickups', 'color' => '#ef4444'],
         ];
     }
 

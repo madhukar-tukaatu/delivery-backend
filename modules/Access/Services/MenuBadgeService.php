@@ -7,6 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Schema;
+use Modules\Delivery\Models\DeliveryAssignment;
 use Modules\Delivery\Models\DeliveryRun;
 use Modules\Delivery\Services\DeliveryRunService;
 use Modules\Shipment\Http\Controllers\TransferController;
@@ -85,10 +86,16 @@ class MenuBadgeService
         $toClose = (int) ($runs[DeliveryRun::STATUS_COMPLETED] ?? 0);
         $active = (int) $runs->sum() - $toClose;
 
+        $failed = DeliveryAssignment::query()
+            ->when($branchId > 0, fn ($q) => $q->whereIn('branch_id', $this->runs->branchFamily($branchId)))
+            ->where('status', 'failed')
+            ->count();
+
         return [
             ['key' => 'ready', 'count' => $ready, 'label' => 'parcels ready for a delivery run', 'color' => '#1677ff'],
             ['key' => 'runs', 'count' => $active, 'label' => 'delivery runs open or on the road', 'color' => '#722ed1'],
             ['key' => 'close', 'count' => $toClose, 'label' => 'delivery runs back and waiting to close', 'color' => '#f5222d'],
+            ['key' => 'failed', 'count' => $failed, 'label' => 'failed deliveries needing retry or return', 'color' => '#faad14'],
         ];
     }
 
@@ -129,12 +136,21 @@ class MenuBadgeService
         $base = DB::table('pickup_requests')
             ->when($branchId > 0, fn ($q) => $q->where('pickup_branch_id', $branchId));
 
-        $new = (clone $base)->where('status', 'requested')->count();
+        $new = (clone $base)->whereIn('status', ['requested', 'pending'])->count();
         $incoming = (clone $base)->whereIn('status', ['collected', 'on_way_to_branch'])->count();
+
+        $toClose = 0;
+        if (Schema::hasTable('pickup_runs')) {
+            $toClose = DB::table('pickup_runs')
+                ->when($branchId > 0, fn ($q) => $q->where('branch_id', $branchId))
+                ->where('status', 'completed')
+                ->count();
+        }
 
         return [
             ['key' => 'requested', 'count' => $new, 'label' => 'pickup requests waiting for a rider', 'color' => '#fa541c'],
             ['key' => 'incoming', 'count' => $incoming, 'label' => 'pickups collected, on the way to the branch', 'color' => '#13c2c2'],
+            ['key' => 'close', 'count' => $toClose, 'label' => 'pickup runs back and waiting to close', 'color' => '#f5222d'],
         ];
     }
 

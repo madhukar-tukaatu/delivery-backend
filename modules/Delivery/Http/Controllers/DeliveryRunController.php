@@ -263,10 +263,10 @@ class DeliveryRunController extends Controller
         $data = $request->validate([
             'cash_received' => ['nullable', 'numeric', 'min:0'],
             'deposit_cash' => ['nullable', 'boolean'],
-            'default_action' => ['nullable', 'in:reattempt,return'],
+            'default_action' => ['nullable', 'string', 'in:reattempt,return,cancel,retrying,return_to_store,full_cancel'],
             'items' => ['nullable', 'array'],
             'items.*.item_id' => ['required', 'integer'],
-            'items.*.action' => ['required', 'in:reattempt,return'],
+            'items.*.action' => ['required', 'string', 'in:reattempt,return,cancel,retrying,return_to_store,full_cancel'],
             'items.*.reason' => ['nullable', 'string', 'max:500'],
             'notes' => ['nullable', 'string', 'max:1000'],
         ]);

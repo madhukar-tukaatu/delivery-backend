@@ -15,14 +15,17 @@ return new class extends Migration
         Schema::table('shipments', function (Blueprint $table): void {
             if (!Schema::hasColumn('shipments', 'max_delivery_attempts')) {
                 $table->unsignedInteger('max_delivery_attempts')
-                    ->default(3)
-                    ->after('failed_attempts');
+                    ->default(3);
+            }
+
+            if (!Schema::hasColumn('shipments', 'cancel_reason')) {
+                $table->string('cancel_reason', 500)
+                    ->nullable();
             }
 
             if (!Schema::hasColumn('shipments', 'return_reason')) {
                 $table->string('return_reason', 500)
-                    ->nullable()
-                    ->after('cancel_reason');
+                    ->nullable();
             }
         });
     }
@@ -36,6 +39,9 @@ return new class extends Migration
         Schema::table('shipments', function (Blueprint $table): void {
             if (Schema::hasColumn('shipments', 'max_delivery_attempts')) {
                 $table->dropColumn('max_delivery_attempts');
+            }
+            if (Schema::hasColumn('shipments', 'cancel_reason')) {
+                $table->dropColumn('cancel_reason');
             }
             if (Schema::hasColumn('shipments', 'return_reason')) {
                 $table->dropColumn('return_reason');

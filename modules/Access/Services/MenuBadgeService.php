@@ -62,6 +62,8 @@ class MenuBadgeService
 
         if ($this->allowed($user, 'deliveries.view')) {
             $out['/admin/deliveries'] = $this->safe('deliveries', fn () => $this->deliveryBadges($branchId));
+            $out['/admin/returns'] = $this->safe('returns', fn () => $this->returnBadges($branchId));
+            $out['/admin/cancellations'] = $this->safe('cancellations', fn () => $this->cancellationBadges($branchId));
         }
         if ($this->allowed($user, 'transfers.view')) {
             $out['/admin/transfers'] = $this->safe('transfers', fn () => $this->transferBadges($user, $branchId));
@@ -187,6 +189,29 @@ class MenuBadgeService
     }
 
     /* ----------------------------- helpers ----------------------------- */
+
+    private function returnBadges(int $branchId): array
+    {
+        $count = Shipment::query()
+            ->when($branchId > 0, fn ($q) => $q->where(fn ($w) => $w->whereIn('current_branch_id', $this->runs->branchFamily($branchId))->orWhereIn('destination_branch_id', $this->runs->branchFamily($branchId))))
+            ->whereIn('status', [CourierStatus::RETURN_INITIATED, CourierStatus::RETURNED_TO_ORIGIN])
+            ->count();
+
+        if ($count <= 0) return [];
+        return [['key' => 'returns', 'count' => $count, 'label' => 'active returns', 'color' => '#d97706']];
+    }
+
+    private function cancellationBadges(int $branchId): array
+    {
+        $count = Shipment::query()
+            ->when($branchId > 0, fn ($q) => $q->where(fn ($w) => $w->whereIn('current_branch_id', $this->runs->branchFamily($branchId))->orWhereIn('destination_branch_id', $this->runs->branchFamily($branchId))))
+            ->where('status', CourierStatus::CANCELLED)
+            ->whereDate('created_at', '>=', now()->subDays(2))
+            ->count();
+
+        if ($count <= 0) return [];
+        return [['key' => 'cancelled', 'count' => $count, 'label' => 'recent cancellations', 'color' => '#64748b']];
+    }
 
     private function isHq(User $user): bool
     {
